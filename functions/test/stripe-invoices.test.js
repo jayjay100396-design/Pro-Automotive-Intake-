@@ -163,6 +163,16 @@ describe('Stripe invoices (server)', function () {
     assert.equal((await data(db.doc(`companies/${C}/customers/c1`))).stripeCustomerIds.test, [...stripe.customers.values()][0].id);
   });
 
+  it('shows on the Stripe invoice what has been paid on the proposal', async () => {
+    const lines = (price) => [{ desc: 'Line', qty: 1, price, taxable: false }];
+    await db.doc(`companies/${C}/invoices/dep`).set({ number: 1001, estimateId: 'e1', kind: 'deposit', status: 'paid', taxPct: 0, lines: lines(1302.09) });
+    await db.doc(`companies/${C}/invoices/old`).set({ number: 1000, estimateId: 'e1', kind: 'deposit', status: 'void', taxPct: 0, lines: lines(999) });
+    await inv().update({ estimateId: 'e1', kind: 'final', proposalNumber: 1005, proposalPrice: 2604.18, taxPct: 0, lines: lines(1302.09), notes: 'Thank you.' });
+    await create();
+    const [, params] = stripe.called('invoices.create')[0];
+    assert.equal(params.description, 'Proposal 1005: $2,604.18\nPaid so far: $1,302.09\nThis invoice: $1,302.09\nLeft after this invoice: $0.00\n\nThank you.');
+  });
+
   it('reuses the open Stripe invoice instead of making a second one', async () => {
     await create();
     const again = await create({ send: true });

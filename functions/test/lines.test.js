@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { stripeItems, itemsTotalCents, invoiceTotals, daysUntilDue, floridaDate, clip } from '../lines.js';
+import { stripeItems, itemsTotalCents, invoiceTotals, proposalStatusText, daysUntilDue, floridaDate, clip } from '../lines.js';
 import { invoiceTotals as appTotals, estimateTotals, proposalBill } from '../../public/js/calc.js';
 
 describe('Stripe invoice items', () => {
@@ -64,6 +64,12 @@ describe('Stripe invoice details', () => {
     assert.equal(daysUntilDue('2026-11-08', lateEvening), 30);
     assert.equal(daysUntilDue('2026-10-09', lateEvening), 1); // due today: Stripe needs at least a day
     assert.equal(daysUntilDue('', lateEvening), 30);
+  });
+
+  it('writes where a proposal stands for the Stripe page', () => {
+    assert.equal(proposalStatusText({ number: 1005, price: 2604.18, paidBefore: 1302.09, thisInvoice: 1302.09 }),
+      'Proposal 1005: $2,604.18\nPaid so far: $1,302.09\nThis invoice: $1,302.09\nLeft after this invoice: $0.00');
+    assert.match(proposalStatusText({ number: 1005, price: 2604.18, paidBefore: 0, thisInvoice: 1302.09 }), /Left after this invoice: \$1,302\.09$/);
   });
 
   it('clips text to Stripe limits', () => {

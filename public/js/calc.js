@@ -219,9 +219,57 @@ export function proposalBill(est) {
   return { option: opt, taxPct, lines };
 }
 
-// A deposit on a proposal: pct of its accepted price, as one line that isn't taxed again.
-export function depositLine(est, pct) {
+// ---------- Deposit and payment status ----------
+// The deposit a proposal asks for: a percent of the accepted price (50% to start) or a dollar
+// amount, never more than the price. Proposals saved before the deposit field existed take the
+// percent from their typed payment terms ("A 50% deposit is required...").
+export function proposalDeposit(est, option) {
+  const opt = option || acceptedOption(est).opt;
+  const legacy = est.depositType == null;
+  const type = est.depositType === 'amount' ? 'amount' : 'percent';
+  const typed = /(\d{1,3}(?:\.\d+)?)\s*%\s*deposit/i.exec(est.terms || '')?.[1];
+  const typedValue = Math.max(0, legacy ? num(typed ?? 50) : num(est.depositValue));
+  const value = type === 'percent' ? Math.min(typedValue, 100) : typedValue;
+  const amount = type === 'amount' ? Math.min(round2(value), opt.price) : round2(opt.price * value / 100);
+  return { type, value, amount: Math.max(0, amount) };
+}
+
+// The deposit sentence printed on the proposal ('' for no deposit).
+export function depositSentence(est) {
+  const d = proposalDeposit(est);
+  if (!d.value) return '';
+  const end = 'is required before materials can be ordered';
+  if (d.type === 'amount') return `A ${money(d.value)} deposit ${end}.`;
+  const opts = proposalOptions(est);
+  if (opts.length === 1) return `A ${qtyText(d.value)}% deposit (${money(d.amount)}) ${end}.`;
+  return `A ${qtyText(d.value)}% deposit ${end} (${opts.map((o) => `${optionLabel(o)}: ${money(proposalDeposit(est, o).amount)}`).join('; ')}).`;
+}
+
+// The old typed deposit sentence, which the deposit field now prints.
+export const termsWithoutDeposit = (terms) => String(terms || '')
+  .replace(/A\s+\d{1,3}(?:\.\d+)?%\s+deposit is required before materials can be ordered\.?\s*/i, '').trim();
+
+// Payment terms as printed: the deposit sentence, then the other terms. Proposals saved before the
+// deposit field existed print their terms as typed.
+export function proposalTerms(est) {
+  if (est.depositType == null) return String(est.terms || '').trim();
+  return [depositSentence(est), String(est.terms || '').trim()].filter(Boolean).join('\n');
+}
+
+// The deposit invoice line: the proposal's deposit, as one line that isn't taxed again.
+export function depositLine(est) {
   const { opts, opt } = acceptedOption(est);
-  const which = opts.length > 1 ? `, ${optionLabel(opt)}` : '';
-  return { desc: `Deposit (${num(pct)}%) on proposal ${est.number}${which}`, qty: 1, price: round2(opt.price * num(pct) / 100), taxable: false };
+  const d = proposalDeposit(est, opt);
+  const pct = d.type === 'percent' ? ` (${qtyText(d.value)}%)` : '';
+  return { desc: `Deposit${pct} on proposal ${est.number}${opts.length > 1 ? `, ${optionLabel(opt)}` : ''}`, qty: 1, price: d.amount, taxable: false };
+}
+
+// How much of a proposal's accepted price has been paid, from the invoices made from it (void ones
+// don't count). status: 'not billed', 'unpaid', 'partly paid' or 'paid'.
+export function proposalPayment(est, invoices) {
+  const price = estimateAmount(est);
+  const live = (invoices || []).filter((i) => i.status !== 'void');
+  const paid = round2(live.reduce((s, i) => s + (i.status === 'paid' ? invoiceTotals(i).total : num(i.stripe?.amountPaid)), 0));
+  const status = !live.length ? 'not billed' : paid <= 0 ? 'unpaid' : paid >= price ? 'paid' : 'partly paid';
+  return { price, paid, balance: round2(Math.max(0, price - paid)), status };
 }

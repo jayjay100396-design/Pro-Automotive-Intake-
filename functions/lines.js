@@ -16,7 +16,7 @@ export function invoiceTotals(inv) {
   return { subtotal, taxable, tax, total: round2(subtotal + tax) };
 }
 
-const money = (n) => (num(n) < 0 ? '-$' : '$') + Math.abs(num(n)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const money = (n) => (num(n) < 0 ? '-$' : '$') + Math.abs(num(n)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const qtyText = (q) => String(Math.round(q * 10000) / 10000);
 
 // One Stripe invoice item per invoice line, plus sales tax as its own item.
@@ -48,6 +48,18 @@ export function stripeItems(inv) {
     items.push({ description: `Sales tax (${num(inv.taxPct)}%${base})`, amount: taxCents });
   }
   return { items, totalCents: toCents(t.total) };
+}
+
+// For a bill made from a proposal: the proposal's price, what's been paid on it before this invoice
+// and what's left after it. It goes on the Stripe invoice, so the payment page shows where the job stands.
+export function proposalStatusText({ number, price, paidBefore, thisInvoice }) {
+  const left = Math.max(0, round2(num(price) - num(paidBefore) - num(thisInvoice)));
+  return [
+    `Proposal ${number}: ${money(price)}`,
+    `Paid so far: ${money(paidBefore)}`,
+    `This invoice: ${money(thisInvoice)}`,
+    `Left after this invoice: ${money(left)}`,
+  ].join('\n');
 }
 
 // Cents Stripe will bill for these items.

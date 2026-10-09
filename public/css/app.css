@@ -111,7 +111,7 @@ ul.links li .num { margin-left: auto; }
 
 .badge { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; font-weight: 600; background: var(--bg); color: var(--muted); border: 1px solid var(--border); text-transform: capitalize; }
 .s-accepted, .s-signed, .s-paid, .s-approved, .s-complete { color: var(--ok); border-color: currentColor; }
-.s-sent, .s-submitted, .s-in-progress, .s-contracted, .s-estimating { color: var(--accent); border-color: currentColor; }
+.s-sent, .s-submitted, .s-in-progress, .s-contracted, .s-estimating, .s-partly-paid { color: var(--accent); border-color: currentColor; }
 .s-unpaid, .s-pending { color: var(--warn); border-color: currentColor; }
 .s-declined, .s-rejected, .s-void { color: var(--danger); border-color: currentColor; }
 

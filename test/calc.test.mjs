@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   sqft, lineTotal, estimateTotals, proposalOptions, estimateAmount, invoiceTotals, contractSum, g702, nextPayAppLines,
-  proposalBill, depositLine,
+  proposalBill, depositLine, proposalDeposit, depositSentence, proposalTerms, termsWithoutDeposit, proposalPayment,
 } from '../public/js/calc.js';
 
 describe('money math', () => {
@@ -121,8 +121,49 @@ describe('money math', () => {
     const bill = proposalBill(est);
     assert.equal(bill.taxPct, 0);
     assert.deepEqual(bill.lines, [{ desc: 'Supply and install per proposal 1006, Price 2 (Akela): Frameless shower; 3/8" clear', qty: 1, price: 4200, taxable: false }]);
-    assert.deepEqual(depositLine(est, 50), { desc: 'Deposit (50%) on proposal 1006, Price 2 (Akela)', qty: 1, price: 2100, taxable: false });
-    assert.equal(depositLine({ ...est, acceptedOption: 0 }, 50).price, 535); // half of $1,070 with tax
+    const half = { ...est, depositType: 'percent', depositValue: 50 };
+    assert.deepEqual(depositLine(half), { desc: 'Deposit (50%) on proposal 1006, Price 2 (Akela)', qty: 1, price: 2100, taxable: false });
+    assert.equal(depositLine({ ...half, acceptedOption: 0 }).price, 535); // half of $1,070 with tax
+  });
+
+  it('takes the deposit from the proposal: a percent, a dollar amount, or none', () => {
+    const est = { number: 1007, taxPct: 0, lines: [{ desc: 'Shower', unit: 'each', qty: 1, price: 2604.18 }] };
+    assert.deepEqual(proposalDeposit({ ...est, depositType: 'percent', depositValue: 50 }), { type: 'percent', value: 50, amount: 1302.09 });
+    assert.deepEqual(proposalDeposit({ ...est, depositType: 'amount', depositValue: 1000 }), { type: 'amount', value: 1000, amount: 1000 });
+    assert.equal(proposalDeposit({ ...est, depositType: 'amount', depositValue: 9999 }).amount, 2604.18); // never more than the price
+    assert.deepEqual(proposalDeposit({ ...est, depositType: 'percent', depositValue: 150 }), { type: 'percent', value: 100, amount: 2604.18 });
+    assert.equal(proposalDeposit({ ...est, depositType: 'percent', depositValue: null }).amount, 0); // field cleared: no deposit
+    // Saved before the deposit field: the typed terms say how much.
+    assert.deepEqual(proposalDeposit({ ...est, terms: 'A 30% deposit is required before materials can be ordered.' }), { type: 'percent', value: 30, amount: 781.25 });
+    assert.equal(proposalDeposit(est).value, 50);
+    assert.deepEqual(depositLine({ ...est, depositType: 'amount', depositValue: 1000 }), { desc: 'Deposit on proposal 1007', qty: 1, price: 1000, taxable: false });
+  });
+
+  it('prints the deposit with the payment terms', () => {
+    const est = { number: 1007, taxPct: 0, lines: [{ desc: 'Shower', unit: 'each', qty: 1, price: 2604.18 }], depositType: 'percent', depositValue: 50, terms: 'Balance due on completion.' };
+    assert.equal(depositSentence(est), 'A 50% deposit ($1,302.09) is required before materials can be ordered.');
+    assert.equal(proposalTerms(est), 'A 50% deposit ($1,302.09) is required before materials can be ordered.\nBalance due on completion.');
+    assert.equal(depositSentence({ ...est, depositType: 'amount', depositValue: 1500 }), 'A $1,500.00 deposit is required before materials can be ordered.');
+    assert.equal(proposalTerms({ ...est, depositValue: 0 }), 'Balance due on completion.');
+    const two = { ...est, options: [{ fromLines: true }, { name: 'Akela', price: 4200 }] };
+    assert.equal(depositSentence(two), 'A 50% deposit is required before materials can be ordered (Price 1: $1,302.09; Price 2 (Akela): $2,100.00).');
+    // Saved before the deposit field: printed as typed, and the editor takes the old sentence out.
+    const old = { ...est, depositType: undefined, depositValue: undefined, terms: 'A 50% deposit is required before materials can be ordered.\nNet 30.' };
+    assert.equal(proposalTerms(old), old.terms);
+    assert.equal(termsWithoutDeposit(old.terms), 'Net 30.');
+  });
+
+  it('tracks what has been paid on a proposal', () => {
+    const est = { number: 1007, taxPct: 0, lines: [{ desc: 'Shower', unit: 'each', qty: 1, price: 2604.18 }] };
+    const dep = { kind: 'deposit', status: 'unpaid', taxPct: 0, lines: [{ qty: 1, price: 1302.09, taxable: false }] };
+    const fin = { kind: 'final', status: 'unpaid', taxPct: 0, lines: [{ qty: 1, price: 2604.18 }, { qty: 1, price: -1302.09, taxable: false }] };
+    assert.equal(proposalPayment(est, []).status, 'not billed');
+    assert.deepEqual(proposalPayment(est, [dep]), { price: 2604.18, paid: 0, balance: 2604.18, status: 'unpaid' });
+    assert.deepEqual(proposalPayment(est, [{ ...dep, status: 'paid' }, fin]), { price: 2604.18, paid: 1302.09, balance: 1302.09, status: 'partly paid' });
+    assert.equal(proposalPayment(est, [{ ...dep, status: 'paid' }, { ...fin, status: 'paid' }]).status, 'paid');
+    assert.equal(proposalPayment(est, [{ ...dep, status: 'void' }]).status, 'not billed');
+    // Part paid online through Stripe
+    assert.equal(proposalPayment(est, [{ ...dep, stripe: { status: 'open', amountPaid: 500 } }]).paid, 500);
   });
 
   it('can hold a different retainage on stored materials', () => {

@@ -3,8 +3,10 @@
 //   - Online payment card on an invoice: send it with Stripe, copy the link, check, void.
 //   - Online payments card in Settings: is Stripe connected, and the Business ID for setup.
 import { state, add, get, where, nextNumber, can, onChange } from './data.js';
-import { invoiceTotals, proposalBill, depositLine, money } from './calc.js';
-import { esc, today, addDays, badge, toast } from './ui.js';
+import {
+  invoiceTotals, proposalBill, depositLine, proposalDeposit, proposalPayment, proposalOptions, estimateAmount, money,
+} from './calc.js';
+import { esc, today, addDays, fmtDate, badge, toast } from './ui.js';
 import { paymentsStatus, sendWithStripe, voidWithStripe, checkWithStripe, paymentsError } from './payments.js';
 
 const go = (hash) => { location.hash = hash; };
@@ -26,35 +28,59 @@ function unsavedCheck(current, saved, sig) {
   };
 }
 
-// ---------- Proposal: deposit and final invoices ----------
+// ---------- Proposal: deposit and final invoices, and what's been paid ----------
 const KIND = { deposit: 'Deposit', final: 'Final' };
 const fromProposal = (estimateId) => where('invoices', 'estimateId', estimateId)
   .sort((a, b) => n(a.number) - n(b.number));
 
-const proposalSig = (e) => JSON.stringify([
-  s(e.jobId), n(e.markupPct), n(e.minCharge), n(e.taxPct), n(e.acceptedOption),
-  (e.options || []).map((o) => [s(o.name), !!o.fromLines, o.fromLines ? 0 : n(o.price), s(o.specs)]),
-  (e.lines || []).filter((l) => l.desc || l.price)
-    .map((l) => [s(l.desc), s(l.unit), n(l.qty), n(l.widthIn), n(l.heightIn), n(l.minSqft), n(l.price), l.taxable !== false]),
-]);
+const proposalSig = (e) => {
+  const d = proposalDeposit(e);
+  return JSON.stringify([
+    s(e.jobId), n(e.markupPct), n(e.minCharge), n(e.taxPct), n(e.acceptedOption), d.type, d.value,
+    (e.options || []).map((o) => [s(o.name), !!o.fromLines, o.fromLines ? 0 : n(o.price), s(o.specs)]),
+    (e.lines || []).filter((l) => l.desc || l.price)
+      .map((l) => [s(l.desc), s(l.unit), n(l.qty), n(l.widthIn), n(l.heightIn), n(l.minSqft), n(l.price), l.taxable !== false]),
+  ]);
+};
 
-export function proposalBilling(estimateId) {
-  const e = get('estimates', estimateId) || {};
+// Where an invoice stands, in a few words.
+function invoiceNote(inv) {
+  const st = inv.stripe || {};
+  if (inv.status === 'paid') return st.status === 'paid' ? `paid online${st.paidAt ? ` ${when(st.paidAt)}` : ''}` : `paid${inv.paidDate ? ` ${fmtDate(inv.paidDate)}` : ''}`;
+  if (st.status === 'open') {
+    if (n(st.amountPaid) > 0) return `${money(st.amountPaid)} paid online`;
+    return st.sentTo ? `emailed with Stripe${st.sentAt ? ` ${when(st.sentAt)}` : ''}` : 'payment link ready';
+  }
+  return '';
+}
+
+// e: the proposal as the editor has it (for the deposit); the invoices and payments come from the data.
+function billingHtml(estimateId, e) {
   const invs = fromProposal(estimateId);
+  const pay = proposalPayment(e, invs);
+  const opts = proposalOptions(e);
+  const opt = opts[n(e.acceptedOption)] || opts[0];
+  const dep = proposalDeposit(e, opt);
   const contract = where('contracts', 'estimateId', estimateId)[0];
-  const pct = /(\d{1,3}(?:\.\d+)?)\s*%\s*deposit/i.exec(e.terms || '')?.[1] || 50;
-  return `<div class="card top-gap" id="billing">
-    <h2>Billing</h2>
+  return `<div class="row between"><h2>Billing</h2>${pay.status === 'not billed' ? '' : badge(pay.status)}</div>
     ${contract ? `<p class="hint">This proposal became <a href="#/contracts/${esc(contract.id)}">contract ${esc(contract.number)}</a>, so progress billing goes through its pay apps. A deposit invoice still works here.</p>` : ''}
-    ${invs.length ? `<ul class="links">${invs.map((i) => `<li><a href="#/invoices/${esc(i.id)}">Invoice ${esc(i.number)}</a> ${esc(KIND[i.kind] || '')} ${badge(i.status)}${i.stripe?.status === 'open' ? ' <span class="small muted">sent with Stripe</span>' : ''}<span class="num">${money(invoiceTotals(i).total)}</span></li>`).join('')}</ul>`
-    : '<p class="muted">No invoices from this proposal yet.</p>'}
+    <div class="totals">
+      <div class="tr"><span>${opts.length > 1 ? `Accepted price (Price ${opt.number})` : 'Price'}</span><span>${money(pay.price)}</span></div>
+      <div class="tr"><span>Paid</span><span>${money(pay.paid)}</span></div>
+      <div class="tr grand"><span>Balance</span><span>${money(pay.balance)}</span></div>
+    </div>
+    ${invs.length ? `<ul class="links top-gap">${invs.map((i) => `<li><a href="#/invoices/${esc(i.id)}">Invoice ${esc(i.number)}</a> ${esc(KIND[i.kind] || '')} ${badge(i.status)}<span class="small muted">${esc(invoiceNote(i))}</span><span class="num">${money(invoiceTotals(i).total)}</span></li>`).join('')}</ul>`
+    : '<p class="muted top-gap">No invoices from this proposal yet.</p>'}
     ${can.bill() ? `<div class="row top-gap">
-      <label class="inline">Deposit <input type="number" id="deppct" min="1" max="100" step="any" value="${esc(pct)}" style="width:5rem"> %</label>
-      <button type="button" class="btn" id="mkdeposit">Deposit invoice</button>
+      <button type="button" class="btn" id="mkdeposit" ${dep.amount > 0 ? '' : 'disabled'}>Deposit invoice${dep.amount > 0 ? `: ${money(dep.amount)}` : ''}</button>
       <button type="button" class="btn primary" id="mkfinal">Final invoice</button>
     </div>
-    <p class="hint">The final invoice lists each line of the accepted price, priced as the printed proposal shows it, with tax only on taxable lines, and subtracts deposit invoices. Open an invoice to email it with Stripe.</p>` : ''}
-  </div>`;
+    <p class="hint">The deposit (${dep.value ? (dep.type === 'percent' ? `${dep.value}% of the price` : money(dep.value)) : 'none'}) is set under Terms above. The final invoice lists each line of the accepted price, priced as the printed proposal shows it, with tax only on taxable lines, and subtracts deposit invoices. Open an invoice to email it with Stripe.</p>` : ''}`;
+}
+
+export function proposalBilling(estimateId) {
+  const e = get('estimates', estimateId);
+  return e ? `<div class="card top-gap" id="billing">${billingHtml(estimateId, e)}</div>` : '';
 }
 
 // current(): the proposal as the editor has it now (unsaved changes included).
@@ -62,24 +88,33 @@ export function mountProposalBilling(root, estimateId, current) {
   const card = root.querySelector('#billing');
   if (!card) return;
   const unsaved = unsavedCheck(current, () => get('estimates', estimateId), proposalSig);
+  // Redraw only when something shows differently, so a click isn't lost to a redraw (leaving the
+  // deposit field fires a change event between the button's mousedown and mouseup).
+  let shown = null;
+  const draw = () => {
+    const html = billingHtml(estimateId, { ...get('estimates', estimateId), ...current() });
+    if (html !== shown) card.innerHTML = shown = html;
+  };
 
   const make = async (kind) => {
     if (unsaved()) return toast('Save the proposal first, then make the invoice.', true);
     const e = get('estimates', estimateId);
     if (!e?.jobId) return toast('Pick a job for this proposal and save it first.', true);
+    const earlier = fromProposal(estimateId).filter((i) => i.status !== 'void');
+    const same = earlier.filter((i) => i.kind === kind);
+    if (same.length && !confirm(`This proposal already has ${kind} invoice ${same.map((i) => i.number).join(', ')}. Make another one?`)) return;
     const base = {
       number: nextNumber('invoices'), jobId: e.jobId, customerId: e.customerId || get('jobs', e.jobId)?.customerId || '',
       estimateId, payAppId: '', date: today(), status: 'unpaid', notes: state.company?.invoiceNotes || '',
+      // Shown on the Stripe invoice with what's been paid so far (functions/stripe-invoices.js).
+      proposalNumber: e.number ?? '', proposalPrice: estimateAmount(e),
     };
     let inv;
     if (kind === 'deposit') {
-      const pct = Number(card.querySelector('#deppct').value);
-      if (!(pct > 0 && pct <= 100)) return toast('Enter a deposit between 1 and 100%.', true);
-      inv = { ...base, kind, dueDate: today(), taxPct: 0, lines: [depositLine(e, pct)] };
+      const line = depositLine(e);
+      if (!(line.price > 0)) return toast('This proposal has no deposit. Set one under Terms and save.', true);
+      inv = { ...base, kind, dueDate: today(), taxPct: 0, lines: [line] };
     } else {
-      const earlier = fromProposal(estimateId).filter((i) => i.status !== 'void');
-      const finals = earlier.filter((i) => i.kind === 'final');
-      if (finals.length && !confirm(`This proposal already has final invoice ${finals.map((i) => i.number).join(', ')}. Make another one?`)) return;
       const bill = proposalBill(e);
       const credits = earlier.filter((i) => i.kind === 'deposit')
         .map((d) => ({ desc: `Less deposit, invoice ${d.number}`, qty: 1, price: -invoiceTotals(d).total, taxable: false }));
@@ -96,8 +131,18 @@ export function mountProposalBilling(root, estimateId, current) {
       toast(err.code === 'permission-denied' ? 'Your role can\'t make invoices.' : err.message, true);
     }
   };
-  card.querySelector('#mkdeposit')?.addEventListener('click', () => make('deposit'));
-  card.querySelector('#mkfinal')?.addEventListener('click', () => make('final'));
+  card.addEventListener('click', (ev) => {
+    if (ev.target.closest('#mkdeposit')) make('deposit');
+    else if (ev.target.closest('#mkfinal')) make('final');
+  });
+  // The deposit follows the form as you type; payments show up as they come in.
+  root.querySelector('#f')?.addEventListener('input', draw);
+  root.querySelector('#f')?.addEventListener('change', draw);
+  const off = onChange(() => {
+    if (!card.isConnected) return off();
+    draw();
+  });
+  draw();
 }
 
 // ---------- Invoice: send with Stripe ----------
@@ -124,7 +169,8 @@ function stripeHtml(inv, busy) {
   } else if (st.status === 'open') {
     const now = invoiceTotals(inv).total;
     const changed = Math.round(now * 100) !== Math.round(n(st.amountDue) * 100);
-    body = `<p>Stripe invoice ${esc(st.number || '')}${test} is waiting for payment: <b>${money(st.amountDue)}</b>.
+    const part = n(st.amountPaid) > 0 ? ` ${money(st.amountPaid)} is paid so far, ${money(n(st.amountDue) - n(st.amountPaid))} to go.` : '';
+    body = `<p>Stripe invoice ${esc(st.number || '')}${test} is waiting for payment: <b>${money(st.amountDue)}</b>.${part}
       ${st.sentTo ? `Stripe emailed it to ${esc(st.sentTo)}${st.sentAt ? ` on ${when(st.sentAt)}` : ''}.` : 'It hasn\'t been emailed; send the link yourself, or email it from here.'}</p>
       ${changed ? `<p class="warn small">This invoice now comes to ${money(now)}. Void the Stripe invoice and send a new one so the customer sees the new amount.</p>` : ''}
       <div class="row">
@@ -161,10 +207,12 @@ export function mountStripeCard(root, invoiceId, current) {
   let busy = false;
   let wasPaid = get('invoices', invoiceId)?.status === 'paid';
 
+  let shown = null;
   const draw = () => {
     const inv = get('invoices', invoiceId);
     if (!inv) return;
-    card.innerHTML = stripeHtml(inv, busy);
+    const html = stripeHtml(inv, busy);
+    if (html !== shown) card.innerHTML = shown = html;
     // Paid through Stripe while open here: match the form, so a later Save keeps it paid.
     if (inv.status === 'paid' && !wasPaid) {
       const f = root.querySelector('#f');

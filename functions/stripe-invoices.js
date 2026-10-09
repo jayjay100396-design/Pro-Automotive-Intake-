@@ -9,7 +9,7 @@
 // and the customer gets stripeCustomerIds: { test, live }. Only this server code writes those
 // fields; firestore.rules keeps the app from changing them.
 import { HttpsError } from 'firebase-functions/v2/https';
-import { stripeItems, daysUntilDue, floridaDate, clip } from './lines.js';
+import { stripeItems, invoiceTotals, proposalStatusText, daysUntilDue, floridaDate, clip } from './lines.js';
 
 export const BILLING_ROLES = ['owner', 'admin', 'staff', 'accountant'];
 const CLAIM_MS = 180e3; // longer than the function's 120 s timeout
@@ -105,6 +105,19 @@ async function ensureCustomer({ db, stripe, livemode, companyId, customerId, cus
   return created.id;
 }
 
+// For a bill made from a proposal (deposit or final invoice): the proposal's price, what's been paid
+// on it so far (other paid invoices from it) and what this invoice leaves. '' for other bills.
+async function proposalStatus(db, companyId, invoiceId, inv) {
+  const price = Number(inv.proposalPrice);
+  if (typeof inv.estimateId !== 'string' || !ID.test(inv.estimateId) || !(price > 0)) return '';
+  const snap = await db.collection(`companies/${companyId}/invoices`).where('estimateId', '==', inv.estimateId).get();
+  const paidBefore = snap.docs.filter((d) => d.id !== invoiceId && d.data().status !== 'void').reduce((sum, d) => {
+    const other = d.data();
+    return sum + (other.status === 'paid' ? invoiceTotals(other).total : Number(other.stripe?.amountPaid) || 0);
+  }, 0);
+  return proposalStatusText({ number: inv.proposalNumber ?? '', price, paidBefore, thisInvoice: invoiceTotals(inv).total });
+}
+
 // Has Stripe email the invoice. A failure here leaves the invoice made, with a note to send it again.
 async function sendEmail(stripe, ref, stripeInvoiceId, email) {
   try {
@@ -181,6 +194,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       // If Stripe won't take the number (say it was already used), Stripe numbers the invoice
       // and the app's number goes in a custom field instead.
       const numberField = () => ({ custom_fields: [...custom, { name: 'Invoice #', value: clip(String(inv.number), 140) }] });
+      const memo = [await proposalStatus(db, companyId, invoiceId, inv), String(inv.notes || '').trim()].filter(Boolean).join('\n\n');
       const params = {
         customer,
         collection_method: 'send_invoice',
@@ -190,7 +204,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
         currency: 'usd',
         metadata: { companyId, invoiceId, appNumber: String(inv.number ?? '') },
         ...(custom.length ? { custom_fields: custom } : {}),
-        ...(inv.notes ? { description: clip(inv.notes, 1500) } : {}),
+        ...(memo ? { description: clip(memo, 1500) } : {}),
       };
       let draft;
       try {
