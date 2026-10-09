@@ -6,6 +6,20 @@
   "storage": {
     "rules": "storage.rules"
   },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local",
+        "test"
+      ]
+    }
+  ],
   "hosting": {
     "public": "public",
     "ignore": [
@@ -32,6 +46,9 @@
     },
     "firestore": {
       "port": 8080
+    },
+    "functions": {
+      "port": 5001
     },
     "storage": {
       "port": 9199

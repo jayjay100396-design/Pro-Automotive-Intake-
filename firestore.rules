@@ -68,6 +68,13 @@ service cloud.firestore {
       return request.resource.data[field] == resource.data[field];
     }
 
+    // Stripe state on invoices and Stripe customer ids on customers. Only the Cloud Functions
+    // (functions/stripe-invoices.js) write these, so the app can't fake a payment.
+    function keepsServerFields() {
+      return (resource == null && !request.resource.data.keys().hasAny(['stripe', 'stripeCustomerIds']))
+        || (resource != null && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['stripe', 'stripeCustomerIds']));
+    }
+
     // A user's own profile. Nobody else can read or write it.
     match /users/{uid} {
       allow read, write: if signedIn() && request.auth.uid == uid;
@@ -168,7 +175,8 @@ service cloud.firestore {
 
       match /{collection}/{docId} {
         allow read: if isRecord(collection) && isMember(companyId);
-        allow create, update: if isRecord(collection) && canEditCollection(companyId, collection);
+        allow create, update: if isRecord(collection) && canEditCollection(companyId, collection)
+          && keepsServerFields();
         allow delete: if isRecord(collection) && canManage(companyId);
       }
 

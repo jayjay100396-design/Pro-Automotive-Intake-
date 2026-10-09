@@ -54,10 +54,14 @@ export function estimateAmount(est) {
   return (opts[i] || opts[0]).price;
 }
 
+// Lines marked taxable: false (labor, deposits, credits) are left out of the sales tax.
+// functions/lines.js does the same math for the Stripe invoice.
 export function invoiceTotals(inv) {
   const lines = inv.lines || [];
-  const subtotal = round2(lines.reduce((s, l) => s + round2(num(l.qty) * num(l.price)), 0));
-  const tax = round2(subtotal * num(inv.taxPct) / 100);
+  const amount = (l) => round2(num(l.qty) * num(l.price));
+  const subtotal = round2(lines.reduce((s, l) => s + amount(l), 0));
+  const taxable = round2(lines.filter((l) => l.taxable !== false).reduce((s, l) => s + amount(l), 0));
+  const tax = round2(taxable * num(inv.taxPct) / 100);
   return { subtotal, tax, total: round2(subtotal + tax) };
 }
 
@@ -130,3 +134,94 @@ export function nextPayAppLines(sov, prior) {
 
 export const money = (n) => (num(n) < 0 ? '-$' : '$') + Math.abs(num(n)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 export const pctFmt = (f) => (num(f) * 100).toFixed(1) + '%';
+
+// ---------- Billing a proposal ----------
+const UNIT_WORDS = { lf: ['lin ft', 'lin ft'], hour: ['hour', 'hours'] };
+const qtyText = (q) => String(Math.round(num(q) * 10000) / 10000);
+const isWholeCents = (n) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
+
+// Rounds amounts to cents so they add up to exactly `target`; the rounding goes on the largest one.
+function spread(raws, target) {
+  const out = raws.map(round2);
+  const diff = round2(target - out.reduce((s, a) => s + a, 0));
+  if (diff && out.length) {
+    let k = 0;
+    out.forEach((a, i) => { if (Math.abs(a) > Math.abs(out[k])) k = i; });
+    out[k] = round2(out[k] + diff);
+  }
+  return out;
+}
+
+// An invoice line for a proposal line billed at `amount`: quantity x unit price when that comes
+// out to whole cents, otherwise one amount with the quantity written into the description.
+function billLine(l, amount) {
+  const qty = num(l.qty);
+  const taxable = l.taxable !== false;
+  const desc = String(l.desc || '').trim();
+  if (l.unit === 'sqft') {
+    const size = `${qtyText(l.widthIn)}" × ${qtyText(l.heightIn)}"`;
+    const each = Math.max(sqft(l.widthIn, l.heightIn), num(l.minSqft));
+    const per = qty > 0 ? round2(amount / qty) : 0;
+    if (Number.isInteger(qty) && qty > 0 && round2(per * qty) === amount) {
+      return { desc: `${desc}, ${size} (${qtyText(round2(each))} sq ft each)`, qty, price: per, taxable };
+    }
+    return { desc: `${desc}, ${qtyText(qty)} × ${size} (${qtyText(round2(lineQty(l)))} sq ft)`, qty: 1, price: amount, taxable };
+  }
+  const [one, many] = UNIT_WORDS[l.unit] || [];
+  const unitPrice = qty > 0 ? amount / qty : 0;
+  if (qty > 0 && qty !== 1 && isWholeCents(unitPrice) && round2(round2(unitPrice) * qty) === amount) {
+    return { desc: one ? `${desc} (per ${one})` : desc, qty, price: round2(unitPrice), taxable };
+  }
+  const detail = qty && qty !== 1 ? ` (${qtyText(qty)}${one ? ` ${many}` : ''})` : '';
+  return { desc: desc + detail, qty: 1, price: amount, taxable };
+}
+
+const acceptedOption = (est) => {
+  const opts = proposalOptions(est);
+  return { opts, opt: opts[Number(est.acceptedOption) || 0] || opts[0] };
+};
+const optionLabel = (o) => `Price ${o.number}${o.name ? ` (${o.name})` : ''}`;
+
+// What to invoice for a proposal's accepted price. A price that comes from the line items is billed
+// line by line, priced the way the printed proposal shows them (markup and any minimum charge spread
+// across the lines), with labor and other non-taxable lines left out of the tax, so the invoice comes
+// to the proposal's price and tax to the cent. A lump-sum price is billed as one line with its specs.
+export function proposalBill(est) {
+  const { opts, opt } = acceptedOption(est);
+  const src = (est.lines || []).filter((l) => String(l.desc || '').trim() || lineTotal(l));
+  if (!opt.fromLines || !src.length) {
+    const specs = String(opt.specs || '').split('\n').map((x) => x.trim()).filter(Boolean).join('; ');
+    const desc = `Supply and install per proposal ${est.number}${opts.length > 1 ? `, ${optionLabel(opt)}` : ''}${specs ? `: ${specs}` : ''}`;
+    return { option: opt, taxPct: 0, lines: [{ desc, qty: 1, price: opt.price, taxable: false }] };
+  }
+  const t = estimateTotals(est);
+  const taxPct = num(est.taxPct);
+  if (t.subtotal <= 0) {
+    return { option: opt, taxPct, lines: [{ desc: `Supply and install per proposal ${est.number}`, qty: 1, price: t.beforeTax, taxable: true }] };
+  }
+  const factor = t.beforeTax / t.subtotal;
+  const isTaxed = (l) => l.taxable !== false;
+  const taxedRaw = src.filter(isTaxed).map((l) => lineTotal(l) * factor);
+  const untaxedRaw = src.filter((l) => !isTaxed(l)).map((l) => lineTotal(l) * factor);
+  // Split the price between taxed and untaxed lines, a cent either way if needed so the
+  // invoice's tax equals the proposal's.
+  let taxed = t.beforeTax;
+  if (!taxedRaw.length) taxed = 0;
+  else if (untaxedRaw.length) {
+    const raw = round2(taxedRaw.reduce((s, a) => s + a, 0));
+    taxed = [0, -0.01, 0.01, -0.02, 0.02].map((d) => round2(raw + d)).find((c) => round2(c * taxPct / 100) === t.tax) ?? raw;
+  }
+  const taxedAmts = spread(taxedRaw, taxed);
+  const untaxedAmts = spread(untaxedRaw, round2(t.beforeTax - taxed));
+  let ti = 0;
+  let ui = 0;
+  const lines = src.map((l) => billLine(l, isTaxed(l) ? taxedAmts[ti++] : untaxedAmts[ui++]));
+  return { option: opt, taxPct, lines };
+}
+
+// A deposit on a proposal: pct of its accepted price, as one line that isn't taxed again.
+export function depositLine(est, pct) {
+  const { opts, opt } = acceptedOption(est);
+  const which = opts.length > 1 ? `, ${optionLabel(opt)}` : '';
+  return { desc: `Deposit (${num(pct)}%) on proposal ${est.number}${which}`, qty: 1, price: round2(opt.price * num(pct) / 100), taxable: false };
+}

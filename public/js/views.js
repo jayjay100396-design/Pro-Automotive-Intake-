@@ -7,6 +7,7 @@ import {
   proposalOptions, estimateAmount,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
+import { proposalBilling, mountProposalBilling, stripeCard, mountStripeCard, paymentsSettings, mountPaymentsSettings } from './billing.js';
 
 const go = (hash) => { location.hash = hash; };
 const D = () => state.data;
@@ -350,7 +351,8 @@ export function estimateEdit(id, params) {
         <label>Email <input name="preparedEmail" type="email" value="${esc(e.preparedEmail)}"></label>
       </fieldset>
       <div class="row"><button class="btn primary" ${ro}>Save proposal</button></div>
-    </form>`,
+    </form>
+    ${isNew ? '' : proposalBilling(id)}`,
     mount(root) {
       const body = root.querySelector('#lines');
       const form = root.querySelector('#f');
@@ -404,6 +406,7 @@ export function estimateEdit(id, params) {
         body.innerHTML = PRESETS[t].map(estLineRow).join(''); recalc();
       });
       recalc();
+      if (!isNew) mountProposalBilling(root, id, () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price), options: readOptions(optBox), acceptedOption: acceptedIndex() }));
 
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
@@ -734,6 +737,7 @@ const invRow = (l = {}) => `<tr data-row>
   <td><input name="desc" value="${esc(l.desc)}" placeholder="Description"></td>
   <td><input name="qty" type="number" step="any" value="${esc(l.qty ?? 1)}" class="n"></td>
   <td><input name="price" type="number" step="0.01" value="${esc(l.price ?? 0)}" class="n"></td>
+  <td class="c"><input name="taxable" type="checkbox" ${l.taxable === false ? '' : 'checked'} title="Charge sales tax on this line"></td>
   <td class="num" data-total></td>
   <td><button type="button" class="icon" data-del>✕</button></td></tr>`;
 
@@ -751,6 +755,7 @@ export function invoiceEdit(id, params) {
       ${!isNew && can.bill() && inv.status === 'unpaid' ? '<button class="btn primary" id="paid">Mark paid</button>' : ''}
       ${!isNew && can.remove() ? '<button class="btn danger" id="del">Delete</button>' : ''}`)}
     ${inv.payAppId ? `<p class="muted">From <a href="#/payapps/${esc(inv.payAppId)}">pay app ${esc(get('payApps', inv.payAppId)?.number || '')}</a></p>` : ''}
+    ${inv.estimateId ? `<p class="muted">${inv.kind === 'deposit' ? 'Deposit on' : 'From'} <a href="#/estimates/${esc(inv.estimateId)}">proposal ${esc(get('estimates', inv.estimateId)?.number || '')}</a></p>` : ''}
     <form id="f" class="stack">
       <fieldset class="card grid4" ${ro}>
         <label class="span2">Job <select name="jobId" required>${jobOptions(inv.jobId)}</select></label>
@@ -762,7 +767,7 @@ export function invoiceEdit(id, params) {
         <label>Sales tax % <input name="taxPct" type="number" step="any" value="${esc(inv.taxPct)}"></label>
       </fieldset>
       <fieldset class="card" ${ro}>
-        <table class="lines" data-lines><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th class="num">Amount</th><th></th></tr></thead>
+        <table class="lines" data-lines><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Tax</th><th class="num">Amount</th><th></th></tr></thead>
         <tbody id="lines">${(inv.lines || []).map(invRow).join('')}</tbody></table>
         <button type="button" class="btn small" id="addline">+ Add line</button>
       </fieldset>
@@ -771,7 +776,8 @@ export function invoiceEdit(id, params) {
         <div class="card totals" id="totals"></div>
       </div>
       <div class="row"><button class="btn primary" ${ro}>Save invoice</button></div>
-    </form>`,
+    </form>
+    ${isNew ? '' : stripeCard()}`,
     mount(root) {
       const body = root.querySelector('#lines');
       const form = root.querySelector('#f');
@@ -802,6 +808,7 @@ export function invoiceEdit(id, params) {
       root.querySelector('#del')?.addEventListener('click', async () => {
         if (confirmDelete('invoice') && await attempt(() => remove('invoices', id), 'Invoice deleted') !== null) go('#/invoices');
       });
+      if (!isNew) mountStripeCard(root, id, () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price) }));
     },
   };
 }
@@ -907,6 +914,7 @@ export function settings() {
       <p class="hint">Each link works once and expires in 7 days. Send it by text or email; they open it, sign in any way they like, and tap Join.</p>
       <div id="invites"></div>` : ''}
     </div>
+    ${paymentsSettings()}
     ${can.manage() ? `<div class="card"><h2>Transfer ownership</h2>
       <p class="small">Hand the business to another team member. They become the owner and you become an admin.</p>
       <div id="transfer"><p class="muted small">Loading team…</p></div></div>` : ''}`,
@@ -916,6 +924,7 @@ export function settings() {
         await attempt(() => updateCompany(formData(e.target)), 'Company saved');
       });
       mountTeam(root);
+      mountPaymentsSettings(root);
       const box = root.querySelector('#transfer');
       if (!box) return;
       listMembers().then((members) => {

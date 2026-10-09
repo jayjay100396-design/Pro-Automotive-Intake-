@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { sqft, lineTotal, estimateTotals, proposalOptions, estimateAmount, invoiceTotals, contractSum, g702, nextPayAppLines } from '../public/js/calc.js';
+import {
+  sqft, lineTotal, estimateTotals, proposalOptions, estimateAmount, invoiceTotals, contractSum, g702, nextPayAppLines,
+  proposalBill, depositLine,
+} from '../public/js/calc.js';
 
 describe('money math', () => {
   it('bills glass by square foot with a per-lite minimum', () => {
@@ -32,6 +35,9 @@ describe('money math', () => {
 
   it('totals invoices', () => {
     assert.deepEqual(invoiceTotals({ taxPct: 7, lines: [{ qty: 2, price: 50 }] }), { subtotal: 100, tax: 7, total: 107 });
+    // Lines marked not taxable (labor, a deposit credit) stay out of the tax.
+    const t = invoiceTotals({ taxPct: 7, lines: [{ qty: 1, price: 1000 }, { qty: 2, price: 100, taxable: false }, { qty: 1, price: -300, taxable: false }] });
+    assert.deepEqual(t, { subtotal: 900, tax: 70, total: 970 });
   });
 
   it('adds only approved change orders to the contract sum', () => {
@@ -67,6 +73,56 @@ describe('money math', () => {
     assert.equal(s2.totalCompleted, 70000);
     assert.equal(s2.earnedLessRetainage, 63000);
     assert.equal(s2.currentDue, 27000);
+  });
+
+  it('bills a proposal line by line to the cent', () => {
+    const est = { number: 1005, markupPct: 15, minCharge: 0, taxPct: 7, lines: [
+      { desc: 'Clear tempered 1/4"', unit: 'sqft', qty: 3, widthIn: 36, heightIn: 80, minSqft: 3, price: 18.5 },
+      { desc: 'Door closer', unit: 'each', qty: 2, price: 245 },
+      { desc: 'Install labor', unit: 'hour', qty: 6.5, price: 85, taxable: false },
+      { desc: '', unit: 'each', qty: 1, price: 0 },
+    ] };
+    const bill = proposalBill(est);
+    const t = estimateTotals(est);
+    const inv = invoiceTotals({ taxPct: bill.taxPct, lines: bill.lines });
+    assert.deepEqual([inv.subtotal, inv.tax, inv.total], [t.beforeTax, t.tax, t.total]);
+    assert.equal(bill.lines.length, 3); // the blank line is dropped
+    assert.equal(bill.lines[0].desc, 'Clear tempered 1/4", 36" × 80" (20 sq ft each)');
+    assert.equal(bill.lines[0].qty, 3);
+    assert.equal(bill.lines[1].desc, 'Door closer');
+    assert.equal(bill.lines[2].taxable, false);
+    assert.match(bill.lines[2].desc, /^Install labor/);
+  });
+
+  it('keeps random proposals exact when billed', () => {
+    let seed = 7;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const pick = (a) => a[Math.floor(rnd() * a.length)];
+    for (let i = 0; i < 500; i++) {
+      const lines = Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => {
+        const unit = pick(['sqft', 'each', 'lf', 'hour']);
+        return {
+          desc: 'Item', unit, qty: unit === 'hour' ? Math.round(rnd() * 400) / 10 : 1 + Math.floor(rnd() * 8),
+          widthIn: 12 + Math.round(rnd() * 960) / 8, heightIn: 12 + Math.round(rnd() * 960) / 8, minSqft: pick([0, 3]),
+          price: Math.round(rnd() * 50000) / 100, taxable: rnd() > 0.3,
+        };
+      });
+      const est = { number: 1000 + i, lines, markupPct: pick([0, 10, 12.5, 33]), minCharge: pick([0, 250, 5000]), taxPct: pick([0, 6, 7, 7.5]) };
+      const t = estimateTotals(est);
+      const bill = proposalBill(est);
+      const inv = invoiceTotals({ taxPct: bill.taxPct, lines: bill.lines });
+      assert.deepEqual([inv.subtotal, inv.tax, inv.total], [t.beforeTax, t.tax, t.total], JSON.stringify(est));
+    }
+  });
+
+  it('bills a lump-sum price as one line, and deposits on the accepted price', () => {
+    const est = { number: 1006, taxPct: 7, lines: [{ desc: 'Door', unit: 'each', qty: 1, price: 1000 }],
+      options: [{ fromLines: true }, { name: 'Akela', price: 4200, specs: 'Frameless shower\n3/8" clear' }], acceptedOption: 1 };
+    const bill = proposalBill(est);
+    assert.equal(bill.taxPct, 0);
+    assert.deepEqual(bill.lines, [{ desc: 'Supply and install per proposal 1006, Price 2 (Akela): Frameless shower; 3/8" clear', qty: 1, price: 4200, taxable: false }]);
+    assert.deepEqual(depositLine(est, 50), { desc: 'Deposit (50%) on proposal 1006, Price 2 (Akela)', qty: 1, price: 2100, taxable: false });
+    assert.equal(depositLine({ ...est, acceptedOption: 0 }, 50).price, 535); // half of $1,070 with tax
   });
 
   it('can hold a different retainage on stored materials', () => {
