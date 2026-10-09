@@ -51,6 +51,15 @@ service cloud.firestore {
         || (isBillingCollection(collection) && hasRole(companyId, ['accountant']));
     }
 
+    // Business records. members and invites have their own rules below.
+    function isRecord(collection) {
+      return !(collection in ['members', 'invites']);
+    }
+
+    function invitePath(companyId, inviteId) {
+      return /databases/$(database)/documents/companies/$(companyId)/invites/$(inviteId);
+    }
+
     function canManage(companyId) {
       return hasRole(companyId, ['owner', 'admin']);
     }
@@ -111,6 +120,16 @@ service cloud.firestore {
           && ((resource.data.role != 'admin' && request.resource.data.role != 'admin')
               || role(companyId) == 'owner');
 
+        // Joining by invite link: a signed-in user adds themselves with the invite's role,
+        // in the same batch that deletes the invite, so each link works once.
+        allow create: if signedIn()
+          && uid == request.auth.uid
+          && request.resource.data.inviteId is string
+          && exists(invitePath(companyId, request.resource.data.inviteId))
+          && !existsAfter(invitePath(companyId, request.resource.data.inviteId))
+          && request.time < get(invitePath(companyId, request.resource.data.inviteId)).data.expiresAt
+          && request.resource.data.role == get(invitePath(companyId, request.resource.data.inviteId)).data.role;
+
         // Ownership transfer, part of the owner's batch above: the new owner's role becomes 'owner'
         // and the old owner's becomes 'admin'. Only the role field changes.
         allow update: if hasRole(companyId, ['owner'])
@@ -131,17 +150,33 @@ service cloud.firestore {
               || (canManage(companyId) && (resource.data.role != 'admin' || role(companyId) == 'owner')));
       }
 
+      // Invite links. The invite id is the secret in the link: anyone signed in who has it can
+      // read that one invite, but nobody except owners and admins can list them.
+      match /invites/{inviteId} {
+        allow get: if signedIn();
+        allow list: if canManage(companyId);
+        allow create: if canManage(companyId)
+          && request.resource.data.role in ['admin', 'staff', 'accountant']
+          && (request.resource.data.role != 'admin' || role(companyId) == 'owner')
+          && request.resource.data.expiresAt is timestamp
+          && request.resource.data.expiresAt < request.time + duration.value(30, 'd');
+        allow update: if false;
+        // Revoked by an owner/admin, or used up by the person joining with it.
+        allow delete: if canManage(companyId)
+          || (signedIn() && getAfter(memberPath(companyId)).data.inviteId == inviteId);
+      }
+
       match /{collection}/{docId} {
-        allow read: if collection != 'members' && isMember(companyId);
-        allow create, update: if collection != 'members' && canEditCollection(companyId, collection);
-        allow delete: if collection != 'members' && canManage(companyId);
+        allow read: if isRecord(collection) && isMember(companyId);
+        allow create, update: if isRecord(collection) && canEditCollection(companyId, collection);
+        allow delete: if isRecord(collection) && canManage(companyId);
       }
 
       // Line items (e.g. G703 continuation lines), attachment metadata and other nested records.
       match /{collection}/{docId}/{subcollection}/{rest=**} {
-        allow read: if collection != 'members' && isMember(companyId);
-        allow create, update: if collection != 'members' && canEditCollection(companyId, collection);
-        allow delete: if collection != 'members' && canEdit(companyId);
+        allow read: if isRecord(collection) && isMember(companyId);
+        allow create, update: if isRecord(collection) && canEditCollection(companyId, collection);
+        allow delete: if isRecord(collection) && canEdit(companyId);
       }
     }
   }

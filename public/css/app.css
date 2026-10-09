@@ -122,8 +122,8 @@ ul.links li .num { margin-left: auto; }
 .msg { min-height: 1.2em; font-size: .9rem; margin: .75rem 0 0; }
 .msg.err { color: var(--danger); } .msg.ok { color: var(--ok); }
 
-.toast { position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%) translateY(150%); background: var(--text); color: var(--bg); padding: .65rem 1.1rem; border-radius: 8px; transition: transform .2s; z-index: 50; max-width: calc(100% - 2rem); }
-.toast.show { transform: translateX(-50%) translateY(0); }
+.toast { position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%) translateY(150%); background: var(--text); color: var(--bg); padding: .65rem 1.1rem; border-radius: 8px; transition: transform .2s, opacity .2s; z-index: 50; max-width: calc(100% - 2rem); opacity: 0; visibility: hidden; }
+.toast.show { transform: translateX(-50%) translateY(0); opacity: 1; visibility: visible; }
 .toast.err { background: var(--danger); color: #fff; }
 
 /* Printable documents */

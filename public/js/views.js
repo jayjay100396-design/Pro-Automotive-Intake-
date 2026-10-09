@@ -1,7 +1,7 @@
 // Screens: dashboard, customers, jobs, estimates, contracts (with change orders), pay apps, invoices, settings.
 // Each view returns { html, mount(root), live }. Live views re-render when data changes;
 // editors render once so typing isn't interrupted.
-import { state, add, update, remove, get, where, nextNumber, can, updateCompany, listMembers, transferOwnership } from './data.js';
+import { state, add, update, remove, get, where, nextNumber, can, updateCompany, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
 } from './calc.js';
@@ -702,9 +702,72 @@ export function invoiceEdit(id, params) {
   };
 }
 
+// ---------- Team ----------
+const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', staff: 'Staff', accountant: 'Accountant' };
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toast('Link copied'); } catch { prompt('Copy this link:', text); }
+}
+
+function mountTeam(root) {
+  const team = root.querySelector('#team');
+  const invites = root.querySelector('#invites');
+  const me = state.user.uid;
+  // Which roles the current user may assign to someone else (mirrors the security rules).
+  const assignable = (m) => m.uid !== me && m.role !== 'owner' && can.remove() && (state.role === 'owner' || m.role !== 'admin');
+
+  const drawTeam = async () => {
+    const members = (await listMembers()).sort((a, b) => ['owner', 'admin', 'staff', 'accountant'].indexOf(a.role) - ['owner', 'admin', 'staff', 'accountant'].indexOf(b.role));
+    const roles = state.role === 'owner' ? ['admin', 'staff', 'accountant'] : ['staff', 'accountant'];
+    team.innerHTML = `<table class="list"><thead><tr><th>Name</th><th>Sign-in</th><th>Role</th><th></th></tr></thead><tbody>
+      ${members.map((m) => `<tr><td>${esc(m.name || '—')}${m.uid === me ? ' <span class="muted small">(you)</span>' : ''}</td><td>${esc(m.email || m.phone || '')}</td>
+        <td>${assignable(m) ? `<select data-role="${esc(m.uid)}">${options(roles.map((r) => [r, ROLE_LABEL[r]]), m.role)}</select>` : esc(ROLE_LABEL[m.role] || m.role)}</td>
+        <td class="actions-cell">${assignable(m) ? `<button class="btn small danger" data-remove="${esc(m.uid)}">Remove</button>` : ''}</td></tr>`).join('')}
+    </tbody></table>`;
+    team.querySelectorAll('[data-role]').forEach((sel) => sel.addEventListener('change', async () => {
+      await attempt(() => setMemberRole(sel.dataset.role, sel.value), 'Role updated');
+      drawTeam();
+    }));
+    team.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
+      const m = members.find((x) => x.uid === b.dataset.remove);
+      if (!confirm(`Remove ${m.name || m.email || m.phone || 'this person'} from the team? They lose access right away.`)) return;
+      await attempt(() => removeMember(m.uid), 'Removed from the team');
+      drawTeam();
+    }));
+  };
+
+  const drawInvites = async () => {
+    if (!invites) return;
+    const list = (await listInvites()).filter((i) => i.expiresAt?.toMillis() > Date.now());
+    invites.innerHTML = list.length ? `<h2 class="top-gap">Open invite links</h2><table class="list"><tbody>
+      ${list.map((i) => `<tr><td>${esc(i.label || 'Invite')}</td><td>${esc(ROLE_LABEL[i.role] || i.role)}</td><td class="muted small">expires ${esc(i.expiresAt.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))}</td>
+        <td class="actions-cell"><button class="btn small" data-copy="${esc(i.id)}">Copy link</button> <button class="btn small danger" data-revoke="${esc(i.id)}">Cancel</button></td></tr>`).join('')}
+    </tbody></table>` : '';
+    invites.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => copyText(inviteLink(b.dataset.copy))));
+    invites.querySelectorAll('[data-revoke]').forEach((b) => b.addEventListener('click', async () => {
+      await attempt(() => revokeInvite(b.dataset.revoke), 'Invite canceled');
+      drawInvites();
+    }));
+  };
+
+  root.querySelector('#invite')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = formData(e.target);
+    const id = await attempt(() => createInvite(f.role, f.label));
+    if (!id) return;
+    e.target.reset();
+    await drawInvites();
+    copyText(inviteLink(id));
+  });
+
+  drawTeam().catch((e) => { team.innerHTML = `<p class="muted small">Couldn't load the team: ${esc(e.message)}</p>`; });
+  drawInvites().catch(() => {});
+}
+
 // ---------- Settings ----------
 export function settings() {
-  const c = state.company || {};
+  if (!state.company) return { waiting: true, html: '<p class="muted">Loading…</p>' };
+  const c = state.company;
   const u = state.user;
   const ro = can.manage() ? '' : 'disabled';
   return {
@@ -723,7 +786,18 @@ export function settings() {
     </form>
     <div class="card"><h2>Your account</h2>
       <p>${esc(u.displayName || '')} ${esc(u.email || u.phoneNumber || '')}<br><span class="muted small">Role: ${esc(state.role)} · signed in with ${esc(u.providerData.map((p) => ({ 'google.com': 'Google', password: 'email and password', phone: 'phone' }[p.providerId] || p.providerId)).join(', '))}</span></p>
-      <p class="muted small">Team invites for the accountant and crew are coming next. Roles: owner (everything), admin (everything except company settings and ownership), staff (create and edit), accountant (reads everything, handles pay apps and invoices).</p>
+    </div>
+    <div class="card"><h2>Team</h2>
+      <p class="muted small">Roles: <b>owner</b> does everything; <b>admin</b> does everything except company settings and ownership; <b>staff</b> create and edit jobs and paperwork but can't delete; <b>accountant</b> sees everything and handles pay apps and invoices.</p>
+      <div id="team"><p class="muted small">Loading team…</p></div>
+      ${can.remove() ? `<h2 class="top-gap">Invite someone</h2>
+      <form class="grid4" id="invite">
+        <label class="span2">Who is it for? (just a note) <input name="label" placeholder="e.g. Wes, or the accountant"></label>
+        <label>Role <select name="role">${options([['accountant', 'Accountant'], ['staff', 'Staff'], ...(can.manage() ? [['admin', 'Admin']] : [])], 'accountant')}</select></label>
+        <label>&nbsp;<button class="btn primary">Create invite link</button></label>
+      </form>
+      <p class="hint">Each link works once and expires in 7 days. Send it by text or email; they open it, sign in any way they like, and tap Join.</p>
+      <div id="invites"></div>` : ''}
     </div>
     ${can.manage() ? `<div class="card"><h2>Transfer ownership</h2>
       <p class="small">Hand the business to another team member. They become the owner and you become an admin.</p>
@@ -733,6 +807,7 @@ export function settings() {
         e.preventDefault();
         await attempt(() => updateCompany(formData(e.target)), 'Company saved');
       });
+      mountTeam(root);
       const box = root.querySelector('#transfer');
       if (!box) return;
       listMembers().then((members) => {

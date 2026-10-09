@@ -1,7 +1,7 @@
 // Company-scoped Firestore access. Every record lives at companies/{companyId}/{collection}/{id}.
 import { db } from './firebase.js';
 import {
-  doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch, serverTimestamp,
+  doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch, serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices'];
@@ -92,6 +92,59 @@ export async function transferOwnership(toUid) {
   b.update(doc(db, 'companies', id, 'members', me), { role: 'admin' });
   await b.commit();
   state.role = 'admin';
+}
+
+// ---------- Team: invites and members ----------
+const INVITE_DAYS = 7;
+
+function randomId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  return Array.from(bytes, (b) => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
+}
+
+export const inviteLink = (inviteId) => `${location.origin}${location.pathname}#/join/${state.companyId}/${inviteId}`;
+
+// Creates a single-use invite link for a role. The random id is the secret in the link.
+export async function createInvite(role, label) {
+  const id = randomId();
+  await setDoc(doc(db, 'companies', state.companyId, 'invites', id), {
+    role, label: label || '', companyName: state.company?.name || '',
+    createdBy: state.user.uid, createdAt: serverTimestamp(),
+    expiresAt: Timestamp.fromMillis(Date.now() + INVITE_DAYS * 864e5),
+  });
+  return id;
+}
+
+export async function listInvites() {
+  const snap = await getDocs(collection(db, 'companies', state.companyId, 'invites'));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+export const revokeInvite = (id) => deleteDoc(doc(db, 'companies', state.companyId, 'invites', id));
+export const setMemberRole = (uid, role) => updateDoc(doc(db, 'companies', state.companyId, 'members', uid), { role });
+export const removeMember = (uid) => deleteDoc(doc(db, 'companies', state.companyId, 'members', uid));
+
+// Reads an invite before joining. Returns null if it's used up, revoked or expired.
+export async function readInvite(companyId, inviteId) {
+  const snap = await getDoc(doc(db, 'companies', companyId, 'invites', inviteId)).catch(() => null);
+  if (!snap || !snap.exists()) return null;
+  const inv = snap.data();
+  return inv.expiresAt?.toMillis() > Date.now() ? inv : null;
+}
+
+// Joins a company with an invite: adds the member record and uses up the invite in one batch.
+export async function joinCompany(companyId, inviteId) {
+  const user = state.user;
+  const inv = await readInvite(companyId, inviteId);
+  if (!inv) throw new Error('This invite link has expired or was already used. Ask for a new one.');
+  const b = writeBatch(db);
+  b.set(doc(db, 'companies', companyId, 'members', user.uid), {
+    role: inv.role, inviteId, name: user.displayName || '', email: user.email || '', phone: user.phoneNumber || '', addedAt: serverTimestamp(),
+  });
+  b.delete(doc(db, 'companies', companyId, 'invites', inviteId));
+  await b.commit();
+  await setDoc(doc(db, 'users', user.uid), { companyId }, { merge: true });
+  return loadCompany(user);
 }
 
 export const get = (c, id) => state.data[c].find((r) => r.id === id);

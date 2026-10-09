@@ -8,7 +8,7 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 - **Change orders:** add or deduct scope; approved ones update the contract sum.
 - **Pay apps:** G703 continuation sheet (previous, this period, stored, %, balance, retainage) and G702 summary, printable with a notary block.
 - **Invoices:** simple invoices or one click from a pay app; paid and unpaid tracking.
-- **Roles:** owner, admin, staff, and accountant (reads everything, handles pay apps and invoices).
+- **Team:** invite links for admin, staff or the accountant (reads everything, handles pay apps and invoices); change roles, remove people, transfer ownership.
 
 ## Layout
 

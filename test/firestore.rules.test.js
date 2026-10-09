@@ -4,7 +4,7 @@ const path = require('path');
 const {
   initializeTestEnvironment, assertSucceeds, assertFails,
 } = require('@firebase/rules-unit-testing');
-const { doc, getDoc, setDoc, updateDoc, deleteDoc, writeBatch } = require('firebase/firestore');
+const { doc, getDoc, getDocs, collection, setDoc, updateDoc, deleteDoc, writeBatch, Timestamp } = require('firebase/firestore');
 
 let env;
 const db = (uid) => env.authenticatedContext(uid).firestore();
@@ -84,6 +84,38 @@ describe('Firestore rules', function () {
 
   it('lets the owner invite an accountant', async () => {
     await assertSucceeds(setDoc(doc(db('wes'), 'companies/stellar/members/newcpa'), { role: 'accountant' }));
+  });
+
+  it('lets people join by a single-use invite link', async () => {
+    const later = Timestamp.fromMillis(Date.now() + 7 * 864e5);
+    const join = (uid, inviteId, role = 'accountant') => {
+      const f = db(uid);
+      const b = writeBatch(f);
+      b.set(doc(f, `companies/stellar/members/${uid}`), { role, inviteId });
+      b.delete(doc(f, `companies/stellar/invites/${inviteId}`));
+      return b.commit();
+    };
+    // Only owners/admins create invites; only the owner invites an admin; staff can't.
+    await assertFails(setDoc(doc(db('crew'), 'companies/stellar/invites/x'), { role: 'staff', expiresAt: later }));
+    await assertFails(setDoc(doc(db('admin1'), 'companies/stellar/invites/x'), { role: 'admin', expiresAt: later }));
+    await assertFails(setDoc(doc(db('wes'), 'companies/stellar/invites/x'), { role: 'owner', expiresAt: later }));
+    await assertSucceeds(setDoc(doc(db('wes'), 'companies/stellar/invites/abc'), { role: 'accountant', expiresAt: later }));
+    // Can read the one invite with its id, but not list them.
+    await assertSucceeds(getDoc(doc(db('newcpa'), 'companies/stellar/invites/abc')));
+    await assertFails(getDocs(collection(db('newcpa'), 'companies/stellar/invites')));
+    await assertSucceeds(getDocs(collection(db('wes'), 'companies/stellar/invites')));
+    // Must take the invite's role, and must use up the invite.
+    await assertFails(join('newcpa', 'abc', 'admin'));
+    await assertFails(setDoc(doc(db('newcpa'), 'companies/stellar/members/newcpa'), { role: 'accountant', inviteId: 'abc' }));
+    await assertSucceeds(join('newcpa', 'abc'));
+    await assertSucceeds(getDoc(doc(db('newcpa'), 'companies/stellar/jobs/j1')));
+    // The link doesn't work twice.
+    await assertFails(join('another', 'abc'));
+    // Expired invites don't work.
+    await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'companies/stellar/invites/old'), { role: 'staff', expiresAt: Timestamp.fromMillis(Date.now() - 1000) }));
+    await assertFails(join('late', 'old', 'staff'));
+    // Staff can't sneak invites in through the generic record rules.
+    await assertFails(setDoc(doc(db('crew'), 'companies/stellar/invites/y/x/z'), { role: 'admin' }));
   });
 
   it('lets a new user create their own company in one batch', async () => {
