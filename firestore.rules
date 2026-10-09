@@ -1,0 +1,110 @@
+rules_version = '2';
+
+// Stellar Glass job tracker.
+//
+// Data model: every business record lives under its company.
+//   companies/{companyId}                      company profile (ownerUid, name)
+//   companies/{companyId}/members/{uid}        who can use this company's data, and their role
+//   companies/{companyId}/{collection}/{docId} customers, jobs, estimates, contracts,
+//                                              changeOrders, payApps, invoices
+//   users/{uid}                                a signed-in user's own profile
+//
+// Roles: owner > admin > staff > accountant (read-only).
+// Anything not matched below is denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function memberPath(companyId) {
+      return /databases/$(database)/documents/companies/$(companyId)/members/$(request.auth.uid);
+    }
+
+    function isMember(companyId) {
+      return signedIn() && exists(memberPath(companyId));
+    }
+
+    function role(companyId) {
+      return get(memberPath(companyId)).data.role;
+    }
+
+    function hasRole(companyId, roles) {
+      return isMember(companyId) && role(companyId) in roles;
+    }
+
+    function canEdit(companyId) {
+      return hasRole(companyId, ['owner', 'admin', 'staff']);
+    }
+
+    function canManage(companyId) {
+      return hasRole(companyId, ['owner', 'admin']);
+    }
+
+    function unchanged(field) {
+      return request.resource.data[field] == resource.data[field];
+    }
+
+    // A user's own profile. Nobody else can read or write it.
+    match /users/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /companies/{companyId} {
+      allow read: if isMember(companyId);
+
+      // Any signed-in user can start a company, as its owner.
+      // The owner's member doc must be written in the same batch (see members below).
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && existsAfter(memberPath(companyId));
+
+      allow update: if hasRole(companyId, ['owner']) && unchanged('ownerUid');
+      allow delete: if false;
+
+      match /members/{uid} {
+        allow read: if isMember(companyId);
+
+        // The company's creator adds themselves as owner, in the same batch as the company.
+        allow create: if signedIn()
+          && uid == request.auth.uid
+          && request.resource.data.role == 'owner'
+          && !exists(/databases/$(database)/documents/companies/$(companyId))
+          && getAfter(/databases/$(database)/documents/companies/$(companyId)).data.ownerUid == request.auth.uid;
+
+        // Owners and admins add teammates. Only the owner can make an admin; nobody adds a second owner.
+        allow create: if canManage(companyId)
+          && request.resource.data.role in ['admin', 'staff', 'accountant']
+          && (request.resource.data.role != 'admin' || role(companyId) == 'owner');
+
+        // Changing someone's role: never your own, never the owner's, and never to owner.
+        allow update: if canManage(companyId)
+          && uid != request.auth.uid
+          && resource.data.role != 'owner'
+          && request.resource.data.role in ['admin', 'staff', 'accountant']
+          && ((resource.data.role != 'admin' && request.resource.data.role != 'admin')
+              || role(companyId) == 'owner');
+
+        // Removing someone: the owner can't be removed. Anyone except the owner can leave.
+        allow delete: if resource.data.role != 'owner'
+          && (uid == request.auth.uid
+              || (canManage(companyId) && (resource.data.role != 'admin' || role(companyId) == 'owner')));
+      }
+
+      match /{collection}/{docId} {
+        allow read: if collection != 'members' && isMember(companyId);
+        allow create, update: if collection != 'members' && canEdit(companyId);
+        allow delete: if collection != 'members' && canManage(companyId);
+      }
+
+      // Line items, attachments metadata and other nested records under a company record.
+      match /{collection}/{docId}/{subcollection}/{rest=**} {
+        allow read: if collection != 'members' && isMember(companyId);
+        allow write: if collection != 'members' && canEdit(companyId);
+      }
+    }
+  }
+}

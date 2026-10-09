@@ -1,0 +1,31 @@
+rules_version = '2';
+
+// Job photos, plans and signed PDFs, stored per company:
+//   companies/{companyId}/{anything}
+// Only members of that company can read; owners, admins and staff can upload.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function memberDoc(companyId) {
+      return /databases/(default)/documents/companies/$(companyId)/members/$(request.auth.uid);
+    }
+
+    function isMember(companyId) {
+      return request.auth != null && firestore.exists(memberDoc(companyId));
+    }
+
+    function canEdit(companyId) {
+      return isMember(companyId)
+        && firestore.get(memberDoc(companyId)).data.role in ['owner', 'admin', 'staff'];
+    }
+
+    match /companies/{companyId}/{allPaths=**} {
+      allow read: if isMember(companyId);
+      // 20 MB cap per file; images and PDFs only.
+      allow write: if canEdit(companyId)
+        && request.resource.size < 20 * 1024 * 1024
+        && (request.resource.contentType.matches('image/.*')
+            || request.resource.contentType == 'application/pdf');
+      allow delete: if canEdit(companyId);
+    }
+  }
+}
