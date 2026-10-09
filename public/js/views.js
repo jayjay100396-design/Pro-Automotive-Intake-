@@ -7,6 +7,7 @@ import {
   proposalOptions, estimateAmount,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
+import { fileBrowser, countJobFiles } from './files.js';
 
 const go = (hash) => { location.hash = hash; };
 const D = () => state.data;
@@ -128,16 +129,30 @@ export function jobs() {
   };
 }
 
+// The job's tabs: details and paperwork, and its files.
+const jobTabs = (id, tab) => `<nav class="tabs" aria-label="Job sections">
+  <a href="#/jobs/${esc(id)}" class="${tab === 'files' ? '' : 'on'}">Details</a>
+  <a href="#/jobs/${esc(id)}?tab=files" class="${tab === 'files' ? 'on' : ''}">Files <span data-file-count></span></a></nav>`;
+
 export function jobEdit(id, params) {
   const isNew = id === 'new';
   const j = isNew ? { status: 'lead', type: 'storefront', customerId: params.get('customer') || '' } : get('jobs', id);
   if (!j) return { waiting: true, html: '<p class="muted">Loading…</p>' };
+  if (!isNew && params.get('tab') === 'files') {
+    const files = fileBrowser({ jobId: id });
+    return {
+      html: `${header(esc(j.name), `<span class="muted">${esc(customerName(j.customerId))}</span>`)}${jobTabs(id, 'files')}${files.html}`,
+      mount: files.mount,
+      unmount: files.unmount,
+    };
+  }
   const related = (c) => (isNew ? [] : where(c, 'jobId', id).sort(sortNum));
   const ests = related('estimates'); const cons = related('contracts'); const pays = related('payApps'); const invs = related('invoices');
   const custOpts = options([['', 'Choose a customer…'], ['__new', '+ Add a new customer'], ...D().customers.map((c) => [c.id, c.name + (c.company ? ` (${c.company})` : '')])], j.customerId);
 
   return {
     html: `${header(isNew ? 'New job' : esc(j.name), !isNew && can.remove() ? '<button class="btn danger" id="del">Delete</button>' : '')}
+    ${isNew ? '' : jobTabs(id, 'details')}
     <form class="card grid2" id="f">
       <label>Job name <input name="name" value="${esc(j.name)}" placeholder="e.g. Publix #1432 storefront" required></label>
       <label>Customer <select name="customerId" id="cust">${custOpts}</select></label>
@@ -165,6 +180,7 @@ export function jobEdit(id, params) {
         ${invs.length ? `<ul class="links">${invs.map((i) => `<li><a href="#/invoices/${esc(i.id)}">Invoice ${esc(i.number)}</a> ${badge(i.status)} <span class="num">${money(invoiceTotals(i).total)}</span></li>`).join('')}</ul>` : '<p class="muted">None yet.</p>'}</div>
     </div>`}`,
     mount(root) {
+      if (!isNew) countJobFiles(id).then((n) => { const c = root.querySelector('[data-file-count]'); if (c && n) c.textContent = `(${n})`; }).catch(() => {});
       const cust = root.querySelector('#cust');
       cust.addEventListener('change', () => root.querySelector('#newcust').classList.toggle('hidden', cust.value !== '__new'));
       root.querySelector('#f').addEventListener('submit', async (e) => {
@@ -186,6 +202,12 @@ export function jobEdit(id, params) {
       });
     },
   };
+}
+
+// ---------- Files across all jobs ----------
+export function filesPage(params) {
+  const files = fileBrowser({ jobId: null, startJob: params.get('job') || '' });
+  return { html: `${header('Files')}${files.html}`, mount: files.mount, unmount: files.unmount };
 }
 
 // ---------- Estimates ----------

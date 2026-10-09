@@ -1,9 +1,12 @@
 rules_version = '2';
 
-// Job photos, plans and signed PDFs, stored per company:
-//   companies/{companyId}/{anything}
-// Only members of that company can read; owners, admins and staff can upload anywhere.
-// The accountant can upload (not delete) under documents/ and forms/, e.g. notarized papers.
+// Job files: photos, plans, contracts, permits and forms, stored per company and job:
+//   companies/{companyId}/{folder}/{jobId}/{fileId}/{file name}
+//   folder is photos, plans, documents, forms or other; each file's record is in Firestore at
+//   companies/{companyId}/files/{fileId}.
+// Only members of that company can read. Owners, admins and staff can upload anywhere.
+// The accountant can upload (not replace or delete) under documents/ and forms/, e.g. notarized papers.
+// Owners and admins can delete any file; staff can delete or replace only what they uploaded.
 service firebase.storage {
   match /b/{bucket}/o {
     function memberDoc(companyId) {
@@ -14,32 +17,55 @@ service firebase.storage {
       return request.auth != null && firestore.exists(memberDoc(companyId));
     }
 
-    function canEdit(companyId) {
-      return isMember(companyId)
-        && firestore.get(memberDoc(companyId)).data.role in ['owner', 'admin', 'staff'];
+    function role(companyId) {
+      return firestore.get(memberDoc(companyId)).data.role;
     }
 
-    function isAllowedFile() {
-      // 20 MB cap per file; images and PDFs only.
-      return request.resource.size < 20 * 1024 * 1024
-        && (request.resource.contentType.matches('image/.*')
-            || request.resource.contentType == 'application/pdf');
+    function canEdit(companyId) {
+      return isMember(companyId) && role(companyId) in ['owner', 'admin', 'staff'];
+    }
+
+    function canManage(companyId) {
+      return isMember(companyId) && role(companyId) in ['owner', 'admin'];
     }
 
     function isAccountant(companyId) {
-      return isMember(companyId)
-        && firestore.get(memberDoc(companyId)).data.role == 'accountant';
+      return isMember(companyId) && role(companyId) == 'accountant';
+    }
+
+    // Photos, PDFs, Office files, text and saved emails up to 25 MB; videos up to 100 MB.
+    function isAllowedFile() {
+      let type = request.resource.contentType;
+      let mb = 1024 * 1024;
+      return (request.resource.size < 25 * mb
+          && (type.matches('image/.*')
+            || type == 'application/pdf'
+            || type.matches('text/(plain|csv)')
+            || type == 'message/rfc822'
+            || type.matches('application/(msword|vnd[.]ms-excel|vnd[.]ms-powerpoint|vnd[.]openxmlformats-officedocument[.].+)')))
+        || (request.resource.size < 100 * mb && type.matches('video/.*'));
+    }
+
+    // Who uploaded a file, from the custom metadata the app sets on upload.
+    function uploadedByMe() {
+      return resource.metadata != null && resource.metadata.uploadedBy == request.auth.uid;
+    }
+
+    // Only the person who uploaded a file, or an owner or admin, can write over it.
+    // (Checked on create too, since the emulator reports replacing a file as a create.)
+    function mayReplace(companyId) {
+      return resource == null || canManage(companyId) || uploadedByMe();
     }
 
     match /companies/{companyId}/{folder}/{allPaths=**} {
-      allow create, update: if folder in ['documents', 'forms']
-        && isAccountant(companyId) && isAllowedFile();
+      allow create: if folder in ['documents', 'forms']
+        && isAccountant(companyId) && isAllowedFile() && resource == null;
     }
 
     match /companies/{companyId}/{allPaths=**} {
       allow read: if isMember(companyId);
-      allow create, update: if canEdit(companyId) && isAllowedFile();
-      allow delete: if canEdit(companyId);
+      allow create, update: if canEdit(companyId) && isAllowedFile() && mayReplace(companyId);
+      allow delete: if canManage(companyId) || (canEdit(companyId) && uploadedByMe());
     }
   }
 }

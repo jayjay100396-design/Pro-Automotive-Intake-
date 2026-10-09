@@ -4,13 +4,14 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import { getAuth, connectAuthEmulator } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, connectFirestoreEmulator } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import { getStorage, connectStorageEmulator } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js';
 
 const local = ['localhost', '127.0.0.1'].includes(location.hostname);
 export const useEmulators = local && !new URLSearchParams(location.search).has('live');
 
 async function loadConfig() {
   if (useEmulators) {
-    return { apiKey: 'demo-key', authDomain: 'demo-stellar-glass.firebaseapp.com', projectId: 'demo-stellar-glass', appId: 'demo-app' };
+    return { apiKey: 'demo-key', authDomain: 'demo-stellar-glass.firebaseapp.com', projectId: 'demo-stellar-glass', appId: 'demo-app', storageBucket: 'demo-stellar-glass.appspot.com' };
   }
   const res = await fetch('/__/firebase/init.json');
   if (!res.ok) throw new Error('Firebase config not found. Deploy with Firebase Hosting, or run locally with npm run dev.');
@@ -23,8 +24,10 @@ async function loadConfig() {
 export const app = initializeApp(await loadConfig());
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+export const storage = getStorage(app);
 
 if (useEmulators) {
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
   connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  connectStorageEmulator(storage, '127.0.0.1', 9199);
 }

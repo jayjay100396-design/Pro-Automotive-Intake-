@@ -76,12 +76,21 @@ const ref = (c, id) => doc(db, 'companies', state.companyId, c, id);
 export const add = (c, data) => addDoc(col(c), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
 export const update = (c, id, data) => updateDoc(ref(c, id), { ...data, updatedAt: serverTimestamp() });
 export const remove = (c, id) => deleteDoc(ref(c, id));
+// For records whose id is needed before they're written, e.g. a file's storage path.
+export const newId = (c) => doc(col(c)).id;
+export const put = (c, id, data) => setDoc(ref(c, id), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
 export const updateCompany = (data) => updateDoc(doc(db, 'companies', state.companyId), data);
 
 // Remembers who prepares proposals, so the next one is pre-filled. Private to this user.
 export function savePreparedBy(preparedBy) {
   state.profile = { ...state.profile, preparedBy };
   return setDoc(doc(db, 'users', state.user.uid), { preparedBy }, { merge: true }).catch((e) => console.warn(e));
+}
+
+// Saves a setting on the user's own profile, e.g. whether new uploads also go to Google Drive.
+export function saveProfile(fields) {
+  state.profile = { ...state.profile, ...fields };
+  return setDoc(doc(db, 'users', state.user.uid), fields, { merge: true }).catch((e) => console.warn(e));
 }
 
 export async function listMembers() {

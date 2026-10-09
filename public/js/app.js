@@ -16,6 +16,7 @@ const routes = [
   [/^customers\/([^/]+)$/, (m, q) => V.customerEdit(m[1], q)],
   [/^jobs$/, () => V.jobs()],
   [/^jobs\/([^/]+)$/, (m, q) => V.jobEdit(m[1], q)],
+  [/^files$/, (m, q) => V.filesPage(q)],
   [/^estimates$/, () => V.estimates()],
   [/^estimates\/([^/]+)\/print$/, (m) => P.estimateDoc(m[1])],
   [/^estimates\/([^/]+)$/, (m, q) => V.estimateEdit(m[1], q)],
@@ -32,9 +33,14 @@ const routes = [
   [/^settings$/, () => V.settings()],
 ];
 
-const NAV = [['', 'Dashboard'], ['jobs', 'Jobs'], ['customers', 'Customers'], ['estimates', 'Estimates'], ['contracts', 'Contracts'], ['payapps', 'Pay apps'], ['invoices', 'Invoices'], ['settings', 'Settings']];
+const NAV = [['', 'Dashboard'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates'], ['contracts', 'Contracts'], ['payapps', 'Pay apps'], ['invoices', 'Invoices'], ['settings', 'Settings']];
 
 let current = null;
+// Views with their own listeners (the file browser) clean up when you leave them.
+function setCurrent(view) {
+  current?.unmount?.();
+  current = view;
+}
 
 function shell() {
   const u = state.user;
@@ -56,7 +62,7 @@ function route() {
   const params = new URLSearchParams(qs || '');
   const match = routes.find(([re]) => re.test(path));
   const view = match ? match[1](path.match(match[0]), params) : { html: '<p>Page not found. <a href="#/">Go to the dashboard</a>.</p>' };
-  current = view;
+  setCurrent(view);
   const el = document.getElementById('view');
   el.innerHTML = view.html;
   el.classList.toggle('print-view', !!view.title);
@@ -139,7 +145,7 @@ async function showJoin(user) {
     toast('That invite link has expired or was already used. Ask for a new one.', true);
     return false;
   }
-  current = null;
+  setCurrent(null);
   root.innerHTML = `
   <div class="auth-wrap"><div class="card auth-card stack">
     <div class="auth-logo">${logoHtml()}</div>
@@ -172,8 +178,8 @@ function start() {
 }
 
 onAuthStateChanged(auth, async (user) => {
+  setCurrent(null);
   stopWatching();
-  current = null;
   if (!user) {
     state.user = null;
     renderSignIn(root);

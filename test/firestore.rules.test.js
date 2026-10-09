@@ -173,6 +173,35 @@ describe('Firestore rules', function () {
     await assertSucceeds(transfer(db('cpa'), 'cpa', 'wes'));
   });
 
+  it('handles job file records by role', async () => {
+    const file = (by, category = 'photos') => ({ jobId: 'j1', category, name: 'a.jpg', path: 'p', createdBy: by });
+    // Staff add files and can delete only their own; admins delete any.
+    await assertSucceeds(setDoc(doc(db('crew'), 'companies/stellar/files/f1'), file('crew')));
+    await assertSucceeds(setDoc(doc(db('wes'), 'companies/stellar/files/f2'), file('wes')));
+    await assertFails(deleteDoc(doc(db('crew'), 'companies/stellar/files/f2')));
+    await assertSucceeds(deleteDoc(doc(db('crew'), 'companies/stellar/files/f1')));
+    await assertSucceeds(deleteDoc(doc(db('admin1'), 'companies/stellar/files/f2')));
+    // The accountant adds contracts, documents, permits and forms, as themself, and fixes up their own.
+    const f = db('cpa');
+    await assertSucceeds(setDoc(doc(f, 'companies/stellar/files/c1'), file('cpa', 'forms')));
+    await assertSucceeds(setDoc(doc(f, 'companies/stellar/files/c2'), file('cpa', 'documents')));
+    await assertFails(setDoc(doc(f, 'companies/stellar/files/c3'), file('cpa', 'photos')));
+    await assertFails(setDoc(doc(f, 'companies/stellar/files/c4'), file('crew', 'forms')));
+    await assertSucceeds(updateDoc(doc(f, 'companies/stellar/files/c1'), { name: 'Notarized lien waiver.pdf', category: 'documents', note: 'Signed' }));
+    await assertFails(updateDoc(doc(f, 'companies/stellar/files/c1'), { category: 'photos' }));
+    await assertFails(updateDoc(doc(f, 'companies/stellar/files/c1'), { jobId: 'j9' }));
+    await assertFails(deleteDoc(doc(f, 'companies/stellar/files/c1')));
+    await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'companies/stellar/files/w1'), file('wes')));
+    await assertFails(updateDoc(doc(f, 'companies/stellar/files/w1'), { name: 'x' }));
+    // Anyone on the team can note their own Google Drive copy, and only their own.
+    await assertSucceeds(updateDoc(doc(f, 'companies/stellar/files/w1'), { 'drive.cpa': { id: 'd1' } }));
+    await assertFails(updateDoc(doc(f, 'companies/stellar/files/w1'), { 'drive.wes': { id: 'd2' } }));
+    await assertFails(updateDoc(doc(f, 'companies/stellar/files/w1'), { 'drive.cpa': { id: 'd3' }, name: 'x' }));
+    // Other businesses can't see them.
+    await assertFails(getDoc(doc(db('bob'), 'companies/stellar/files/w1')));
+    await assertFails(updateDoc(doc(db('bob'), 'companies/stellar/files/w1'), { 'drive.bob': { id: 'd4' } }));
+  });
+
   it('keeps user profiles private', async () => {
     await assertSucceeds(setDoc(doc(db('wes'), 'users/wes'), { name: 'Wes' }));
     await assertFails(getDoc(doc(db('crew'), 'users/wes')));

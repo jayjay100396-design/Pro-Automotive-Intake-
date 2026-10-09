@@ -6,7 +6,7 @@ rules_version = '2';
 //   companies/{companyId}                      company profile (ownerUid, name)
 //   companies/{companyId}/members/{uid}        who can use this company's data, and their role
 //   companies/{companyId}/{collection}/{docId} customers, jobs, estimates, contracts,
-//                                              changeOrders, payApps, invoices
+//                                              changeOrders, payApps, invoices, files
 //   users/{uid}                                a signed-in user's own profile
 //
 // Roles: owner > admin > staff, plus accountant.
@@ -164,6 +164,25 @@ service cloud.firestore {
         // Revoked by an owner/admin, or used up by the person joining with it.
         allow delete: if canManage(companyId)
           || (signedIn() && getAfter(memberPath(companyId)).data.inviteId == inviteId);
+      }
+
+      // Job files (photos, plans, documents): the file is in Cloud Storage, this is its record.
+      // Editors work with files through the general rules below. On top of those:
+      // the accountant can add contracts and documents, and permits and forms, and fix up their own;
+      // any member can note that they copied a file to their own Google Drive;
+      // staff can delete files they uploaded (owners and admins can delete any).
+      match /files/{fileId} {
+        allow create: if hasRole(companyId, ['accountant'])
+          && request.resource.data.category in ['documents', 'forms']
+          && request.resource.data.createdBy == request.auth.uid;
+        allow update: if hasRole(companyId, ['accountant'])
+          && resource.data.createdBy == request.auth.uid
+          && request.resource.data.category in ['documents', 'forms']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'category', 'note', 'updatedAt']);
+        allow update: if isMember(companyId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['drive', 'updatedAt'])
+          && request.resource.data.drive.diff(resource.data.get('drive', {})).affectedKeys().hasOnly([request.auth.uid]);
+        allow delete: if canEdit(companyId) && resource.data.createdBy == request.auth.uid;
       }
 
       match /{collection}/{docId} {
