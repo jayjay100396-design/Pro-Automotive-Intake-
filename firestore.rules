@@ -9,8 +9,10 @@ rules_version = '2';
 //                                              changeOrders, payApps, invoices
 //   users/{uid}                                a signed-in user's own profile
 //
-// Roles: owner > admin > staff > accountant.
-// The accountant reads everything and handles billing: pay apps and invoices.
+// Roles: owner > admin > staff, plus accountant.
+// The accountant reads everything and creates/edits billing records (invoices, pay apps
+// with their G702/G703 lines, billing, documents and forms), but deletes nothing and
+// can't manage members.
 // Anything not matched below is denied.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -39,10 +41,14 @@ service cloud.firestore {
       return hasRole(companyId, ['owner', 'admin', 'staff']);
     }
 
-    // Billing records the accountant can also create and edit.
-    function canBill(companyId, collection) {
+    // Collections the accountant can create and edit.
+    function isBillingCollection(collection) {
+      return collection in ['invoices', 'payApps', 'billing', 'documents', 'forms'];
+    }
+
+    function canEditCollection(companyId, collection) {
       return canEdit(companyId)
-        || (collection in ['payApps', 'invoices'] && hasRole(companyId, ['accountant']));
+        || (isBillingCollection(collection) && hasRole(companyId, ['accountant']));
     }
 
     function canManage(companyId) {
@@ -103,14 +109,15 @@ service cloud.firestore {
 
       match /{collection}/{docId} {
         allow read: if collection != 'members' && isMember(companyId);
-        allow create, update: if collection != 'members' && canBill(companyId, collection);
+        allow create, update: if collection != 'members' && canEditCollection(companyId, collection);
         allow delete: if collection != 'members' && canManage(companyId);
       }
 
-      // Line items, attachments metadata and other nested records under a company record.
+      // Line items (e.g. G703 continuation lines), attachment metadata and other nested records.
       match /{collection}/{docId}/{subcollection}/{rest=**} {
         allow read: if collection != 'members' && isMember(companyId);
-        allow write: if collection != 'members' && canBill(companyId, collection);
+        allow create, update: if collection != 'members' && canEditCollection(companyId, collection);
+        allow delete: if collection != 'members' && canEdit(companyId);
       }
     }
   }

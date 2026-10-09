@@ -54,18 +54,36 @@ describe('Firestore rules', function () {
     }
     await assertSucceeds(setDoc(doc(db('crew'), 'companies/stellar/estimates/e1'), { total: 100 }));
     await assertSucceeds(setDoc(doc(db('crew'), 'companies/stellar/estimates/e1/lines/l1'), { qty: 2 }));
-    await assertFails(setDoc(doc(db('cpa'), 'companies/stellar/estimates/e2'), { total: 5 }));
-    await assertFails(setDoc(doc(db('cpa'), 'companies/stellar/jobs/j2'), { name: 'x' }));
     await assertFails(deleteDoc(doc(db('crew'), 'companies/stellar/jobs/j1')));
     await assertSucceeds(deleteDoc(doc(db('admin1'), 'companies/stellar/jobs/j1')));
   });
 
-  it('lets the accountant handle billing but not delete it', async () => {
-    await assertSucceeds(setDoc(doc(db('cpa'), 'companies/stellar/invoices/i1'), { total: 5 }));
-    await assertSucceeds(updateDoc(doc(db('cpa'), 'companies/stellar/invoices/i1'), { status: 'paid' }));
-    await assertSucceeds(setDoc(doc(db('cpa'), 'companies/stellar/payApps/p1'), { number: 1 }));
-    await assertFails(deleteDoc(doc(db('cpa'), 'companies/stellar/invoices/i1')));
-    await assertFails(setDoc(doc(db('cpa'), 'companies/stellar/members/cpa2'), { role: 'accountant' }));
+  it('lets the accountant handle billing but nothing else', async () => {
+    const f = db('cpa');
+    for (const c of ['invoices', 'payApps', 'billing', 'documents', 'forms']) {
+      await assertSucceeds(setDoc(doc(f, `companies/stellar/${c}/x1`), { total: 5 }));
+      await assertSucceeds(updateDoc(doc(f, `companies/stellar/${c}/x1`), { total: 6 }));
+      await assertFails(deleteDoc(doc(f, `companies/stellar/${c}/x1`)));
+    }
+    // G703 continuation lines under a pay app
+    await assertSucceeds(setDoc(doc(f, 'companies/stellar/payApps/x1/lines/l1'), { pct: 50 }));
+    await assertFails(deleteDoc(doc(f, 'companies/stellar/payApps/x1/lines/l1')));
+    for (const c of ['jobs', 'contracts', 'changeOrders', 'estimates', 'customers']) {
+      await assertSucceeds(getDoc(doc(f, `companies/stellar/${c}/j1`)));
+      await assertFails(setDoc(doc(f, `companies/stellar/${c}/new`), { a: 1 }));
+    }
+    await assertFails(updateDoc(doc(f, 'companies/stellar/jobs/j1'), { name: 'x' }));
+    await assertFails(deleteDoc(doc(f, 'companies/stellar/jobs/j1')));
+    await assertFails(setDoc(doc(f, 'companies/stellar/members/someone'), { role: 'staff' }));
+    await assertFails(updateDoc(doc(f, 'companies/stellar/members/crew'), { role: 'accountant' }));
+    await assertFails(deleteDoc(doc(f, 'companies/stellar/members/crew')));
+    await assertFails(updateDoc(doc(f, 'companies/stellar/members/cpa'), { role: 'admin' }));
+    await assertFails(updateDoc(doc(f, 'companies/stellar'), { name: 'x' }));
+    await assertFails(setDoc(doc(f, 'companies/other/invoices/x'), { total: 1 }));
+  });
+
+  it('lets the owner invite an accountant', async () => {
+    await assertSucceeds(setDoc(doc(db('wes'), 'companies/stellar/members/newcpa'), { role: 'accountant' }));
   });
 
   it('lets a new user create their own company in one batch', async () => {

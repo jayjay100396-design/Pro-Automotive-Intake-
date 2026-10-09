@@ -3,9 +3,9 @@
   "private": true,
   "scripts": {
     "dev": "firebase emulators:start --only auth,firestore,hosting --project demo-stellar-glass",
-    "test": "mocha test/calc.test.mjs && firebase emulators:exec --only firestore --project demo-stellar-glass \"mocha test/firestore.rules.test.js\"",
+    "test": "firebase emulators:exec --only firestore,storage --project demo-stellar-glass \"mocha test\"",
     "test:calc": "mocha test/calc.test.mjs",
-    "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
+    "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage",
     "deploy": "firebase deploy --only firestore:rules,firestore:indexes,hosting"
   },
   "devDependencies": {
