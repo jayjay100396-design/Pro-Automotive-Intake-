@@ -2,7 +2,7 @@
   "name": "stellar-glass",
   "private": true,
   "scripts": {
-    "test": "firebase emulators:exec --only firestore --project demo-stellar-glass \"mocha test\"",
+    "test": "firebase emulators:exec --only firestore,storage --project demo-stellar-glass \"mocha test\"",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage"
   },
   "devDependencies": {

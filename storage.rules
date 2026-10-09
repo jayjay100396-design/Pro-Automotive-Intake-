@@ -2,7 +2,8 @@ rules_version = '2';
 
 // Job photos, plans and signed PDFs, stored per company:
 //   companies/{companyId}/{anything}
-// Only members of that company can read; owners, admins and staff can upload.
+// Only members of that company can read; owners, admins and staff can upload anywhere.
+// The accountant can upload (not delete) under documents/ and forms/, e.g. notarized papers.
 service firebase.storage {
   match /b/{bucket}/o {
     function memberDoc(companyId) {
@@ -18,13 +19,26 @@ service firebase.storage {
         && firestore.get(memberDoc(companyId)).data.role in ['owner', 'admin', 'staff'];
     }
 
-    match /companies/{companyId}/{allPaths=**} {
-      allow read: if isMember(companyId);
+    function isAllowedFile() {
       // 20 MB cap per file; images and PDFs only.
-      allow write: if canEdit(companyId)
-        && request.resource.size < 20 * 1024 * 1024
+      return request.resource.size < 20 * 1024 * 1024
         && (request.resource.contentType.matches('image/.*')
             || request.resource.contentType == 'application/pdf');
+    }
+
+    function isAccountant(companyId) {
+      return isMember(companyId)
+        && firestore.get(memberDoc(companyId)).data.role == 'accountant';
+    }
+
+    match /companies/{companyId}/{folder}/{allPaths=**} {
+      allow create, update: if folder in ['documents', 'forms']
+        && isAccountant(companyId) && isAllowedFile();
+    }
+
+    match /companies/{companyId}/{allPaths=**} {
+      allow read: if isMember(companyId);
+      allow create, update: if canEdit(companyId) && isAllowedFile();
       allow delete: if canEdit(companyId);
     }
   }
