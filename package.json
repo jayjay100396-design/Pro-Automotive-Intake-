@@ -2,8 +2,11 @@
   "name": "stellar-glass",
   "private": true,
   "scripts": {
-    "test": "firebase emulators:exec --only firestore --project demo-stellar-glass \"mocha test\"",
-    "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage"
+    "dev": "firebase emulators:start --only auth,firestore,hosting --project demo-stellar-glass",
+    "test": "mocha test/calc.test.mjs && firebase emulators:exec --only firestore --project demo-stellar-glass \"mocha test/firestore.rules.test.js\"",
+    "test:calc": "mocha test/calc.test.mjs",
+    "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
+    "deploy": "firebase deploy --only firestore:rules,firestore:indexes,hosting"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.2",

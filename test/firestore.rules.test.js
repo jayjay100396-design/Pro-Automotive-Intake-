@@ -54,9 +54,18 @@ describe('Firestore rules', function () {
     }
     await assertSucceeds(setDoc(doc(db('crew'), 'companies/stellar/estimates/e1'), { total: 100 }));
     await assertSucceeds(setDoc(doc(db('crew'), 'companies/stellar/estimates/e1/lines/l1'), { qty: 2 }));
-    await assertFails(setDoc(doc(db('cpa'), 'companies/stellar/invoices/i1'), { total: 5 }));
+    await assertFails(setDoc(doc(db('cpa'), 'companies/stellar/estimates/e2'), { total: 5 }));
+    await assertFails(setDoc(doc(db('cpa'), 'companies/stellar/jobs/j2'), { name: 'x' }));
     await assertFails(deleteDoc(doc(db('crew'), 'companies/stellar/jobs/j1')));
     await assertSucceeds(deleteDoc(doc(db('admin1'), 'companies/stellar/jobs/j1')));
+  });
+
+  it('lets the accountant handle billing but not delete it', async () => {
+    await assertSucceeds(setDoc(doc(db('cpa'), 'companies/stellar/invoices/i1'), { total: 5 }));
+    await assertSucceeds(updateDoc(doc(db('cpa'), 'companies/stellar/invoices/i1'), { status: 'paid' }));
+    await assertSucceeds(setDoc(doc(db('cpa'), 'companies/stellar/payApps/p1'), { number: 1 }));
+    await assertFails(deleteDoc(doc(db('cpa'), 'companies/stellar/invoices/i1')));
+    await assertFails(setDoc(doc(db('cpa'), 'companies/stellar/members/cpa2'), { role: 'accountant' }));
   });
 
   it('lets a new user create their own company in one batch', async () => {

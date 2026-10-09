@@ -9,7 +9,8 @@ rules_version = '2';
 //                                              changeOrders, payApps, invoices
 //   users/{uid}                                a signed-in user's own profile
 //
-// Roles: owner > admin > staff > accountant (read-only).
+// Roles: owner > admin > staff > accountant.
+// The accountant reads everything and handles billing: pay apps and invoices.
 // Anything not matched below is denied.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -36,6 +37,12 @@ service cloud.firestore {
 
     function canEdit(companyId) {
       return hasRole(companyId, ['owner', 'admin', 'staff']);
+    }
+
+    // Billing records the accountant can also create and edit.
+    function canBill(companyId, collection) {
+      return canEdit(companyId)
+        || (collection in ['payApps', 'invoices'] && hasRole(companyId, ['accountant']));
     }
 
     function canManage(companyId) {
@@ -96,14 +103,14 @@ service cloud.firestore {
 
       match /{collection}/{docId} {
         allow read: if collection != 'members' && isMember(companyId);
-        allow create, update: if collection != 'members' && canEdit(companyId);
+        allow create, update: if collection != 'members' && canBill(companyId, collection);
         allow delete: if collection != 'members' && canManage(companyId);
       }
 
       // Line items, attachments metadata and other nested records under a company record.
       match /{collection}/{docId}/{subcollection}/{rest=**} {
         allow read: if collection != 'members' && isMember(companyId);
-        allow write: if collection != 'members' && canEdit(companyId);
+        allow write: if collection != 'members' && canBill(companyId, collection);
       }
     }
   }
