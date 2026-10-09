@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { sqft, lineTotal, estimateTotals, invoiceTotals, contractSum, g702, nextPayAppLines } from '../public/js/calc.js';
+import { sqft, lineTotal, estimateTotals, proposalOptions, estimateAmount, invoiceTotals, contractSum, g702, nextPayAppLines } from '../public/js/calc.js';
 
 describe('money math', () => {
   it('bills glass by square foot with a per-lite minimum', () => {
@@ -19,6 +19,15 @@ describe('money math', () => {
     const small = estimateTotals({ minCharge: 250, taxPct: 0, lines: [{ unit: 'each', qty: 1, price: 80 }] });
     assert.equal(small.minApplied, true);
     assert.equal(small.total, 250);
+  });
+
+  it('prices proposal options from lines or as lump sums', () => {
+    const lines = [{ unit: 'each', qty: 1, price: 1000 }];
+    assert.deepEqual(proposalOptions({ lines }).map((o) => o.price), [1000]);
+    const est = { lines, taxPct: 0, options: [{ fromLines: true }, { name: 'Akela', price: 1234.5 }] };
+    assert.deepEqual(proposalOptions(est).map((o) => [o.number, o.price]), [[1, 1000], [2, 1234.5]]);
+    assert.equal(estimateAmount(est), 1000);
+    assert.equal(estimateAmount({ ...est, acceptedOption: 1 }), 1234.5);
   });
 
   it('totals invoices', () => {

@@ -8,6 +8,7 @@ export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'chan
 
 export const state = {
   user: null,
+  profile: {},
   companyId: null,
   company: null,
   role: null,
@@ -24,7 +25,8 @@ let unsubs = [];
 export async function loadCompany(user) {
   state.user = user;
   const profile = await getDoc(doc(db, 'users', user.uid));
-  const companyId = profile.exists() ? profile.data().companyId : null;
+  state.profile = profile.exists() ? profile.data() : {};
+  const companyId = state.profile.companyId || null;
   if (!companyId) return null;
   const member = await getDoc(doc(db, 'companies', companyId, 'members', user.uid)).catch(() => null);
   if (!member || !member.exists()) return null;
@@ -75,6 +77,12 @@ export const add = (c, data) => addDoc(col(c), { ...data, createdAt: serverTimes
 export const update = (c, id, data) => updateDoc(ref(c, id), { ...data, updatedAt: serverTimestamp() });
 export const remove = (c, id) => deleteDoc(ref(c, id));
 export const updateCompany = (data) => updateDoc(doc(db, 'companies', state.companyId), data);
+
+// Remembers who prepares proposals, so the next one is pre-filled. Private to this user.
+export function savePreparedBy(preparedBy) {
+  state.profile = { ...state.profile, preparedBy };
+  return setDoc(doc(db, 'users', state.user.uid), { preparedBy }, { merge: true }).catch((e) => console.warn(e));
+}
 
 export async function listMembers() {
   const snap = await getDocs(collection(db, 'companies', state.companyId, 'members'));

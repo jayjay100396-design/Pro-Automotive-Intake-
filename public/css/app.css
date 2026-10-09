@@ -10,6 +10,9 @@
   }
 }
 * { box-sizing: border-box; }
+/* Live totals are re-rendered as you type; without this, Chrome's scroll anchoring can jump the page
+   between mousedown and mouseup, so a click on Save right after editing a field never lands. */
+html { overflow-anchor: none; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -72,6 +75,10 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
 .grow { flex: 1; min-width: 200px; }
 .bare { padding: 0; }
 .hint { color: var(--muted); font-size: .82rem; margin: .5rem 0; }
+label.inline { flex-direction: row; align-items: center; gap: .4rem; color: var(--text); }
+label.inline > span { display: flex; align-items: center; gap: .4rem; }
+.opt { border: 1px solid var(--border); border-radius: 8px; padding: .75rem; background: color-mix(in srgb, var(--accent) 3%, var(--surface)); }
+.opt .grid4 { margin-top: .5rem; }
 .scroll { overflow-x: auto; }
 
 /* Tiles */
@@ -159,6 +166,34 @@ main.print-view, #view.print-view { max-width: 11in; }
 .paid-stamp { color: #1e8449; border: 2px solid; display: inline-block; padding: .1rem .5rem; font-weight: 800; margin-top: .3rem; }
 .page-break { height: 2rem; }
 
+/* Proposal (matches Stellar Glass's own proposal layout) */
+.doc.proposal { page: proposal; padding: 0 0 .4in; font-size: 13.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; overflow: hidden; }
+.doc.proposal > :not(.prop-band):not(.prop-foot):not(.prop-terms) { margin-left: .6in; margin-right: .6in; }
+.prop-band { display: flex; justify-content: space-between; align-items: flex-start; padding: .3in .6in .2in; background: linear-gradient(180deg, #c5d7ee 0%, #e7eef8 55%, #fff 100%); border-top: 4px solid #123764; }
+.prop-logo { height: 70px; width: auto; display: block; }
+.prop-title { text-align: right; color: #123764; }
+.prop-title h1 { font-size: 2rem; letter-spacing: .02em; color: #123764; margin: 0; }
+.prop-meta { display: flex; justify-content: space-between; gap: 1rem; margin-top: .12in; line-height: 1.45; }
+.prop-date { text-align: right; white-space: nowrap; }
+.doc.proposal .label { display: inline-block; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: #4a5a6e; font-weight: 700; min-width: 4.2em; margin: 0; }
+.prop-to { margin-top: .14in; line-height: 1.55; }
+.prop-project { margin-top: .1in; font-weight: 600; }
+.prop-intro { font-weight: 700; margin: .16in 0 .06in; }
+.prop-scope { font-weight: 700; padding-left: .25in; margin: 0; }
+.prop-option { margin-top: .15in; break-inside: avoid; }
+.prop-opt-name { font-weight: 700; text-decoration: underline; }
+.prop-price { font-weight: 800; text-decoration: underline; font-size: 1.05rem; margin-bottom: .06in; }
+.prop-specs { font-weight: 700; line-height: 1.5; }
+.prop-specs .indent { padding-left: .4in; }
+.prop-note { margin: .16in 0 0; font-size: .92rem; }
+.prop-excl { margin: .06in 0 0; }
+.doc.proposal .prop-terms { margin: .15in 0 0; padding: .1in .6in; margin-left: 0; margin-right: 0; background: linear-gradient(180deg, #fff 0%, #e7eef8 60%, #c5d7ee 100%); border-bottom: 2px solid #0071bc; font-weight: 600; }
+.prop-sign { display: grid; grid-template-columns: 1fr 1fr; gap: .5in; margin-top: .2in; line-height: 1.45; break-inside: avoid; }
+.sig-line { border-bottom: 1px solid #222; height: .4in; margin-bottom: .06in; }
+.sig-row { display: flex; gap: .5rem; align-items: flex-end; margin-top: .1in; }
+.sig-row .blank { flex: 1; border-bottom: 1px solid #888; height: 1.1em; }
+.prop-foot { text-align: center; font-size: .85rem; color: #4a5a6e; margin-top: .15in; break-before: avoid; letter-spacing: .03em; }
+
 @media (max-width: 760px) {
   .topbar { flex-wrap: wrap; }
   .topbar .menu { display: block; margin-left: auto; }
@@ -173,15 +208,18 @@ main.print-view, #view.print-view { max-width: 11in; }
   table.list { font-size: .88rem; }
   table.list th:nth-child(n+4):not(.num), table.list td:nth-child(n+4):not(.num) { display: none; }
   .doc { padding: .3in; }
-  .doc-parties, .doc-parties.three, .doc-cols, .doc-sign { grid-template-columns: 1fr; }
+  .doc-parties, .doc-parties.three, .doc-cols, .doc-sign, .prop-sign { grid-template-columns: 1fr; }
+  .doc.proposal > :not(.prop-band):not(.prop-foot):not(.prop-terms), .prop-band, .doc.proposal .prop-terms { padding-left: .3in; padding-right: .3in; margin-left: 0; margin-right: 0; }
 }
 
 @media print {
   @page { margin: .5in; }
   @page wide { size: letter landscape; }
+  @page proposal { margin: .3in .35in; }
   body { background: #fff; }
   .no-print, .toast { display: none !important; }
   main { padding: 0; max-width: none; }
   .doc { box-shadow: none; padding: 0; max-width: none; }
+  .doc.proposal { padding: 0; }
   .page-break { page-break-after: always; height: 0; }
 }

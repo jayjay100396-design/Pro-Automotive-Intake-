@@ -1,7 +1,7 @@
 // Stellar Glass business details. Used before sign-in (sign-in page) and to pre-fill the
 // company profile at setup; after that, the profile in Settings is what prints on documents.
 export const BRAND = {
-  name: 'Stellar Glass',
+  name: 'Stellar Glass LLC',
   contactName: 'Wesley Stel',
   contactTitle: 'President',
   address: '2850 Mine and Mill Road, Suite 4, Lakeland, FL 33801',

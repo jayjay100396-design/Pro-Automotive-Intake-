@@ -38,6 +38,22 @@ export function estimateTotals(est) {
   return { subtotal, markup, minApplied, beforeTax, tax, total: round2(beforeTax + tax) };
 }
 
+// Priced options on a proposal ("Price 1", "Price 2"...). An option marked fromLines takes
+// the line-item total; others carry their own lump-sum price. Estimates saved before options
+// existed get one option priced from their lines.
+export function proposalOptions(est) {
+  const total = estimateTotals(est).total;
+  const opts = est.options?.length ? est.options : [{ fromLines: true }];
+  return opts.map((o, i) => ({ ...o, number: i + 1, price: o.fromLines ? total : round2(o.price) }));
+}
+
+// The amount an estimate is worth: its accepted option, or option 1.
+export function estimateAmount(est) {
+  const opts = proposalOptions(est);
+  const i = Number(est.acceptedOption) || 0;
+  return (opts[i] || opts[0]).price;
+}
+
 export function invoiceTotals(inv) {
   const lines = inv.lines || [];
   const subtotal = round2(lines.reduce((s, l) => s + round2(num(l.qty) * num(l.price)), 0));

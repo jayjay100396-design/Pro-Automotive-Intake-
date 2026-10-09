@@ -1,9 +1,10 @@
 // Screens: dashboard, customers, jobs, estimates, contracts (with change orders), pay apps, invoices, settings.
 // Each view returns { html, mount(root), live }. Live views re-render when data changes;
 // editors render once so typing isn't interrupted.
-import { state, add, update, remove, get, where, nextNumber, can, updateCompany, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember } from './data.js';
+import { state, add, update, remove, get, where, nextNumber, can, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
+  proposalOptions, estimateAmount,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
 
@@ -40,7 +41,7 @@ function header(title, actions = '') {
 // ---------- Dashboard ----------
 export function dashboard() {
   const est = D().estimates.filter((e) => ['draft', 'sent'].includes(e.status));
-  const estValue = est.reduce((s, e) => s + estimateTotals(e).total, 0);
+  const estValue = est.reduce((s, e) => s + estimateAmount(e), 0);
   const active = D().jobs.filter((j) => ['contracted', 'in progress'].includes(j.status));
   const unpaid = D().invoices.filter((i) => i.status === 'unpaid');
   const owed = unpaid.reduce((s, i) => s + invoiceTotals(i).total, 0);
@@ -155,7 +156,7 @@ export function jobEdit(id, params) {
     ${isNew ? '' : `
     <div class="cols">
       <div class="card"><div class="row between"><h2>Estimates</h2>${can.edit() ? `<a class="btn small" href="#/estimates/new?job=${esc(id)}">New estimate</a>` : ''}</div>
-        ${ests.length ? `<ul class="links">${ests.map((e) => `<li><a href="#/estimates/${esc(e.id)}">Estimate ${esc(e.number)}</a> ${badge(e.status)} <span class="num">${money(estimateTotals(e).total)}</span></li>`).join('')}</ul>` : '<p class="muted">None yet.</p>'}</div>
+        ${ests.length ? `<ul class="links">${ests.map((e) => `<li><a href="#/estimates/${esc(e.id)}">Proposal ${esc(e.number)}</a> ${badge(e.status)} <span class="num">${money(estimateAmount(e))}</span></li>`).join('')}</ul>` : '<p class="muted">None yet.</p>'}</div>
       <div class="card"><h2>Contracts and change orders</h2>
         ${cons.length ? `<ul class="links">${cons.map((c) => `<li><a href="#/contracts/${esc(c.id)}">Contract ${esc(c.number)}</a> ${badge(c.status)} <span class="num">${money(contractTotal(c))}</span>${coForContract(c.id).length ? `<br><span class="muted small">${coForContract(c.id).length} change order(s)</span>` : ''}</li>`).join('')}</ul>` : '<p class="muted">Accept an estimate and convert it to a contract.</p>'}</div>
       <div class="card"><h2>Pay apps</h2>
@@ -204,6 +205,39 @@ const PRESETS = {
   ],
 };
 
+const PROPOSAL_DEFAULTS = {
+  intro: 'We propose to supply and install the following in prepared openings:',
+  priceNote: '*Prices subject to change due to volatility of pricing in the marketplace.',
+  exclusions: 'Cleaning; Protection; brake metal flashing.',
+  terms: 'A 50% deposit is required before materials can be ordered.',
+};
+const OPTION_SPECS = {
+  storefront: 'Aluminum Framing- Clear anodized; non-thermal; non-impact resistant\nGlass: 1" Clear Low E Tempered Insulated',
+  shower: 'Glass: 3/8" Clear Tempered\nHardware: Brushed nickel hinges, pull handle and clips',
+};
+
+function optionCard(o = {}, i = 0, accepted = 0) {
+  return `<div class="opt" data-opt>
+    <div class="row between"><b class="opt-title">Price ${i + 1}</b>
+      <span class="row"><label class="inline"><input type="radio" name="acceptedOption" value="${i}" ${i === accepted ? 'checked' : ''}> Accepted</label>
+      <button type="button" class="icon" data-delopt title="Remove option">✕</button></span></div>
+    <div class="grid4">
+      <label class="span2">Name (optional, e.g. a manufacturer) <input name="name" value="${esc(o.name)}" placeholder="e.g. Akela"></label>
+      <label>Price <input name="price" type="number" step="0.01" value="${esc(o.fromLines ? '' : o.price ?? '')}" ${o.fromLines ? 'disabled' : ''}></label>
+      <label class="inline">&nbsp;<span><input type="checkbox" name="fromLines" ${o.fromLines ? 'checked' : ''}> Use line-item total</span></label>
+      <label class="span4">Specs (one per line) <textarea name="specs" rows="3">${esc(o.specs)}</textarea></label>
+    </div>
+  </div>`;
+}
+
+function readOptions(container) {
+  return [...container.querySelectorAll('[data-opt]')].map((el) => {
+    const fromLines = el.querySelector('[name=fromLines]').checked;
+    const price = el.querySelector('[name=price]').value;
+    return { name: el.querySelector('[name=name]').value.trim(), fromLines, price: fromLines ? null : Number(price) || 0, specs: el.querySelector('[name=specs]').value };
+  });
+}
+
 function estLineRow(l = {}) {
   const sq = l.unit === 'sqft';
   return `<tr data-row>
@@ -226,9 +260,9 @@ export function estimates() {
   const rows = [...D().estimates].sort(sortNum);
   return {
     live: true,
-    html: `${header('Estimates', can.edit() ? '<a class="btn primary" href="#/estimates/new">New estimate</a>' : '')}
+    html: `${header('Estimates', can.edit() ? '<a class="btn primary" href="#/estimates/new">New proposal</a>' : '')}
     <div class="card">${rows.length ? `<table class="list"><thead><tr><th>#</th><th>Job</th><th>Customer</th><th>Date</th><th>Status</th><th class="num">Total</th></tr></thead><tbody>
-    ${rows.map((e) => `<tr data-href="#/estimates/${esc(e.id)}"><td>${esc(e.number)}</td><td>${esc(jobName(e.jobId))}</td><td>${esc(customerName(get('jobs', e.jobId)?.customerId))}</td><td>${fmtDate(e.date)}</td><td>${badge(e.status)}</td><td class="num">${money(estimateTotals(e).total)}</td></tr>`).join('')}
+    ${rows.map((e) => `<tr data-href="#/estimates/${esc(e.id)}"><td>${esc(e.number)}</td><td>${esc(jobName(e.jobId))}</td><td>${esc(customerName(get('jobs', e.jobId)?.customerId))}</td><td>${fmtDate(e.date)}</td><td>${badge(e.status)}</td><td class="num">${money(estimateAmount(e))}</td></tr>`).join('')}
     </tbody></table>` : empty('No estimates yet.')}</div>`,
   };
 }
@@ -237,31 +271,55 @@ export function estimateEdit(id, params) {
   const isNew = id === 'new';
   const job = get('jobs', params.get('job'));
   const e = isNew
-    ? { number: nextNumber('estimates'), jobId: job?.id || '', date: today(), validUntil: addDays(today(), 30), status: 'draft', template: job?.type === 'shower' ? 'shower' : 'storefront', markupPct: 0, minCharge: 250, taxPct: 7, lines: [], terms: 'Price good for 30 days. 50% deposit to order materials, balance due on completion. Excludes permits, electrical, and work by others unless listed.' }
+    ? (() => {
+      const template = job?.type === 'shower' ? 'shower' : 'storefront';
+      const prep = state.profile?.preparedBy || {};
+      return {
+        number: nextNumber('estimates'), jobId: job?.id || '', date: today(), validUntil: addDays(today(), 30), status: 'draft', template,
+        markupPct: 0, minCharge: 250, taxPct: 7, lines: [], ...PROPOSAL_DEFAULTS, scope: '', attn: '', projectTitle: job?.name || '',
+        options: [{ fromLines: true, name: '', specs: OPTION_SPECS[template] }], acceptedOption: 0, showLines: false,
+        preparedName: prep.name || state.user.displayName || '', preparedTitle: prep.title || 'Estimator',
+        preparedPhone: prep.phone || state.user.phoneNumber || '', preparedEmail: prep.email || state.user.email || '',
+      };
+    })()
     : get('estimates', id);
   if (!e) return { waiting: true, html: '<p class="muted">Loading…</p>' };
+  const opts = e.options?.length ? e.options : [{ fromLines: true, name: '', specs: '' }];
+  const accepted = Number(e.acceptedOption) || 0;
   const lines = e.lines?.length ? e.lines : PRESETS[e.template] || PRESETS.storefront;
   const hasContract = !isNew && where('contracts', 'estimateId', id).length;
   const ro = can.edit() ? '' : 'disabled';
 
   return {
-    html: `${header(isNew ? 'New estimate' : `Estimate ${esc(e.number)}`, `
-      ${!isNew ? `<a class="btn" href="#/estimates/${esc(id)}/print">Print / PDF</a>` : ''}
+    html: `${header(isNew ? 'New proposal' : `Proposal ${esc(e.number)}`, `
+      ${!isNew ? `<a class="btn" href="#/estimates/${esc(id)}/print">Print proposal / PDF</a>` : ''}
       ${!isNew && can.edit() && !hasContract ? '<button class="btn" id="tocontract">Convert to contract</button>' : ''}
       ${hasContract ? `<a class="btn" href="#/contracts/${esc(where('contracts', 'estimateId', id)[0].id)}">View contract</a>` : ''}
       ${!isNew && can.remove() ? '<button class="btn danger" id="del">Delete</button>' : ''}`)}
     <form id="f" class="stack">
       <fieldset class="card grid4" ${ro}>
         <label class="span2">Job <select name="jobId" required>${jobOptions(e.jobId)}</select></label>
-        <label>Estimate # <input name="number" type="number" value="${esc(e.number)}"></label>
+        <label>Proposal # <input name="number" type="number" value="${esc(e.number)}"></label>
         <label>Status <select name="status">${options(EST_STATUS.map((s) => [s, s]), e.status)}</select></label>
         <label>Date <input name="date" type="date" value="${esc(e.date)}"></label>
         <label>Valid until <input name="validUntil" type="date" value="${esc(e.validUntil)}"></label>
         <label>Template <select name="template" id="template">${options([['storefront', 'Storefront'], ['shower', 'Shower']], e.template)}</select></label>
         <label>&nbsp;<button type="button" class="btn" id="preset">Load template lines</button></label>
       </fieldset>
+      <fieldset class="card grid4" ${ro}>
+        <h2 class="span4">Proposal</h2>
+        <label class="span2">Project (as printed) <input name="projectTitle" value="${esc(e.projectTitle)}" placeholder="Job name, e.g. Lakeland Central Park Bldg 300 - Revised"></label>
+        <label class="span2">Attn (contact at the customer) <input name="attn" value="${esc(e.attn)}" placeholder="Leave blank to use the customer's name"></label>
+        <label class="span4">Opening line <input name="intro" value="${esc(e.intro ?? PROPOSAL_DEFAULTS.intro)}"></label>
+        <label class="span4">Openings / scope <textarea name="scope" rows="2" placeholder="(4) F2; (8) F3; (10) F4; (8) F5; (38) F8">${esc(e.scope)}</textarea></label>
+      </fieldset>
       <fieldset class="card" ${ro}>
-        <h2>Line items</h2>
+        <div class="row between"><h2>Prices</h2><button type="button" class="btn small" id="addopt">+ Add price option</button></div>
+        <p class="hint">Each option prints as "Price 1", "Price 2"… with its specs. Use the line-item total for one, or type a lump sum. Mark the one the customer accepts; that's the amount used for the contract.</p>
+        <div id="opts" class="stack" data-lines>${opts.map((o, i) => optionCard(o, i, accepted)).join('')}</div>
+      </fieldset>
+      <fieldset class="card" ${ro}>
+        <h2>Line items <span class="muted small">(your pricing; not printed unless you choose)</span></h2>
         <div class="scroll"><table class="lines" data-lines>
           <thead><tr><th>Description</th><th>Kind</th><th>Qty</th><th>Unit</th><th>W in</th><th>H in</th><th>Min sf</th><th>Price</th><th>Tax</th><th class="num">Bill qty</th><th class="num">Total</th><th></th></tr></thead>
           <tbody id="lines">${lines.map(estLineRow).join('')}</tbody>
@@ -275,16 +333,29 @@ export function estimateEdit(id, params) {
           <label>Minimum charge <input name="minCharge" type="number" step="0.01" value="${esc(e.minCharge)}"></label>
           <label>Sales tax % <input name="taxPct" type="number" step="any" value="${esc(e.taxPct)}"></label>
           <span></span>
-          <label class="span2">Scope, terms and exclusions <textarea name="terms" rows="4">${esc(e.terms)}</textarea></label>
+          <label class="span2 inline"><span><input type="checkbox" name="showLines" ${e.showLines ? 'checked' : ''}> Print the itemized line list on the proposal</span></label>
           <label class="span2">Internal notes (not printed) <textarea name="notes" rows="2">${esc(e.notes)}</textarea></label>
         </fieldset>
         <div class="card totals" id="totals"></div>
       </div>
-      <div class="row"><button class="btn primary" ${ro}>Save estimate</button></div>
+      <fieldset class="card grid4" ${ro}>
+        <h2 class="span4">Terms</h2>
+        <label class="span4">Price note <input name="priceNote" value="${esc(e.priceNote ?? PROPOSAL_DEFAULTS.priceNote)}"></label>
+        <label class="span4">Exclude <input name="exclusions" value="${esc(e.exclusions ?? '')}" placeholder="Cleaning; Protection; brake metal flashing."></label>
+        <label class="span4">Payment terms <textarea name="terms" rows="2">${esc(e.terms)}</textarea></label>
+        <h2 class="span4 top-gap">Proposal prepared by</h2>
+        <label>Name <input name="preparedName" value="${esc(e.preparedName)}"></label>
+        <label>Title <input name="preparedTitle" value="${esc(e.preparedTitle)}"></label>
+        <label>Phone <input name="preparedPhone" type="tel" value="${esc(e.preparedPhone)}"></label>
+        <label>Email <input name="preparedEmail" type="email" value="${esc(e.preparedEmail)}"></label>
+      </fieldset>
+      <div class="row"><button class="btn primary" ${ro}>Save proposal</button></div>
     </form>`,
     mount(root) {
       const body = root.querySelector('#lines');
       const form = root.querySelector('#f');
+      const optBox = root.querySelector('#opts');
+      const acceptedIndex = () => Number(optBox.querySelector('[name=acceptedOption]:checked')?.value) || 0;
       const recalc = () => {
         const ls = readLines(body);
         body.querySelectorAll('tr[data-row]').forEach((tr, i) => {
@@ -293,18 +364,40 @@ export function estimateEdit(id, params) {
           tr.querySelector('[data-total]').textContent = money(lineTotal(l));
           tr.querySelectorAll('[name=widthIn],[name=heightIn],[name=minSqft]').forEach((x) => { x.disabled = l.unit !== 'sqft'; });
         });
-        const t = estimateTotals({ ...formData(form), lines: ls });
+        const cur = { ...formData(form), lines: ls, options: readOptions(optBox) };
+        const t = estimateTotals(cur);
+        optBox.querySelectorAll('[data-opt]').forEach((el, i) => {
+          el.querySelector('.opt-title').textContent = `Price ${i + 1}`;
+          el.querySelector('[name=acceptedOption]').value = i;
+          const fl = el.querySelector('[name=fromLines]').checked;
+          const price = el.querySelector('[name=price]');
+          price.disabled = fl;
+          if (fl) price.placeholder = money(t.total);
+        });
         root.querySelector('#totals').innerHTML = `
-          <div class="tr"><span>Subtotal</span><span>${money(t.subtotal)}</span></div>
+          <div class="tr"><span>Line items</span><span>${money(t.subtotal)}</span></div>
           ${t.markup ? `<div class="tr"><span>Markup</span><span>${money(t.markup)}</span></div>` : ''}
           ${t.minApplied ? '<div class="tr warn"><span>Minimum charge applied</span><span></span></div>' : ''}
           <div class="tr"><span>Tax</span><span>${money(t.tax)}</span></div>
-          <div class="tr grand"><span>Total</span><span>${money(t.total)}</span></div>`;
+          <div class="tr"><span>Line-item total</span><span>${money(t.total)}</span></div>
+          ${proposalOptions(cur).map((o) => `<div class="tr ${o.number - 1 === acceptedIndex() ? 'grand' : ''}"><span>Price ${o.number}${o.name ? ` (${esc(o.name)})` : ''}</span><span>${money(o.price)}</span></div>`).join('')}`;
       };
       form.addEventListener('input', recalc);
       form.addEventListener('change', recalc);
       body.addEventListener('click', (ev) => { if (ev.target.closest('[data-del]')) { ev.target.closest('tr').remove(); recalc(); } });
       root.querySelector('#addline').addEventListener('click', () => { body.insertAdjacentHTML('beforeend', estLineRow({ unit: 'sqft', qty: 1, minSqft: 3 })); recalc(); });
+      root.querySelector('#addopt').addEventListener('click', () => {
+        const n = optBox.querySelectorAll('[data-opt]').length;
+        optBox.insertAdjacentHTML('beforeend', optionCard({ fromLines: false, specs: OPTION_SPECS[root.querySelector('#template').value] || '' }, n, -1));
+        recalc();
+      });
+      optBox.addEventListener('click', (ev) => {
+        if (!ev.target.closest('[data-delopt]')) return;
+        if (optBox.querySelectorAll('[data-opt]').length === 1) return toast('A proposal needs at least one price.', true);
+        ev.target.closest('[data-opt]').remove();
+        if (!optBox.querySelector('[name=acceptedOption]:checked')) optBox.querySelector('[name=acceptedOption]').checked = true;
+        recalc();
+      });
       root.querySelector('#preset').addEventListener('click', () => {
         const t = root.querySelector('#template').value;
         if (readLines(body).some((l) => l.desc) && !confirm('Replace the current lines with the template lines?')) return;
@@ -314,32 +407,43 @@ export function estimateEdit(id, params) {
 
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
-        const data = { ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price) };
+        const data = { ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price), options: readOptions(optBox), acceptedOption: acceptedIndex() };
         data.total = estimateTotals(data).total;
+        data.amount = estimateAmount(data);
         data.customerId = get('jobs', data.jobId)?.customerId || '';
+        if (!data.projectTitle) data.projectTitle = get('jobs', data.jobId)?.name || '';
+        savePreparedBy({ name: data.preparedName, title: data.preparedTitle, phone: data.preparedPhone, email: data.preparedEmail });
         if (isNew) {
-          const r = await attempt(() => add('estimates', data), 'Estimate saved');
+          const r = await attempt(() => add('estimates', data), 'Proposal saved');
           if (r) {
             const j = get('jobs', data.jobId);
             if (j && j.status === 'lead') update('jobs', j.id, { status: 'estimating' }).catch(() => {});
             go(`#/estimates/${r.id}`);
           }
-        } else await attempt(() => update('estimates', id, data), 'Estimate saved');
+        } else await attempt(() => update('estimates', id, data), 'Proposal saved');
       });
       root.querySelector('#del')?.addEventListener('click', async () => {
-        if (confirmDelete('estimate') && await attempt(() => remove('estimates', id), 'Estimate deleted') !== null) go('#/estimates');
+        if (confirmDelete('proposal') && await attempt(() => remove('estimates', id), 'Proposal deleted') !== null) go('#/estimates');
       });
       root.querySelector('#tocontract')?.addEventListener('click', async () => {
         const cur = get('estimates', id);
         const t = estimateTotals(cur);
-        // Schedule of values: one line per estimate line, scaled so it adds up to the quoted total.
-        const factor = t.subtotal ? t.total / t.subtotal : 1;
-        const sov = (cur.lines || []).map((l, i) => ({ item: i + 1, desc: l.desc, value: round2(lineTotal(l) * factor) }));
-        const diff = round2(t.total - sov.reduce((s, l) => s + l.value, 0));
-        if (sov.length) sov[sov.length - 1].value = round2(sov[sov.length - 1].value + diff);
+        const opt = proposalOptions(cur)[Number(cur.acceptedOption) || 0] || proposalOptions(cur)[0];
+        let sov;
+        if (opt.fromLines && cur.lines?.length) {
+          // Schedule of values: one line per estimate line, scaled so it adds up to the accepted price.
+          const factor = t.subtotal ? opt.price / t.subtotal : 1;
+          sov = cur.lines.map((l, i) => ({ item: i + 1, desc: l.desc, value: round2(lineTotal(l) * factor) }));
+          const diff = round2(opt.price - sov.reduce((sum, l) => sum + l.value, 0));
+          sov[sov.length - 1].value = round2(sov[sov.length - 1].value + diff);
+        } else {
+          const spec = (opt.specs || '').split('\n').map((x) => x.trim()).filter(Boolean).join('; ');
+          sov = [{ item: 1, desc: `Supply and install per proposal ${cur.number}, Price ${opt.number}${opt.name ? ` (${opt.name})` : ''}${spec ? ': ' + spec : ''}`, value: opt.price }];
+        }
+        const terms = [cur.terms, cur.exclusions ? `Exclude: ${cur.exclusions}` : ''].filter(Boolean).join('\n');
         const r = await attempt(() => add('contracts', {
           number: nextNumber('contracts'), jobId: cur.jobId, customerId: cur.customerId || '', estimateId: id, date: today(),
-          amount: t.total, retainagePct: 10, status: 'draft', sov, terms: cur.terms || '',
+          amount: opt.price, retainagePct: 10, status: 'draft', sov, terms,
         }), 'Contract created');
         if (r) {
           update('estimates', id, { status: 'accepted' }).catch(() => {});
