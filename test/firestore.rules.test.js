@@ -113,6 +113,34 @@ describe('Firestore rules', function () {
     await assertFails(deleteDoc(doc(db('wes'), 'companies/stellar')));
   });
 
+  it('lets the owner transfer ownership to a member in one batch', async () => {
+    const transfer = (f, from, to) => {
+      const b = writeBatch(f);
+      b.update(doc(f, 'companies/stellar'), { ownerUid: to });
+      b.update(doc(f, `companies/stellar/members/${to}`), { role: 'owner' });
+      b.update(doc(f, `companies/stellar/members/${from}`), { role: 'admin' });
+      return b.commit();
+    };
+    // Not the owner, or to a non-member, or only part of the batch: denied.
+    await assertFails(transfer(db('admin1'), 'admin1', 'crew'));
+    await assertFails(transfer(db('wes'), 'wes', 'stranger'));
+    await assertFails(updateDoc(doc(db('wes'), 'companies/stellar'), { ownerUid: 'cpa' }));
+    await assertFails(updateDoc(doc(db('wes'), 'companies/stellar/members/cpa'), { role: 'owner' }));
+    await assertFails(updateDoc(doc(db('wes'), 'companies/stellar/members/wes'), { role: 'admin' }));
+    // Can't sneak in other changes with the transfer.
+    const f = db('wes');
+    const b = writeBatch(f);
+    b.update(doc(f, 'companies/stellar'), { ownerUid: 'cpa', name: 'Mine now' });
+    b.update(doc(f, 'companies/stellar/members/cpa'), { role: 'owner' });
+    b.update(doc(f, 'companies/stellar/members/wes'), { role: 'admin' });
+    await assertFails(b.commit());
+    // The real thing works, and the new owner is in charge afterwards.
+    await assertSucceeds(transfer(db('wes'), 'wes', 'cpa'));
+    await assertSucceeds(updateDoc(doc(db('cpa'), 'companies/stellar'), { name: 'Stellar Glass LLC' }));
+    await assertFails(updateDoc(doc(db('wes'), 'companies/stellar'), { name: 'Nope' }));
+    await assertSucceeds(transfer(db('cpa'), 'cpa', 'wes'));
+  });
+
   it('keeps user profiles private', async () => {
     await assertSucceeds(setDoc(doc(db('wes'), 'users/wes'), { name: 'Wes' }));
     await assertFails(getDoc(doc(db('crew'), 'users/wes')));

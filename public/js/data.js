@@ -1,7 +1,7 @@
 // Company-scoped Firestore access. Every record lives at companies/{companyId}/{collection}/{id}.
 import { db } from './firebase.js';
 import {
-  doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch, serverTimestamp,
+  doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch, serverTimestamp,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices'];
@@ -75,6 +75,24 @@ export const add = (c, data) => addDoc(col(c), { ...data, createdAt: serverTimes
 export const update = (c, id, data) => updateDoc(ref(c, id), { ...data, updatedAt: serverTimestamp() });
 export const remove = (c, id) => deleteDoc(ref(c, id));
 export const updateCompany = (data) => updateDoc(doc(db, 'companies', state.companyId), data);
+
+export async function listMembers() {
+  const snap = await getDocs(collection(db, 'companies', state.companyId, 'members'));
+  return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+}
+
+// Hands the company to another member: they become owner, the current owner becomes admin.
+// One batch, which is what the security rules require.
+export async function transferOwnership(toUid) {
+  const id = state.companyId;
+  const me = state.user.uid;
+  const b = writeBatch(db);
+  b.update(doc(db, 'companies', id), { ownerUid: toUid });
+  b.update(doc(db, 'companies', id, 'members', toUid), { role: 'owner' });
+  b.update(doc(db, 'companies', id, 'members', me), { role: 'admin' });
+  await b.commit();
+  state.role = 'admin';
+}
 
 export const get = (c, id) => state.data[c].find((r) => r.id === id);
 export const where = (c, field, value) => state.data[c].filter((r) => r[field] === value);

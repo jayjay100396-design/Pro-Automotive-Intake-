@@ -76,6 +76,15 @@ service cloud.firestore {
         && existsAfter(memberPath(companyId));
 
       allow update: if hasRole(companyId, ['owner']) && unchanged('ownerUid');
+
+      // Transferring ownership: the owner hands the company to an existing member, in one batch
+      // that also makes that member 'owner' and the old owner 'admin' (see members below).
+      allow update: if hasRole(companyId, ['owner'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerUid'])
+        && request.resource.data.ownerUid != request.auth.uid
+        && exists(/databases/$(database)/documents/companies/$(companyId)/members/$(request.resource.data.ownerUid))
+        && getAfter(/databases/$(database)/documents/companies/$(companyId)/members/$(request.resource.data.ownerUid)).data.role == 'owner'
+        && getAfter(memberPath(companyId)).data.role == 'admin';
       allow delete: if false;
 
       match /members/{uid} {
@@ -93,13 +102,28 @@ service cloud.firestore {
           && request.resource.data.role in ['admin', 'staff', 'accountant']
           && (request.resource.data.role != 'admin' || role(companyId) == 'owner');
 
-        // Changing someone's role: never your own, never the owner's, and never to owner.
+        // Changing someone's role: never your own, never the owner's, and never to owner
+        // (except in an ownership transfer, below).
         allow update: if canManage(companyId)
           && uid != request.auth.uid
           && resource.data.role != 'owner'
           && request.resource.data.role in ['admin', 'staff', 'accountant']
           && ((resource.data.role != 'admin' && request.resource.data.role != 'admin')
               || role(companyId) == 'owner');
+
+        // Ownership transfer, part of the owner's batch above: the new owner's role becomes 'owner'
+        // and the old owner's becomes 'admin'. Only the role field changes.
+        allow update: if hasRole(companyId, ['owner'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+          && (
+            (uid != request.auth.uid
+              && request.resource.data.role == 'owner'
+              && getAfter(/databases/$(database)/documents/companies/$(companyId)).data.ownerUid == uid)
+            || (uid == request.auth.uid
+              && request.resource.data.role == 'admin'
+              && getAfter(/databases/$(database)/documents/companies/$(companyId)).data.ownerUid != uid
+              && getAfter(/databases/$(database)/documents/companies/$(companyId)/members/$(getAfter(/databases/$(database)/documents/companies/$(companyId)).data.ownerUid)).data.role == 'owner')
+          );
 
         // Removing someone: the owner can't be removed. Anyone except the owner can leave.
         allow delete: if resource.data.role != 'owner'

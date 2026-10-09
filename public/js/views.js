@@ -1,7 +1,7 @@
 // Screens: dashboard, customers, jobs, estimates, contracts (with change orders), pay apps, invoices, settings.
 // Each view returns { html, mount(root), live }. Live views re-render when data changes;
 // editors render once so typing isn't interrupted.
-import { state, add, update, remove, get, where, nextNumber, can, updateCompany } from './data.js';
+import { state, add, update, remove, get, where, nextNumber, can, updateCompany, listMembers, transferOwnership } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
 } from './calc.js';
@@ -723,13 +723,33 @@ export function settings() {
     </form>
     <div class="card"><h2>Your account</h2>
       <p>${esc(u.displayName || '')} ${esc(u.email || u.phoneNumber || '')}<br><span class="muted small">Role: ${esc(state.role)} · signed in with ${esc(u.providerData.map((p) => ({ 'google.com': 'Google', password: 'email and password', phone: 'phone' }[p.providerId] || p.providerId)).join(', '))}</span></p>
-      <p class="muted small">Team invites for the accountant and crew are coming next. Roles: owner (everything), staff (create and edit), accountant (reads everything, handles pay apps and invoices).</p>
-    </div>`,
+      <p class="muted small">Team invites for the accountant and crew are coming next. Roles: owner (everything), admin (everything except company settings and ownership), staff (create and edit), accountant (reads everything, handles pay apps and invoices).</p>
+    </div>
+    ${can.manage() ? `<div class="card"><h2>Transfer ownership</h2>
+      <p class="small">Hand the business to another team member. They become the owner and you become an admin.</p>
+      <div id="transfer"><p class="muted small">Loading team…</p></div></div>` : ''}`,
     mount(root) {
       root.querySelector('#f').addEventListener('submit', async (e) => {
         e.preventDefault();
         await attempt(() => updateCompany(formData(e.target)), 'Company saved');
       });
+      const box = root.querySelector('#transfer');
+      if (!box) return;
+      listMembers().then((members) => {
+        const others = members.filter((m) => m.uid !== state.user.uid);
+        const label = (m) => `${m.name || m.email || m.phone || m.uid} (${m.role})`;
+        box.innerHTML = others.length ? `
+          <form class="row" id="tf">
+            <label class="grow">New owner <select name="to" required>${options([['', 'Choose a team member…'], ...others.map((m) => [m.uid, label(m)])], '')}</select></label>
+            <label>&nbsp;<button class="btn danger">Transfer ownership</button></label>
+          </form>` : '<p class="muted small">Add the new owner to the team first; then you can hand ownership to them here.</p>';
+        box.querySelector('#tf')?.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const m = others.find((x) => x.uid === e.target.to.value);
+          if (!m || !confirm(`Make ${label(m)} the owner of ${state.company?.name || 'this business'}? You'll become an admin and can't undo this yourself; only the new owner can hand it back.`)) return;
+          if (await attempt(() => transferOwnership(m.uid), 'Ownership transferred') !== null) location.hash = '#/';
+        });
+      }).catch((e) => { box.innerHTML = `<p class="muted small">Couldn't load the team: ${esc(e.message)}</p>`; });
     },
   };
 }

@@ -66,6 +66,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
 .cols > .card { margin-bottom: 0; }
 .top-gap { margin-top: 1rem; }
+.grow { flex: 1; min-width: 200px; }
 .bare { padding: 0; }
 .hint { color: var(--muted); font-size: .82rem; margin: .5rem 0; }
 .scroll { overflow-x: auto; }

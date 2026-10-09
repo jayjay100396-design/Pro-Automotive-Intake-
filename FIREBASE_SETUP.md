@@ -53,7 +53,7 @@ Open <http://127.0.0.1:5000>. On localhost the app uses the emulators automatica
 - Every record lives under a company: `companies/{companyId}/jobs/...`, `/estimates`, `/contracts`, `/changeOrders`, `/payApps`, `/invoices`, `/customers`.
 - A person can see a company's data only if they have a member record at `companies/{companyId}/members/{theirUserId}`. Other companies' data is invisible to them, and signed-out visitors see nothing.
 - Roles: **owner** (Wes) can do everything; **admin** manages records and staff; **staff** (crew) create and edit records but can't delete; **accountant** reads everything and creates and edits invoices, pay apps (G702/G703), billing, documents and forms, and can upload to the `documents/` and `forms/` storage folders (e.g. notarized papers), but can't delete anything or manage members. The owner invites them by adding a member record with role `accountant`.
-- A new sign-up can create one company with themselves as owner. Nobody can add themselves to someone else's company, make a second owner, change their own role, or remove the owner.
+- A new sign-up can create one company with themselves as owner. Nobody can add themselves to someone else's company, make a second owner, change their own role, or remove the owner. The owner can hand the company to an existing member (Settings > Transfer ownership); that member becomes owner and the old owner becomes admin, all in one step.
 - `users/{uid}` profiles are private to each user. Everything else is denied.
 
 `test/firestore.rules.test.js` and `test/storage.rules.test.js` check each of those cases against the Firestore and Storage emulators (`npm test`).
