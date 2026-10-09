@@ -3,14 +3,17 @@ import { state, get, where } from './data.js';
 import { estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, money, pctFmt } from './calc.js';
 import { payAppSummary, g702Table } from './views.js';
 import { esc, fmtDate } from './ui.js';
+import { websiteUrl } from './brand.js';
 
 const nl = (s) => esc(s).replace(/\n/g, '<br>');
 
 function letterhead(title, meta) {
   const c = state.company || {};
+  const phones = [c.phone && `Office ${esc(c.phone)}`, c.cell && `Cell ${esc(c.cell)}`].filter(Boolean).join(' · ');
+  const web = [c.email && esc(c.email), c.website && `<a href="${esc(websiteUrl(c.website))}">${esc(c.website)}</a>`].filter(Boolean).join(' · ');
   return `<div class="doc-head">
-    <div><div class="doc-brand">${esc(c.name || 'Stellar Glass')}</div>
-      <div class="small">${esc(c.address || '')}<br>${esc(c.phone || '')}${c.email ? ' · ' + esc(c.email) : ''}${c.license ? '<br>License ' + esc(c.license) : ''}</div></div>
+    <div><img src="img/logo.png" alt="${esc(c.name || 'Stellar Glass')}" class="doc-logo">
+      <div class="small">${esc(c.address || '')}${phones ? '<br>' + phones : ''}${web ? '<br>' + web : ''}${c.license ? '<br>License ' + esc(c.license) : ''}</div></div>
     <div class="doc-title"><h1>${title}</h1>${meta}</div>
   </div>`;
 }
@@ -24,7 +27,11 @@ function party(jobId, customerId) {
   </div>`;
 }
 
-const signatures = (left, right) => `<div class="doc-sign"><div>${left}<br><br>Signature ____________________________ Date __________</div><div>${right}<br><br>Signature ____________________________ Date __________</div></div>`;
+const signatures = (left, right) => {
+  const c = state.company || {};
+  const signer = c.contactName ? `<br>${esc(c.contactName)}${c.contactTitle ? ', ' + esc(c.contactTitle) : ''}` : '';
+  return `<div class="doc-sign"><div>${left}<br><br>Signature ____________________________ Date __________</div><div>${right}<br><br>Signature ____________________________ Date __________${signer}</div></div>`;
+};
 
 function page(title, inner, cls = '') {
   return {
@@ -108,7 +115,7 @@ export function payAppDoc(id) {
           <tr><td><b>Net change</b></td><td class="num" colspan="2">${money(s.netChange)}</td></tr>
         </tbody></table>
         <p class="small">The undersigned contractor certifies that, to the best of the contractor's knowledge, the work covered by this application has been completed in accordance with the contract documents, that all amounts have been paid by the contractor for work for which previous certificates for payment were issued, and that current payment shown herein is now due.</p>
-        <p class="small">Contractor: ${esc(state.company?.name || 'Stellar Glass')}<br><br>By ____________________________ Date __________</p>
+        <p class="small">Contractor: ${esc(state.company?.name || 'Stellar Glass')}<br><br>By ____________________________ Date __________${state.company?.contactName ? `<br>${esc(state.company.contactName)}${state.company.contactTitle ? ', ' + esc(state.company.contactTitle) : ''}` : ''}</p>
         <p class="small">State of ____________ County of ____________<br>Subscribed and sworn before me this ____ day of ____________, 20__<br>Notary public ____________________________ My commission expires __________</p>
       </div>
     </div>

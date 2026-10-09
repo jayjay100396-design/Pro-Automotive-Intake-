@@ -6,6 +6,7 @@ import { renderSignIn, signOut } from './auth.js';
 import * as V from './views.js';
 import * as P from './print.js';
 import { esc, toast } from './ui.js';
+import { BRAND, logoHtml } from './brand.js';
 
 const root = document.getElementById('app');
 
@@ -39,7 +40,7 @@ function shell() {
   const u = state.user;
   root.innerHTML = `
   <header class="topbar no-print">
-    <a class="brand" href="#/"><span class="logo">✦</span> ${esc(state.company?.name || 'Stellar Glass')}</a>
+    <a class="brand" href="#/" title="${esc(state.company?.name || 'Stellar Glass')}">${logoHtml('header-logo')}</a>
     <button class="icon menu" id="menu" aria-label="Menu">☰</button>
     <nav id="nav">${NAV.map(([h, l]) => `<a href="#/${h}" data-nav="${h}">${l}</a>`).join('')}</nav>
     <div class="user"><span class="small muted">${esc(u.displayName || u.email || u.phoneNumber || '')}</span> <button class="btn small" id="signout">Sign out</button></div>
@@ -80,8 +81,6 @@ onChange(() => {
   if (!current || !(current.live || current.waiting)) return;
   cancelAnimationFrame(pending);
   pending = requestAnimationFrame(() => {
-    const brand = document.querySelector('.topbar .brand');
-    if (brand) brand.innerHTML = `<span class="logo">✦</span> ${esc(state.company?.name || 'Stellar Glass')}`;
     route();
   });
 });
@@ -90,12 +89,19 @@ function onboarding() {
   const u = state.user;
   root.innerHTML = `
   <div class="auth-wrap"><form class="card auth-card stack" id="f">
-    <div class="brand big"><span class="logo">✦</span> Welcome</div>
-    <p>Signed in as ${esc(u.email || u.phoneNumber || u.displayName)}. Set up the business to start tracking jobs.</p>
-    <label>Business name <input name="name" value="Stellar Glass" required></label>
-    <label>Phone <input name="phone" type="tel"></label>
-    <label>Email <input name="email" type="email" value="${esc(u.email || '')}"></label>
-    <label>Address <input name="address"></label>
+    <div class="auth-logo">${logoHtml()}</div>
+    <h2>Welcome</h2>
+    <p>Signed in as ${esc(u.email || u.phoneNumber || u.displayName)}. Check the business details, then start tracking jobs. You can change them later in Settings.</p>
+    <label>Business name <input name="name" value="${esc(BRAND.name)}" required></label>
+    <div class="grid2">
+      <label>Contact <input name="contactName" value="${esc(BRAND.contactName)}"></label>
+      <label>Title <input name="contactTitle" value="${esc(BRAND.contactTitle)}"></label>
+      <label>Office phone <input name="phone" type="tel" value="${esc(BRAND.phone)}"></label>
+      <label>Cell <input name="cell" type="tel" value="${esc(BRAND.cell)}"></label>
+    </div>
+    <label>Email <input name="email" type="email" value="${esc(BRAND.email)}"></label>
+    <label>Website <input name="website" value="${esc(BRAND.website)}"></label>
+    <label>Address <input name="address" value="${esc(BRAND.address)}"></label>
     <button class="btn primary">Create business</button>
     <p class="small muted">Joining someone else's business instead, like the accountant? Ask the owner for an invite link and open it.</p>
     <button type="button" class="btn" id="out">Sign out</button>
@@ -136,7 +142,8 @@ async function showJoin(user) {
   current = null;
   root.innerHTML = `
   <div class="auth-wrap"><div class="card auth-card stack">
-    <div class="brand big"><span class="logo">✦</span> You're invited</div>
+    <div class="auth-logo">${logoHtml()}</div>
+    <h2>You're invited</h2>
     <p>Join <b>${esc(inv.companyName || 'this business')}</b> as ${esc(ROLE_NAMES[inv.role] || inv.role)}.</p>
     <p class="small muted">Signed in as ${esc(user.email || user.phoneNumber || user.displayName)}.${state.companyId ? ' Joining switches you to this business.' : ''}</p>
     <button class="btn primary" id="join">Join ${esc(inv.companyName || 'business')}</button>

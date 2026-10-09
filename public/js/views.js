@@ -776,9 +776,13 @@ export function settings() {
       <h2 class="span2">Company (printed on estimates, contracts, pay apps and invoices)</h2>
       <fieldset class="span2 grid2 bare" ${ro}>
         <label>Business name <input name="name" value="${esc(c.name)}" required></label>
-        <label>Phone <input name="phone" value="${esc(c.phone)}"></label>
-        <label>Email <input name="email" value="${esc(c.email)}"></label>
         <label>License # <input name="license" value="${esc(c.license)}"></label>
+        <label>Contact <input name="contactName" value="${esc(c.contactName)}"></label>
+        <label>Title <input name="contactTitle" value="${esc(c.contactTitle)}"></label>
+        <label>Office phone <input name="phone" type="tel" value="${esc(c.phone)}"></label>
+        <label>Cell <input name="cell" type="tel" value="${esc(c.cell)}"></label>
+        <label>Email <input name="email" type="email" value="${esc(c.email)}"></label>
+        <label>Website <input name="website" value="${esc(c.website)}"></label>
         <label class="span2">Address <input name="address" value="${esc(c.address)}"></label>
         <label class="span2">Default invoice notes <textarea name="invoiceNotes" rows="2" placeholder="e.g. Make checks payable to Stellar Glass. Thank you!">${esc(c.invoiceNotes)}</textarea></label>
         <div class="span2"><button class="btn primary">Save company</button></div>

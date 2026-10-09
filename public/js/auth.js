@@ -4,6 +4,7 @@ import {
   signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, updateProfile,
   GoogleAuthProvider, signInWithPopup, RecaptchaVerifier, signInWithPhoneNumber, signOut as fbSignOut,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { BRAND, logoHtml, websiteUrl } from './brand.js';
 
 export const signOut = () => fbSignOut(auth);
 
@@ -36,7 +37,7 @@ export function renderSignIn(root) {
   root.innerHTML = `
   <div class="auth-wrap">
     <div class="card auth-card">
-      <div class="brand big"><span class="logo">✦</span> Stellar Glass</div>
+      <div class="auth-logo">${logoHtml()}</div>
       <p class="muted">Estimates, contracts, pay apps and invoices for storefront and shower jobs.</p>
 
       <button class="btn google" id="google"><span class="g">G</span> Continue with Google</button>
@@ -69,6 +70,7 @@ export function renderSignIn(root) {
 
       <p class="msg" id="auth-msg" role="alert"></p>
     </div>
+    <p class="auth-foot">${BRAND.address}<br>Office ${BRAND.phone} · <a href="mailto:${BRAND.email}">${BRAND.email}</a> · <a href="${websiteUrl(BRAND.website)}" target="_blank" rel="noopener">${BRAND.website}</a></p>
   </div>`;
 
   const $ = (s) => root.querySelector(s);
