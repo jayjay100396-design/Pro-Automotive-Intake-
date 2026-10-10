@@ -7,6 +7,15 @@ rules_version = '2';
 // Only members of that company can read. Owners, admins and staff can upload anywhere.
 // The accountant can upload (not replace or delete) under documents/ and forms/, e.g. notarized papers.
 // Owners and admins can delete any file; staff can delete or replace only what they uploaded.
+//
+// Quote requests from the public page (quote.html) bring their own photos and plans:
+//   companies/{companyId}/requests/{requestId}/{n}-{file name}
+// Anyone can add them, but only to a request sent in the last hour, numbered below the count the
+// request gave (at most 8), images or PDFs under 20 MB, and never over a file that's already there.
+// Only the business's team can see them.
+//
+// Photos on the public page (quote.html) live at companies/{companyId}/website/{file} and anyone can
+// see them. Owners and admins put them there; each one's record is at sites/{siteId}/photos in Firestore.
 service firebase.storage {
   match /b/{bucket}/o {
     function memberDoc(companyId) {
@@ -57,14 +66,38 @@ service firebase.storage {
       return resource == null || canManage(companyId) || uploadedByMe();
     }
 
+    // Photos and PDFs a customer attaches to a quote request (see the note at the top).
+    function isRequestAttachment(companyId, requestId, fileName) {
+      let req = firestore.get(/databases/(default)/documents/companies/$(companyId)/requests/$(requestId));
+      let type = request.resource.contentType;
+      return fileName.matches('^[0-7]-[^/]{1,120}$')
+        && int(fileName.split('-')[0]) < req.data.files
+        && request.time < req.data.createdAt + duration.value(1, 'h')
+        && request.resource.size < 20 * 1024 * 1024
+        && (type.matches('image/(jpeg|png|webp|gif|heic|heif)') || type == 'application/pdf');
+    }
+
+    match /companies/{companyId}/requests/{requestId}/{fileName} {
+      allow create: if resource == null && isRequestAttachment(companyId, requestId, fileName);
+    }
+
+    match /companies/{companyId}/website/{fileName} {
+      allow read: if true;
+      allow create, update: if canManage(companyId)
+        && fileName.matches('^[A-Za-z0-9_-]{1,64}[.](jpg|png|webp)$')
+        && request.resource.contentType.matches('image/(jpeg|png|webp)')
+        && request.resource.size < 15 * 1024 * 1024;
+      allow delete: if canManage(companyId);
+    }
+
     match /companies/{companyId}/{folder}/{allPaths=**} {
       allow create: if folder in ['documents', 'forms']
         && isAccountant(companyId) && isAllowedFile() && resource == null;
     }
 
-    match /companies/{companyId}/{allPaths=**} {
+    match /companies/{companyId}/{folder}/{allPaths=**} {
       allow read: if isMember(companyId);
-      allow create, update: if canEdit(companyId) && isAllowedFile() && mayReplace(companyId);
+      allow create, update: if folder != 'website' && canEdit(companyId) && isAllowedFile() && mayReplace(companyId);
       allow delete: if canManage(companyId) || (canEdit(companyId) && uploadedByMe());
     }
   }

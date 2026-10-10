@@ -114,7 +114,7 @@ label.inline > span { display: flex; align-items: center; gap: .4rem; }
 .scroll { overflow-x: auto; }
 
 /* Metric tiles */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
 .tile { position: relative; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.2rem; display: flex; flex-direction: column; gap: .3rem; color: var(--text); box-shadow: var(--shadow); transition: transform .15s, border-color .15s; }
 a.tile:hover { transform: translateY(-2px); border-color: var(--accent); text-decoration: none; }
 .t-label { color: var(--dim); font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding-right: 40px; }
@@ -127,6 +127,7 @@ a.tile:hover { transform: translateY(-2px); border-color: var(--accent); text-de
 .i-amber { background: rgba(245, 158, 11, .15); color: #f59e0b; }
 .i-purple { background: rgba(168, 85, 247, .15); color: #a855f7; }
 .i-cyan { background: rgba(6, 182, 212, .15); color: #06b6d4; }
+.i-green { background: rgba(16, 185, 129, .15); color: #10b981; }
 
 /* Estimate → contract → change order → pay app → invoice */
 .flow { display: flex; align-items: center; justify-content: space-between; gap: .75rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.5rem; margin-bottom: 1.5rem; box-shadow: var(--shadow); }
@@ -361,3 +362,24 @@ dialog.viewer::backdrop { background: rgba(8, 18, 30, .7); }
   .doc.proposal { padding: 0; }
   .page-break { page-break-after: always; height: 0; }
 }
+
+/* Website quote requests */
+.pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+a.file-tile { text-decoration: none; }
+.s-new { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.s-contacted { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.s-converted { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+
+/* Website page: photos on the public quote page */
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.card-head h2 { margin: 0; }
+.row-actions { display: flex; gap: .35rem; flex-wrap: wrap; }
+.site-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 1rem; }
+.site-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 1rem; margin-top: .75rem; }
+.site-slot, .site-photo { display: flex; flex-direction: column; gap: .4rem; min-width: 0; }
+.site-slot .thumb, .site-photo .thumb { aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: var(--bg); border: 1px solid var(--border); }
+.site-slot .thumb.wide { aspect-ratio: 4 / 3; }
+.site-slot img, .site-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.site-photo.starter { opacity: .75; }
+.site-gallery:has(.starter) { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+.upload-list { margin: .5rem 0 0; padding-left: 1.1rem; font-size: .85rem; color: var(--muted); }

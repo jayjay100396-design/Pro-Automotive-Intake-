@@ -57,6 +57,16 @@ Two one-time steps in Google Cloud for the Drive copies:
 
    From a computer with the Google Cloud CLI, `npm run storage:cors` does the same with this repo's `cors.json`. If the bucket has a different name, it's shown at the top of the Storage page.
 
+## 5b. Public quote request page
+
+Customers can ask for a quote, with photos or plans, at **https://stellar-glass-jobs.web.app/quote** without signing in. The page follows the look of stellarglassllc.com (home, services, gallery, contact). Link to it from the main website, a Google Business profile or a text to a customer.
+
+- **Turn it on:** after deploying, the owner opens **Settings > Website quote requests** and clicks **Turn on website requests**. Do this right after the deploy: the first owner to turn it on is the business the page sends to, and after that only that owner can change or pause it. Until then the page shows the phone number and email instead of sending.
+- **Where requests go:** **Requests** in the menu (with a count of new ones) and a tile on the dashboard. Each request shows the contact details, the project and the photos. **Create customer and job** adds the customer (or picks a matching one by email or phone), a lead job with the site and details, and puts the photos and PDFs in the job's Files, ready for an estimate.
+- **Spam:** a hidden field and a short timer catch simple bots, and the security rules only accept the form's own fields, with size limits, at most 8 files of 20 MB (photos or PDFs), uploaded within an hour of sending. Nobody outside the team can read requests or their files.
+- **No email alert yet:** check Requests in the app. An email or text alert needs a Cloud Function and an email service.
+- **Photos on the page:** the owner or an admin changes them on the **Website** page in the app (under Admin). Replace the top photo and each service photo, and add gallery photos (many at once), with optional captions and an order; visitors can click a gallery photo to see it full size. Big photos are resized to 2400 px on the long side before upload. Until you upload your own, the page shows starter photos in `public/img/site/`, cut from screenshots of the old website, so they're small. The Website page works once website requests are turned on, because that connects the page to your business.
+
 ## 6. Try it locally first (optional)
 
 ```bash
