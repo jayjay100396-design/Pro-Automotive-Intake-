@@ -1,5 +1,23 @@
 <!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Stellar Glass</title></head>
-<body><h1>Stellar Glass</h1><p>Job tracker coming soon.</p></body>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090e18">
+  <meta name="description" content="Stellar Glass: estimates, contracts, pay apps and invoices for commercial storefronts and showers in Central Florida.">
+  <title>Stellar Glass</title>
+  <!-- Dark office mode unless this device chose daylight mode (sidebar button). Set before paint. -->
+  <script>try { document.documentElement.dataset.theme = localStorage.getItem('stellar-theme') === 'light' ? 'light' : 'dark'; } catch (e) { /* private mode */ }</script>
+  <link rel="icon" type="image/png" href="img/favicon.png">
+  <link rel="apple-touch-icon" href="img/icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="app"><div class="loading">Loading…</div></div>
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
 </html>
