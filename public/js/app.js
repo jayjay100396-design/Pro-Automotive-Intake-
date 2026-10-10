@@ -5,6 +5,7 @@ import { state, loadCompany, createCompany, stopWatching, onChange, readInvite, 
 import { renderSignIn, signOut } from './auth.js';
 import * as V from './views.js';
 import * as P from './print.js';
+import * as R from './requests.js';
 import { esc, toast } from './ui.js';
 import { BRAND, logoHtml } from './brand.js';
 
@@ -12,6 +13,8 @@ const root = document.getElementById('app');
 
 const routes = [
   [/^$/, () => V.dashboard()],
+  [/^requests$/, () => R.requestList()],
+  [/^requests\/([^/]+)$/, (m) => R.requestView(m[1])],
   [/^customers$/, () => V.customers()],
   [/^customers\/([^/]+)$/, (m, q) => V.customerEdit(m[1], q)],
   [/^jobs$/, () => V.jobs()],
@@ -33,7 +36,7 @@ const routes = [
   [/^settings$/, () => V.settings()],
 ];
 
-const NAV = [['', 'Dashboard'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates'], ['contracts', 'Contracts'], ['payapps', 'Pay apps'], ['invoices', 'Invoices'], ['settings', 'Settings']];
+const NAV = [['', 'Dashboard'], ['requests', 'Requests'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates'], ['contracts', 'Contracts'], ['payapps', 'Pay apps'], ['invoices', 'Invoices'], ['settings', 'Settings']];
 
 let current = null;
 // Views with their own listeners (the file browser) clean up when you leave them.
@@ -48,7 +51,7 @@ function shell() {
   <header class="topbar no-print">
     <a class="brand" href="#/" title="${esc(state.company?.name || 'Stellar Glass')}">${logoHtml('header-logo')}</a>
     <button class="icon menu" id="menu" aria-label="Menu">☰</button>
-    <nav id="nav">${NAV.map(([h, l]) => `<a href="#/${h}" data-nav="${h}">${l}</a>`).join('')}</nav>
+    <nav id="nav">${NAV.map(([h, l]) => `<a href="#/${h}" data-nav="${h}">${l}${h === 'requests' ? ' <span class="nav-count" data-new-requests></span>' : ''}</a>`).join('')}</nav>
     <div class="user"><span class="small muted">${esc(u.displayName || u.email || u.phoneNumber || '')}</span> <button class="btn small" id="signout">Sign out</button></div>
   </header>
   <main id="view"></main>`;
@@ -81,8 +84,18 @@ document.addEventListener('click', (e) => {
 
 window.addEventListener('hashchange', route);
 
+// How many website quote requests are waiting, next to Requests in the menu.
+function showNewRequests() {
+  const el = document.querySelector('[data-new-requests]');
+  if (!el) return;
+  const n = R.newRequestCount();
+  el.textContent = n || '';
+  el.classList.toggle('hidden', !n);
+}
+
 let pending = null;
 onChange(() => {
+  showNewRequests();
   // Brand name may change; list views refresh live; editors refresh only while waiting for their record.
   if (!current || !(current.live || current.waiting)) return;
   cancelAnimationFrame(pending);
@@ -175,6 +188,7 @@ async function showJoin(user) {
 function start() {
   shell();
   route();
+  showNewRequests();
 }
 
 onAuthStateChanged(auth, async (user) => {

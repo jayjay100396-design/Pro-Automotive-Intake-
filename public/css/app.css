@@ -272,3 +272,11 @@ dialog.viewer::backdrop { background: rgba(8, 18, 30, .7); }
   .doc.proposal { padding: 0; }
   .page-break { page-break-after: always; height: 0; }
 }
+
+/* Website quote requests */
+.nav-count { display: inline-block; min-width: 1.3em; padding: 0 .35em; margin-left: .15rem; border-radius: 999px; background: var(--danger); color: #fff; font-size: .75rem; font-weight: 700; line-height: 1.4; text-align: center; }
+.pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+a.file-tile { text-decoration: none; }
+.s-new { color: var(--warn); border-color: currentColor; }
+.s-contacted { color: var(--accent); border-color: currentColor; }
+.s-converted { color: var(--ok); border-color: currentColor; }

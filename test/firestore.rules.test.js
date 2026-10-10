@@ -202,6 +202,90 @@ describe('Firestore rules', function () {
     await assertFails(updateDoc(doc(db('bob'), 'companies/stellar/files/w1'), { 'drive.bob': { id: 'd4' } }));
   });
 
+  describe('quote requests from the public page', () => {
+    const { serverTimestamp, addDoc } = require('firebase/firestore');
+    const anon = () => env.unauthenticatedContext().firestore();
+    const form = (over = {}) => ({
+      name: 'Pat Customer', company: '', phone: '(863) 555-0100', email: '', contactBy: 'phone',
+      service: 'shower', timeline: 'soon', siteAddress: '12 Lake Ave, Lakeland', details: 'Frameless door and panel, 60 inch opening.',
+      files: 2, site: 'stellar-glass', source: 'website', status: 'new', createdAt: serverTimestamp(), ...over,
+    });
+    const send = (data, company = 'stellar') => setDoc(doc(collection(anon(), `companies/${company}/requests`)), data);
+    const site = (data) => env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'sites/stellar-glass'), data));
+
+    it('takes a valid request from anyone once the owner turns the page on', async () => {
+      await assertFails(send(form()));
+      await site({ companyId: 'stellar', open: true });
+      await assertSucceeds(send(form()));
+      await assertSucceeds(send(form({ phone: '', email: 'pat@example.com', contactBy: 'email', timeline: '', files: 0 })));
+      await assertSucceeds(addDoc(collection(db('stranger'), 'companies/stellar/requests'), form()));
+    });
+
+    it('refuses requests that are off, misdirected or malformed', async () => {
+      await site({ companyId: 'stellar', open: false });
+      await assertFails(send(form()));
+      await site({ companyId: 'stellar', open: true });
+      await assertFails(send(form(), 'other'));
+      await assertFails(send(form({ site: 'nope' })));
+      await assertFails(send(form({ status: 'converted' })));
+      await assertFails(send(form({ source: 'import' })));
+      await assertFails(send(form({ createdAt: Timestamp.fromMillis(Date.now() - 864e5) })));
+      await assertFails(send(form({ name: '' })));
+      await assertFails(send(form({ details: 'x'.repeat(4001) })));
+      await assertFails(send(form({ name: 'x'.repeat(101) })));
+      await assertFails(send(form({ phone: '', email: '' })));
+      await assertFails(send(form({ phone: '', email: 'not-an-email' })));
+      await assertFails(send(form({ service: 'windows' })));
+      await assertFails(send(form({ contactBy: 'fax' })));
+      await assertFails(send(form({ files: 9 })));
+      await assertFails(send(form({ files: '2' })));
+      await assertFails(send(form({ customerId: 'c1' })));
+      await assertFails(send(form({ extra: 'x' })));
+      const { timeline, ...missing } = form();
+      await assertFails(send(missing));
+    });
+
+    it('lets only the team see and work requests', async () => {
+      await site({ companyId: 'stellar', open: true });
+      await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'companies/stellar/requests/r1'), { ...form(), createdAt: Timestamp.now() }));
+      const r = (f) => doc(f, 'companies/stellar/requests/r1');
+      await assertFails(getDoc(r(anon())));
+      await assertFails(getDocs(collection(anon(), 'companies/stellar/requests')));
+      await assertFails(updateDoc(r(anon()), { status: 'closed' }));
+      await assertFails(deleteDoc(r(anon())));
+      await assertFails(getDoc(r(db('bob'))));
+      for (const uid of ['wes', 'crew', 'cpa']) await assertSucceeds(getDoc(r(db(uid))));
+      await assertSucceeds(getDocs(collection(db('cpa'), 'companies/stellar/requests')));
+      // Staff follow up; what the customer wrote stays as sent.
+      await assertSucceeds(updateDoc(r(db('crew')), { status: 'contacted', notes: 'Called, measuring Tuesday', updatedAt: serverTimestamp() }));
+      await assertSucceeds(updateDoc(r(db('crew')), { status: 'converted', customerId: 'c1', jobId: 'j1', updatedAt: serverTimestamp() }));
+      await assertFails(updateDoc(r(db('crew')), { details: 'changed', updatedAt: serverTimestamp() }));
+      await assertFails(updateDoc(r(db('crew')), { status: 'won', updatedAt: serverTimestamp() }));
+      await assertFails(updateDoc(r(db('crew')), { notes: 'x'.repeat(4001), updatedAt: serverTimestamp() }));
+      await assertFails(updateDoc(r(db('cpa')), { status: 'closed', updatedAt: serverTimestamp() }));
+      await assertFails(deleteDoc(r(db('crew'))));
+      await assertSucceeds(deleteDoc(r(db('admin1'))));
+    });
+
+    it('lets only the owner connect the page to their business', async () => {
+      const s = (f) => doc(f, 'sites/stellar-glass');
+      const on = (companyId, open = true) => ({ companyId, open, updatedAt: serverTimestamp() });
+      await assertFails(setDoc(s(anon()), on('stellar')));
+      await assertFails(setDoc(s(db('admin1')), on('stellar')));
+      await assertFails(setDoc(s(db('stranger')), on('stellar')));
+      await assertFails(setDoc(s(db('wes')), { ...on('stellar'), extra: 1 }));
+      await assertSucceeds(setDoc(s(db('wes')), on('stellar')));
+      await assertSucceeds(getDoc(s(anon())));
+      await assertFails(getDocs(collection(anon(), 'sites')));
+      // Another business's owner can't take it over; the owner can pause it.
+      await assertFails(setDoc(s(db('bob')), on('other')));
+      await assertFails(updateDoc(s(db('wes')), { companyId: 'other', updatedAt: serverTimestamp() }));
+      await assertSucceeds(updateDoc(s(db('wes')), { open: false, updatedAt: serverTimestamp() }));
+      await assertFails(deleteDoc(s(db('bob'))));
+      await assertSucceeds(deleteDoc(s(db('wes'))));
+    });
+  });
+
   it('keeps user profiles private', async () => {
     await assertSucceeds(setDoc(doc(db('wes'), 'users/wes'), { name: 'Wes' }));
     await assertFails(getDoc(doc(db('crew'), 'users/wes')));

@@ -17,3 +17,24 @@ export const logoHtml = (cls = '') => `<picture class="logo-pic ${cls}">
 </picture>`;
 
 export const websiteUrl = (w) => (w ? (/^https?:\/\//.test(w) ? w : `https://${w}`) : '');
+
+// The public quote page (quote.html) sends requests to the business connected to this site id
+// (Firestore sites/{SITE_ID}); the owner connects it in Settings.
+export const SITE_ID = 'stellar-glass';
+
+// Choices on the quote request form. The keys are what's stored, and firestore.rules checks them.
+export const REQUEST_SERVICES = [
+  ['storefront', 'Commercial storefront or entrance'],
+  ['interior', 'Office or interior glass walls'],
+  ['shower', 'Frameless shower enclosure'],
+  ['railing', 'Glass railing'],
+  ['other', 'Something else'],
+];
+export const REQUEST_TIMELINES = [
+  ['', 'Not sure yet'],
+  ['asap', 'As soon as possible'],
+  ['soon', 'In the next 1 to 3 months'],
+  ['later', 'More than 3 months out'],
+  ['pricing', 'Just getting prices or bidding'],
+];
+export const REQUEST_CONTACT = [['phone', 'Phone call'], ['text', 'Text message'], ['email', 'Email']];

@@ -57,6 +57,16 @@ Two one-time steps in Google Cloud for the Drive copies:
 
    From a computer with the Google Cloud CLI, `npm run storage:cors` does the same with this repo's `cors.json`. If the bucket has a different name, it's shown at the top of the Storage page.
 
+## 5b. Public quote request page
+
+Customers can ask for a quote, with photos or plans, at **https://stellar-glass-jobs.web.app/quote** without signing in. The page follows the look of stellarglassllc.com (home, services, gallery, contact). Link to it from the main website, a Google Business profile or a text to a customer.
+
+- **Turn it on:** after deploying, the owner opens **Settings > Website quote requests** and clicks **Turn on website requests**. Do this right after the deploy: the first owner to turn it on is the business the page sends to, and after that only that owner can change or pause it. Until then the page shows the phone number and email instead of sending.
+- **Where requests go:** **Requests** in the menu (with a count of new ones) and a tile on the dashboard. Each request shows the contact details, the project and the photos. **Create customer and job** adds the customer (or picks a matching one by email or phone), a lead job with the site and details, and puts the photos and PDFs in the job's Files, ready for an estimate.
+- **Spam:** a hidden field and a short timer catch simple bots, and the security rules only accept the form's own fields, with size limits, at most 8 files of 20 MB (photos or PDFs), uploaded within an hour of sending. Nobody outside the team can read requests or their files.
+- **No email alert yet:** check Requests in the app. An email or text alert needs a Cloud Function and an email service.
+- **Gallery photos** in `public/img/site/` were cut from screenshots of the current website, so they're small. Swap in the originals with the same file names for sharper pictures.
+
 ## 6. Try it locally first (optional)
 
 ```bash

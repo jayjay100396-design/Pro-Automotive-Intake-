@@ -9,6 +9,7 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 - **Pay apps:** G703 continuation sheet (previous, this period, stored, %, balance, retainage) and G702 summary, printable with a notary block.
 - **Invoices:** simple invoices or one click from a pay app; paid and unpaid tracking.
 - **Files:** photos, plans, contracts, permits and forms on each job, sorted by category and searchable, with an optional copy in each person's Google Drive (`Stellar Glass Jobs / customer / job`).
+- **Quote requests:** a public page at `/quote` (no sign-in) where customers send a request with photos or plans; it lands under Requests, and one click turns it into a customer and a lead job.
 - **Team:** invite links for admin, staff or the accountant (reads everything, handles pay apps and invoices); change roles, remove people, transfer ownership.
 
 ## Layout
@@ -17,6 +18,7 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 |---|---|
 | `public/` | The web app (plain ES modules; Firebase SDK from the official CDN) |
 | `public/js/calc.js` | Estimate, invoice and G702/G703 math (unit tested) |
+| `public/quote.html`, `js/site.js`, `css/site.css` | The public quote request page; `js/requests.js` is the Requests screen in the app |
 | `public/js/files.js`, `drive.js` | Job files (Cloud Storage) and the Google Drive copies |
 | `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
 | `test/` | Rules tests (emulator) and money-math tests |

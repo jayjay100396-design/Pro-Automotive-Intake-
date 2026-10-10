@@ -7,12 +7,15 @@ rules_version = '2';
 //   companies/{companyId}/members/{uid}        who can use this company's data, and their role
 //   companies/{companyId}/{collection}/{docId} customers, jobs, estimates, contracts,
 //                                              changeOrders, payApps, invoices, files
+//   companies/{companyId}/requests/{requestId} quote requests sent from the public page (quote.html)
+//   sites/{siteId}                             which business the public page sends requests to
 //   users/{uid}                                a signed-in user's own profile
 //
 // Roles: owner > admin > staff, plus accountant.
 // The accountant reads everything and creates/edits billing records (invoices, pay apps
 // with their G702/G703 lines, billing, documents and forms), but deletes nothing and
 // can't manage members.
+// The public (no sign-in) can only read sites/{siteId} and send a quote request.
 // Anything not matched below is denied.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -51,9 +54,9 @@ service cloud.firestore {
         || (isBillingCollection(collection) && hasRole(companyId, ['accountant']));
     }
 
-    // Business records. members and invites have their own rules below.
+    // Business records. members, invites and requests have their own rules below.
     function isRecord(collection) {
-      return !(collection in ['members', 'invites']);
+      return !(collection in ['members', 'invites', 'requests']);
     }
 
     function invitePath(companyId, inviteId) {
@@ -71,6 +74,89 @@ service cloud.firestore {
     // A user's own profile. Nobody else can read or write it.
     match /users/{uid} {
       allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // ---------- Quote requests from the public website ----------
+    //
+    // sites/{siteId}: { companyId: string, open: bool, updatedAt: timestamp }
+    //   Which business the public quote page sends requests to, and whether it's taking them.
+    //   Anyone can read it (the page needs it before anyone signs in); it holds nothing private.
+    //   Only that business's owner can create, change or remove it, and it can't be moved to
+    //   another business by anyone else once it exists.
+    //
+    // companies/{companyId}/requests/{requestId}: what the customer sent
+    //   name (1-100), company (0-100), phone (0-30), email (0-120, valid if given; phone or email
+    //   required), contactBy (phone|text|email), service (storefront|interior|shower|railing|other),
+    //   timeline (''|asap|soon|later|pricing), siteAddress (0-200), details (1-4000),
+    //   files (int 0-8, how many photos/plans follow in Cloud Storage), site, source 'website',
+    //   status 'new', createdAt (server time)
+    //   plus what the team adds later: status, notes (0-4000), customerId, jobId, updatedAt.
+
+    function sitePath(siteId) {
+      return /databases/$(database)/documents/sites/$(siteId);
+    }
+
+    function isValidSite(d) {
+      return d.keys().hasOnly(['companyId', 'open', 'updatedAt'])
+        && d.keys().hasAll(['companyId', 'open', 'updatedAt'])
+        && d.companyId is string && d.companyId.size() > 0 && d.companyId.size() <= 64
+        && d.open is bool
+        && d.updatedAt == request.time;
+    }
+
+    match /sites/{siteId} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn()
+        && isValidSite(request.resource.data)
+        && hasRole(request.resource.data.companyId, ['owner']);
+      allow update: if isValidSite(request.resource.data)
+        && request.resource.data.companyId == resource.data.companyId
+        && hasRole(resource.data.companyId, ['owner']);
+      allow delete: if hasRole(resource.data.companyId, ['owner']);
+    }
+
+    function isText(v, min, max) {
+      return v is string && v.size() >= min && v.size() <= max;
+    }
+
+    function isValidEmail(v) {
+      return v.matches('^[^@\\s]+@[^@\\s]+[.][A-Za-z]{2,}$');
+    }
+
+    // Everything the customer fills in on the form, checked on create (and kept as sent afterwards).
+    function isValidRequestForm(d) {
+      return d.keys().hasOnly(['name', 'company', 'phone', 'email', 'contactBy', 'service', 'timeline',
+          'siteAddress', 'details', 'files', 'site', 'source', 'status', 'createdAt'])
+        && d.keys().hasAll(['name', 'company', 'phone', 'email', 'contactBy', 'service', 'timeline',
+          'siteAddress', 'details', 'files', 'site', 'source', 'status', 'createdAt'])
+        && isText(d.name, 1, 100)
+        && isText(d.company, 0, 100)
+        && isText(d.phone, 0, 30)
+        && isText(d.email, 0, 120)
+        && (d.email == '' || isValidEmail(d.email))
+        && (d.phone.size() >= 7 || d.email != '')
+        && d.contactBy in ['phone', 'text', 'email']
+        && d['service'] in ['storefront', 'interior', 'shower', 'railing', 'other']
+        && d.timeline in ['', 'asap', 'soon', 'later', 'pricing']
+        && isText(d.siteAddress, 0, 200)
+        && isText(d.details, 1, 4000)
+        && d.files is int && d.files >= 0 && d.files <= 8
+        && isText(d.site, 1, 40)
+        && d.source == 'website'
+        && d.status == 'new'
+        && d.createdAt == request.time;
+    }
+
+    // The team's follow-up: only these fields change, and the customer's own words stay as sent.
+    function isValidRequestUpdate() {
+      let d = request.resource.data;
+      return d.diff(resource.data).affectedKeys().hasOnly(['status', 'notes', 'customerId', 'jobId', 'updatedAt'])
+        && d.status in ['new', 'contacted', 'converted', 'closed']
+        && isText(d.get('notes', ''), 0, 4000)
+        && isText(d.get('customerId', ''), 0, 64)
+        && isText(d.get('jobId', ''), 0, 64)
+        && d.updatedAt == request.time;
     }
 
     match /companies/{companyId} {
@@ -164,6 +250,19 @@ service cloud.firestore {
         // Revoked by an owner/admin, or used up by the person joining with it.
         allow delete: if canManage(companyId)
           || (signedIn() && getAfter(memberPath(companyId)).data.inviteId == inviteId);
+      }
+
+      // Quote requests. Anyone, signed in or not, can send one to the business the public page is
+      // connected to while it's taking requests, as a brand-new request with only the form's fields.
+      // Nobody outside the team can read them, list them or change them afterwards.
+      match /requests/{requestId} {
+        allow read: if isMember(companyId);
+        allow create: if isValidRequestForm(request.resource.data)
+          && exists(sitePath(request.resource.data.site))
+          && get(sitePath(request.resource.data.site)).data.companyId == companyId
+          && get(sitePath(request.resource.data.site)).data.open == true;
+        allow update: if canEdit(companyId) && isValidRequestUpdate();
+        allow delete: if canManage(companyId);
       }
 
       // Job files (photos, plans, documents): the file is in Cloud Storage, this is its record.

@@ -1,7 +1,7 @@
 // Screens: dashboard, customers, jobs, estimates, contracts (with change orders), pay apps, invoices, settings.
 // Each view returns { html, mount(root), live }. Live views re-render when data changes;
 // editors render once so typing isn't interrupted.
-import { state, add, update, remove, get, where, nextNumber, can, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember } from './data.js';
+import { state, add, update, remove, get, where, nextNumber, can, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
   proposalOptions, estimateAmount,
@@ -49,6 +49,7 @@ export function dashboard() {
   const overdue = unpaid.filter((i) => i.dueDate && i.dueDate < today());
   const pending = D().payApps.filter((p) => ['submitted', 'approved'].includes(p.status));
   const pendingDue = pending.reduce((s, p) => s + payAppSummary(p).currentDue, 0);
+  const newRequests = D().requests.filter((r) => r.status === 'new');
   const recentJobs = [...D().jobs].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)).slice(0, 6);
 
   return {
@@ -56,6 +57,7 @@ export function dashboard() {
     html: `
     ${header(`${esc(state.company?.name || 'Stellar Glass')}`, can.edit() ? `<a class="btn primary" href="#/jobs/new">New job</a> <a class="btn" href="#/estimates/new">New estimate</a>` : '')}
     <div class="tiles">
+      <a class="tile" href="#/requests"><span class="t-label">New requests</span><span class="t-value">${newRequests.length}</span><span class="t-sub">from the website quote page</span></a>
       <a class="tile" href="#/estimates"><span class="t-label">Open estimates</span><span class="t-value">${est.length}</span><span class="t-sub">${money(estValue)} quoted</span></a>
       <a class="tile" href="#/jobs"><span class="t-label">Active jobs</span><span class="t-value">${active.length}</span><span class="t-sub">${D().jobs.length} in all</span></a>
       <a class="tile" href="#/invoices"><span class="t-label">Invoices owed</span><span class="t-value">${money(owed)}</span><span class="t-sub ${overdue.length ? 'warn' : ''}">${unpaid.length} unpaid${overdue.length ? `, ${overdue.length} overdue` : ''}</span></a>
@@ -891,6 +893,37 @@ function mountTeam(root) {
 }
 
 // ---------- Settings ----------
+// Whether the public quote page sends requests here. Only the owner can turn it on or pause it.
+async function mountSite(box) {
+  const show = async () => {
+    let site;
+    try { site = await readSite(); } catch (e) { box.innerHTML = `<span class="muted small">Couldn't check: ${esc(e.message)}</span>`; return; }
+    const ours = site?.companyId === state.companyId;
+    const status = !site ? 'Not turned on yet. The page asks people to call or email instead.'
+      : !ours ? 'Connected to a different business.'
+        : site.open ? '<b class="ok">On.</b> Requests come to this business.' : '<b class="warn">Paused.</b> The page asks people to call or email instead.';
+    const button = !can.manage() || (site && !ours) ? ''
+      : site?.open ? '<button type="button" class="btn small" data-open="0">Pause requests</button>'
+        : `<button type="button" class="btn small primary" data-open="1">${site ? 'Turn back on' : 'Turn on website requests'}</button>`;
+    box.innerHTML = `<span class="small">${status}</span> ${button}
+      <button type="button" class="btn small" data-copy>Copy link</button>
+      ${!can.manage() && (!site || ours) ? '<span class="muted small">Only the owner can turn this on or off.</span>' : ''}`;
+  };
+  box.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.hasAttribute('data-copy')) {
+      try { await navigator.clipboard.writeText(siteLink()); toast('Link copied'); } catch { prompt('Copy this link:', siteLink()); }
+      return;
+    }
+    b.disabled = true;
+    const open = b.dataset.open === '1';
+    if (await attempt(() => setSiteOpen(open), open ? 'Website requests are on' : 'Website requests paused') !== null) show();
+    else b.disabled = false;
+  });
+  show();
+}
+
 export function settings() {
   if (!state.company) return { waiting: true, html: '<p class="muted">Loading…</p>' };
   const c = state.company;
@@ -914,6 +947,10 @@ export function settings() {
         <div class="span2"><button class="btn primary">Save company</button></div>
       </fieldset>
     </form>
+    <div class="card"><h2>Website quote requests</h2>
+      <p class="small">Customers can ask for a quote at <a href="${esc(siteLink())}" target="_blank" rel="noopener">${esc(siteLink())}</a>, with photos or plans. Link to it from your website or send it to customers. What they send shows up under <a href="#/requests">Requests</a>.</p>
+      <div id="site" class="row"><span class="muted small">Checking…</span></div>
+    </div>
     <div class="card"><h2>Your account</h2>
       <p>${esc(u.displayName || '')} ${esc(u.email || u.phoneNumber || '')}<br><span class="muted small">Role: ${esc(state.role)} · signed in with ${esc(u.providerData.map((p) => ({ 'google.com': 'Google', password: 'email and password', phone: 'phone' }[p.providerId] || p.providerId)).join(', '))}</span></p>
     </div>
@@ -938,6 +975,7 @@ export function settings() {
         await attempt(() => updateCompany(formData(e.target)), 'Company saved');
       });
       mountTeam(root);
+      mountSite(root.querySelector('#site'));
       const box = root.querySelector('#transfer');
       if (!box) return;
       listMembers().then((members) => {

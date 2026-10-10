@@ -1,10 +1,11 @@
 // Company-scoped Firestore access. Every record lives at companies/{companyId}/{collection}/{id}.
 import { db } from './firebase.js';
+import { SITE_ID } from './brand.js';
 import {
   doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch, serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices'];
+export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices', 'requests'];
 
 export const state = {
   user: null,
@@ -163,6 +164,18 @@ export async function joinCompany(companyId, inviteId) {
   await setDoc(doc(db, 'users', user.uid), { companyId }, { merge: true });
   return loadCompany(user);
 }
+
+// ---------- Public quote page ----------
+// sites/{SITE_ID} says which business the public page (quote.html) sends requests to. Anyone can read it.
+export async function readSite() {
+  const snap = await getDoc(doc(db, 'sites', SITE_ID));
+  return snap.exists() ? snap.data() : null;
+}
+
+// Owner only: send website requests to this business, or pause them.
+export const setSiteOpen = (open) => setDoc(doc(db, 'sites', SITE_ID), { companyId: state.companyId, open, updatedAt: serverTimestamp() });
+
+export const siteLink = () => `${location.origin}/quote`;
 
 export const get = (c, id) => state.data[c].find((r) => r.id === id);
 export const where = (c, field, value) => state.data[c].filter((r) => r[field] === value);
