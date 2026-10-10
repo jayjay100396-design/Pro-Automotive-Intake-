@@ -47,8 +47,13 @@ export function readLines(container) {
 }
 
 let toastTimer;
+let toastEl;
 export function toast(text, isError = false) {
-  const el = document.getElementById('toast');
+  // Kept by reference: it may sit inside a dialog that the page later removes.
+  const el = toastEl || (toastEl = document.getElementById('toast'));
+  // An open dialog (the file viewer) sits above the page, so show the message inside it.
+  const host = document.querySelector('dialog[open]') || document.body;
+  if (el.parentElement !== host) host.append(el);
   el.textContent = text;
   el.className = 'toast show' + (isError ? ' err' : '');
   clearTimeout(toastTimer);

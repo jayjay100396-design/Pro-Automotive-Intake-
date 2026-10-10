@@ -1,6 +1,6 @@
 # Stellar Glass
 
-Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estimates, contracts, change orders, AIA G702/G703 pay apps and invoices. Runs on Firebase (Authentication + Firestore + Hosting), with no build step.
+Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estimates, contracts, change orders, AIA G702/G703 pay apps and invoices. Runs on Firebase (Authentication + Firestore + Storage + Hosting), with no build step.
 
 - **Sign-in:** email and password, Google, or phone (SMS code).
 - **Estimates:** storefront and shower templates, glass billed by square foot with a per-lite minimum, markup, minimum charge, tax on taxable lines, printable quote.
@@ -9,6 +9,8 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 - **Pay apps:** G703 continuation sheet (previous, this period, stored, %, balance, retainage) and G702 summary, printable with a notary block.
 - **Invoices:** simple invoices, one click from a pay app, or deposit and final invoices from a proposal; paid and unpaid tracking.
 - **Online payments (Stripe):** email an itemized Stripe invoice with a Pay button (card or bank), or copy its payment link; it turns Paid when the customer pays. See `STRIPE_SETUP.md`.
+- **Files:** photos, plans, contracts, permits and forms on each job, sorted by category and searchable, with an optional copy in each person's Google Drive (`Stellar Glass Jobs / customer / job`).
+- **Quote requests:** a public page at `/quote` (no sign-in) where customers send a request with photos or plans; it lands under Requests, and one click turns it into a customer and a lead job. The **Website** page lets the owner or an admin upload the page's photos and gallery.
 - **Team:** invite links for admin, staff or the accountant (reads everything, handles pay apps and invoices); change roles, remove people, transfer ownership.
 
 ## Layout
@@ -17,7 +19,9 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 |---|---|
 | `public/` | The web app (plain ES modules; Firebase SDK from the official CDN) |
 | `public/js/calc.js` | Estimate, invoice and G702/G703 math (unit tested) |
-| `firestore.rules` | Security rules: company-scoped data and roles |
+| `public/quote.html`, `js/site.js`, `css/site.css` | The public quote request page; `js/requests.js` is the Requests screen in the app and `js/website.js` the Website photos page |
+| `public/js/files.js`, `drive.js` | Job files (Cloud Storage) and the Google Drive copies |
+| `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
 | `functions/` | Cloud Functions: Stripe invoices and the Stripe webhook |
 | `test/`, `functions/test/` | Rules tests (emulator), money-math tests, Stripe tests |
 | `FIREBASE_SETUP.md` | Console steps, deploy and local dev |

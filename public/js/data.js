@@ -1,10 +1,11 @@
 // Company-scoped Firestore access. Every record lives at companies/{companyId}/{collection}/{id}.
 import { db } from './firebase.js';
+import { SITE_ID } from './brand.js';
 import {
   doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch, serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices'];
+export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices', 'requests'];
 
 export const state = {
   user: null,
@@ -76,12 +77,21 @@ const ref = (c, id) => doc(db, 'companies', state.companyId, c, id);
 export const add = (c, data) => addDoc(col(c), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
 export const update = (c, id, data) => updateDoc(ref(c, id), { ...data, updatedAt: serverTimestamp() });
 export const remove = (c, id) => deleteDoc(ref(c, id));
+// For records whose id is needed before they're written, e.g. a file's storage path.
+export const newId = (c) => doc(col(c)).id;
+export const put = (c, id, data) => setDoc(ref(c, id), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
 export const updateCompany = (data) => updateDoc(doc(db, 'companies', state.companyId), data);
 
 // Remembers who prepares proposals, so the next one is pre-filled. Private to this user.
 export function savePreparedBy(preparedBy) {
   state.profile = { ...state.profile, preparedBy };
   return setDoc(doc(db, 'users', state.user.uid), { preparedBy }, { merge: true }).catch((e) => console.warn(e));
+}
+
+// Saves a setting on the user's own profile, e.g. whether new uploads also go to Google Drive.
+export function saveProfile(fields) {
+  state.profile = { ...state.profile, ...fields };
+  return setDoc(doc(db, 'users', state.user.uid), fields, { merge: true }).catch((e) => console.warn(e));
 }
 
 export async function listMembers() {
@@ -154,6 +164,18 @@ export async function joinCompany(companyId, inviteId) {
   await setDoc(doc(db, 'users', user.uid), { companyId }, { merge: true });
   return loadCompany(user);
 }
+
+// ---------- Public quote page ----------
+// sites/{SITE_ID} says which business the public page (quote.html) sends requests to. Anyone can read it.
+export async function readSite() {
+  const snap = await getDoc(doc(db, 'sites', SITE_ID));
+  return snap.exists() ? snap.data() : null;
+}
+
+// Owner only: send website requests to this business, or pause them.
+export const setSiteOpen = (open) => setDoc(doc(db, 'sites', SITE_ID), { companyId: state.companyId, open, updatedAt: serverTimestamp() });
+
+export const siteLink = () => `${location.origin}/quote`;
 
 export const get = (c, id) => state.data[c].find((r) => r.id === id);
 export const where = (c, field, value) => state.data[c].filter((r) => r[field] === value);

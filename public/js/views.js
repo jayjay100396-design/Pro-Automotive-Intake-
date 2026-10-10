@@ -1,13 +1,14 @@
 // Screens: dashboard, customers, jobs, estimates, contracts (with change orders), pay apps, invoices, settings.
 // Each view returns { html, mount(root), live }. Live views re-render when data changes;
 // editors render once so typing isn't interrupted.
-import { state, add, update, remove, get, where, nextNumber, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember } from './data.js';
+import { state, add, update, remove, get, where, nextNumber, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
   proposalOptions, estimateAmount, proposalDeposit, depositSentence, termsWithoutDeposit, proposalTerms, proposalPayment,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
 import { proposalBilling, mountProposalBilling, stripeCard, mountStripeCard, paymentsSettings, mountPaymentsSettings } from './billing.js';
+import { fileBrowser, countJobFiles } from './files.js';
 
 const go = (hash) => { location.hash = hash; };
 const D = () => state.data;
@@ -35,8 +36,17 @@ async function attempt(fn, ok) {
 }
 const confirmDelete = (what) => confirm(`Delete this ${what}? This can't be undone.`);
 
+const TILE_ICONS = {
+  requests: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  estimates: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  jobs: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
+  invoices: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  payapps: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>',
+};
+const tileIcon = (cls, k) => `<span class="t-icon ${cls}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TILE_ICONS[k]}</svg></span>`;
+
 function header(title, actions = '') {
-  return `<div class="page-head"><h1>${title}</h1><div class="actions">${actions}</div></div>`;
+  return `<div class="page-head"><div class="page-title"><h1>${title}</h1></div><div class="actions">${actions}</div></div>`;
 }
 
 // ---------- Dashboard ----------
@@ -49,6 +59,16 @@ export function dashboard() {
   const overdue = unpaid.filter((i) => i.dueDate && i.dueDate < today());
   const pending = D().payApps.filter((p) => ['submitted', 'approved'].includes(p.status));
   const pendingDue = pending.reduce((s, p) => s + payAppSummary(p).currentDue, 0);
+  const newRequests = D().requests.filter((r) => r.status === 'new');
+  const signed = D().contracts.filter((c) => ['signed', 'sent'].includes(c.status)).length;
+  const pendingCOs = D().changeOrders.filter((c) => c.status === 'pending').length;
+  const flow = [
+    ['estimates', 'Estimate', `${est.length} open`],
+    ['contracts', 'Contract', `${signed} sent or signed`],
+    ['contracts', 'Change order', `${pendingCOs} pending`],
+    ['payapps', 'Pay app', `${pending.length} awaiting payment`],
+    ['invoices', 'Invoice', `${unpaid.length} unpaid`],
+  ];
   const recentJobs = [...D().jobs].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)).slice(0, 6);
 
   return {
@@ -56,11 +76,15 @@ export function dashboard() {
     html: `
     ${header(`${esc(state.company?.name || 'Stellar Glass')}`, can.edit() ? `<a class="btn primary" href="#/jobs/new">New job</a> <a class="btn" href="#/estimates/new">New estimate</a>` : '')}
     <div class="tiles">
-      <a class="tile" href="#/estimates"><span class="t-label">Open estimates</span><span class="t-value">${est.length}</span><span class="t-sub">${money(estValue)} quoted</span></a>
-      <a class="tile" href="#/jobs"><span class="t-label">Active jobs</span><span class="t-value">${active.length}</span><span class="t-sub">${D().jobs.length} in all</span></a>
-      <a class="tile" href="#/invoices"><span class="t-label">Invoices owed</span><span class="t-value">${money(owed)}</span><span class="t-sub ${overdue.length ? 'warn' : ''}">${unpaid.length} unpaid${overdue.length ? `, ${overdue.length} overdue` : ''}</span></a>
-      <a class="tile" href="#/payapps"><span class="t-label">Pay apps pending</span><span class="t-value">${money(pendingDue)}</span><span class="t-sub">${pending.length} submitted or approved</span></a>
+      <a class="tile" href="#/requests">${tileIcon('i-green', 'requests')}<span class="t-label">New requests</span><span class="t-value">${newRequests.length}</span><span class="t-sub">from the website quote page</span></a>
+      <a class="tile" href="#/estimates">${tileIcon('i-cyan', 'estimates')}<span class="t-label">Open estimates</span><span class="t-value">${est.length}</span><span class="t-sub">${money(estValue)} quoted</span></a>
+      <a class="tile" href="#/jobs">${tileIcon('i-blue', 'jobs')}<span class="t-label">Active jobs</span><span class="t-value">${active.length}</span><span class="t-sub">${D().jobs.length} in all</span></a>
+      <a class="tile" href="#/invoices">${tileIcon('i-amber', 'invoices')}<span class="t-label">Invoices owed</span><span class="t-value">${money(owed)}</span><span class="t-sub ${overdue.length ? 'warn' : ''}">${unpaid.length} unpaid${overdue.length ? `, ${overdue.length} overdue` : ''}</span></a>
+      <a class="tile" href="#/payapps">${tileIcon('i-purple', 'payapps')}<span class="t-label">Pay apps pending</span><span class="t-value">${money(pendingDue)}</span><span class="t-sub">${pending.length} submitted or approved</span></a>
     </div>
+    <nav class="flow" aria-label="Job workflow">
+      ${flow.map(([href, name, note], i) => `${i ? '<span class="flow-arrow" aria-hidden="true">→</span>' : ''}<a href="#/${href}"><span class="step-num">${i + 1}</span><span><strong>${name}</strong><small>${note}</small></span></a>`).join('')}
+    </nav>
     <div class="card"><h2>Recent jobs</h2>
       ${recentJobs.length ? `<table class="list"><thead><tr><th>Job</th><th>Customer</th><th>Type</th><th>Status</th></tr></thead><tbody>
       ${recentJobs.map((j) => `<tr data-href="#/jobs/${esc(j.id)}"><td>${esc(j.name)}</td><td>${esc(customerName(j.customerId))}</td><td>${esc(JOB_TYPES.find((t) => t[0] === j.type)?.[1] || '')}</td><td>${badge(j.status)}</td></tr>`).join('')}
@@ -129,16 +153,30 @@ export function jobs() {
   };
 }
 
+// The job's tabs: details and paperwork, and its files.
+const jobTabs = (id, tab) => `<nav class="tabs" aria-label="Job sections">
+  <a href="#/jobs/${esc(id)}" class="${tab === 'files' ? '' : 'on'}">Details</a>
+  <a href="#/jobs/${esc(id)}?tab=files" class="${tab === 'files' ? 'on' : ''}">Files <span data-file-count></span></a></nav>`;
+
 export function jobEdit(id, params) {
   const isNew = id === 'new';
   const j = isNew ? { status: 'lead', type: 'storefront', customerId: params.get('customer') || '' } : get('jobs', id);
   if (!j) return { waiting: true, html: '<p class="muted">Loading…</p>' };
+  if (!isNew && params.get('tab') === 'files') {
+    const files = fileBrowser({ jobId: id });
+    return {
+      html: `${header(esc(j.name), `<span class="muted">${esc(customerName(j.customerId))}</span>`)}${jobTabs(id, 'files')}${files.html}`,
+      mount: files.mount,
+      unmount: files.unmount,
+    };
+  }
   const related = (c) => (isNew ? [] : where(c, 'jobId', id).sort(sortNum));
   const ests = related('estimates'); const cons = related('contracts'); const pays = related('payApps'); const invs = related('invoices');
   const custOpts = options([['', 'Choose a customer…'], ['__new', '+ Add a new customer'], ...D().customers.map((c) => [c.id, c.name + (c.company ? ` (${c.company})` : '')])], j.customerId);
 
   return {
     html: `${header(isNew ? 'New job' : esc(j.name), !isNew && can.remove() ? '<button class="btn danger" id="del">Delete</button>' : '')}
+    ${isNew ? '' : jobTabs(id, 'details')}
     <form class="card grid2" id="f">
       <label>Job name <input name="name" value="${esc(j.name)}" placeholder="e.g. Publix #1432 storefront" required></label>
       <label>Customer <select name="customerId" id="cust">${custOpts}</select></label>
@@ -166,6 +204,7 @@ export function jobEdit(id, params) {
         ${invs.length ? `<ul class="links">${invs.map((i) => `<li><a href="#/invoices/${esc(i.id)}">Invoice ${esc(i.number)}</a> ${badge(i.status)} <span class="num">${money(invoiceTotals(i).total)}</span></li>`).join('')}</ul>` : '<p class="muted">None yet.</p>'}</div>
     </div>`}`,
     mount(root) {
+      if (!isNew) countJobFiles(id).then((n) => { const c = root.querySelector('[data-file-count]'); if (c && n) c.textContent = `(${n})`; }).catch(() => {});
       const cust = root.querySelector('#cust');
       cust.addEventListener('change', () => root.querySelector('#newcust').classList.toggle('hidden', cust.value !== '__new'));
       root.querySelector('#f').addEventListener('submit', async (e) => {
@@ -187,6 +226,12 @@ export function jobEdit(id, params) {
       });
     },
   };
+}
+
+// ---------- Files across all jobs ----------
+export function filesPage(params) {
+  const files = fileBrowser({ jobId: null, startJob: params.get('job') || '' });
+  return { html: `${header('Files')}${files.html}`, mount: files.mount, unmount: files.unmount };
 }
 
 // ---------- Estimates ----------
@@ -911,6 +956,37 @@ function mountTeam(root) {
 }
 
 // ---------- Settings ----------
+// Whether the public quote page sends requests here. Only the owner can turn it on or pause it.
+async function mountSite(box) {
+  const show = async () => {
+    let site;
+    try { site = await readSite(); } catch (e) { box.innerHTML = `<span class="muted small">Couldn't check: ${esc(e.message)}</span>`; return; }
+    const ours = site?.companyId === state.companyId;
+    const status = !site ? 'Not turned on yet. The page asks people to call or email instead.'
+      : !ours ? 'Connected to a different business.'
+        : site.open ? '<b class="ok">On.</b> Requests come to this business.' : '<b class="warn">Paused.</b> The page asks people to call or email instead.';
+    const button = !can.manage() || (site && !ours) ? ''
+      : site?.open ? '<button type="button" class="btn small" data-open="0">Pause requests</button>'
+        : `<button type="button" class="btn small primary" data-open="1">${site ? 'Turn back on' : 'Turn on website requests'}</button>`;
+    box.innerHTML = `<span class="small">${status}</span> ${button}
+      <button type="button" class="btn small" data-copy>Copy link</button>
+      ${!can.manage() && (!site || ours) ? '<span class="muted small">Only the owner can turn this on or off.</span>' : ''}`;
+  };
+  box.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.hasAttribute('data-copy')) {
+      try { await navigator.clipboard.writeText(siteLink()); toast('Link copied'); } catch { prompt('Copy this link:', siteLink()); }
+      return;
+    }
+    b.disabled = true;
+    const open = b.dataset.open === '1';
+    if (await attempt(() => setSiteOpen(open), open ? 'Website requests are on' : 'Website requests paused') !== null) show();
+    else b.disabled = false;
+  });
+  show();
+}
+
 export function settings() {
   if (!state.company) return { waiting: true, html: '<p class="muted">Loading…</p>' };
   const c = state.company;
@@ -934,6 +1010,10 @@ export function settings() {
         <div class="span2"><button class="btn primary">Save company</button></div>
       </fieldset>
     </form>
+    <div class="card"><h2>Website quote requests</h2>
+      <p class="small">Customers can ask for a quote at <a href="${esc(siteLink())}" target="_blank" rel="noopener">${esc(siteLink())}</a>, with photos or plans. Link to it from your website or send it to customers. What they send shows up under <a href="#/requests">Requests</a>. Change the page's photos on the <a href="#/website">Website</a> page.</p>
+      <div id="site" class="row"><span class="muted small">Checking…</span></div>
+    </div>
     <div class="card"><h2>Your account</h2>
       <p>${esc(u.displayName || '')} ${esc(u.email || u.phoneNumber || '')}<br><span class="muted small">Role: ${esc(state.role)} · signed in with ${esc(u.providerData.map((p) => ({ 'google.com': 'Google', password: 'email and password', phone: 'phone' }[p.providerId] || p.providerId)).join(', '))}</span></p>
     </div>
@@ -960,6 +1040,7 @@ export function settings() {
       });
       mountTeam(root);
       mountPaymentsSettings(root);
+      mountSite(root.querySelector('#site'));
       const box = root.querySelector('#transfer');
       if (!box) return;
       listMembers().then((members) => {

@@ -5,6 +5,8 @@ import { state, loadCompany, createCompany, stopWatching, onChange, readInvite, 
 import { renderSignIn, signOut } from './auth.js';
 import * as V from './views.js';
 import * as P from './print.js';
+import * as R from './requests.js';
+import { websitePage } from './website.js';
 import { esc, toast } from './ui.js';
 import { BRAND, logoHtml } from './brand.js';
 
@@ -12,10 +14,13 @@ const root = document.getElementById('app');
 
 const routes = [
   [/^$/, () => V.dashboard()],
+  [/^requests$/, () => R.requestList()],
+  [/^requests\/([^/]+)$/, (m) => R.requestView(m[1])],
   [/^customers$/, () => V.customers()],
   [/^customers\/([^/]+)$/, (m, q) => V.customerEdit(m[1], q)],
   [/^jobs$/, () => V.jobs()],
   [/^jobs\/([^/]+)$/, (m, q) => V.jobEdit(m[1], q)],
+  [/^files$/, (m, q) => V.filesPage(q)],
   [/^estimates$/, () => V.estimates()],
   [/^estimates\/([^/]+)\/print$/, (m) => P.estimateDoc(m[1])],
   [/^estimates\/([^/]+)$/, (m, q) => V.estimateEdit(m[1], q)],
@@ -29,25 +34,120 @@ const routes = [
   [/^invoices$/, () => V.invoices()],
   [/^invoices\/([^/]+)\/print$/, (m) => P.invoiceDoc(m[1])],
   [/^invoices\/([^/]+)$/, (m, q) => V.invoiceEdit(m[1], q)],
+  [/^website$/, () => websitePage()],
   [/^settings$/, () => V.settings()],
 ];
 
-const NAV = [['', 'Dashboard'], ['jobs', 'Jobs'], ['customers', 'Customers'], ['estimates', 'Estimates'], ['contracts', 'Contracts'], ['payapps', 'Pay apps'], ['invoices', 'Invoices'], ['settings', 'Settings']];
+const NAV = [['', 'Dashboard'], ['requests', 'Requests'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates'], ['contracts', 'Contracts'], ['payapps', 'Pay apps'], ['invoices', 'Invoices'], ['website', 'Website'], ['settings', 'Settings']];
+
+// Sidebar groups: [label, [[section, link text, icon]]]. Icons are 24px stroke paths.
+const ICONS = {
+  '': '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+  requests: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  jobs: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
+  files: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  customers: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  estimates: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+  contracts: '<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  payapps: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>',
+  invoices: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  website: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+};
+const GROUPS = [
+  ['Management', [['', 'Dashboard'], ['requests', 'Requests'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates']]],
+  ['Billing & contracts', [['contracts', 'Contracts'], ['payapps', 'Pay apps (G702)'], ['invoices', 'Invoices']]],
+  ['Admin', [['website', 'Website'], ['settings', 'Settings']]],
+];
+// One line under each list page's title.
+const SUBTITLES = {
+  '': 'Open bids, active jobs and money owed at a glance.',
+  requests: 'Quote requests from the website, ready to turn into jobs.',
+  jobs: 'Storefront and shower jobs, from lead to closeout.',
+  files: 'Photos, plans and paperwork for every job.',
+  customers: 'General contractors, property owners and homeowners.',
+  estimates: 'Proposals with line items, price options and deposits.',
+  contracts: 'Contracts and their change orders.',
+  payapps: 'AIA G702/G703 progress billing with retainage.',
+  invoices: 'Simple invoices and what is still owed.',
+  website: 'Photos on your public quote page. Upload sharp ones of your own work.',
+  settings: 'Company profile, team access and your account.',
+};
+const icon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k]}</svg>`;
+
+// Dark office mode or daylight mode, remembered on this device.
+const THEME_KEY = 'stellar-theme';
+const theme = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+const themeButton = () => (theme() === 'light'
+  ? '<span aria-hidden="true">🌙</span><span class="theme-label">Dark mode</span>'
+  : '<span aria-hidden="true">☀️</span><span class="theme-label">Daylight mode</span>');
+function toggleTheme() {
+  const next = theme() === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem(THEME_KEY, next); } catch { /* private mode */ }
+  document.querySelectorAll('[data-theme-toggle]').forEach((b) => { b.innerHTML = themeButton(); });
+}
+
+const initials = (s) => String(s || '').split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
 
 let current = null;
+// Views with their own listeners (the file browser) clean up when you leave them.
+function setCurrent(view) {
+  current?.unmount?.();
+  current = view;
+}
 
 function shell() {
   const u = state.user;
+  const who = u.displayName || u.email || u.phoneNumber || '';
+  const name = esc(state.company?.name || 'Stellar Glass');
   root.innerHTML = `
-  <header class="topbar no-print">
-    <a class="brand" href="#/" title="${esc(state.company?.name || 'Stellar Glass')}">${logoHtml('header-logo')}</a>
-    <button class="icon menu" id="menu" aria-label="Menu">☰</button>
-    <nav id="nav">${NAV.map(([h, l]) => `<a href="#/${h}" data-nav="${h}">${l}</a>`).join('')}</nav>
-    <div class="user"><span class="small muted">${esc(u.displayName || u.email || u.phoneNumber || '')}</span> <button class="btn small" id="signout">Sign out</button></div>
-  </header>
-  <main id="view"></main>`;
+  <div class="app" id="shell">
+    <aside class="sidebar no-print" aria-label="Main navigation">
+      <a class="brand" href="#/" title="${name}">${logoHtml()}<span class="brand-sub">Installation &amp; glazing</span></a>
+      ${GROUPS.map(([label, links]) => `<div class="nav-label">${esc(label)}</div>
+      <nav class="nav">${links.map(([h, l]) => `<a href="#/${h}" data-nav="${h}">${icon(h)}<span>${esc(l)}</span><span class="nav-count hidden" data-count="${h}"></span></a>`).join('')}</nav>`).join('')}
+      <div class="side-foot">
+        <button class="theme-btn" data-theme-toggle title="Switch between dark office mode and high-contrast daylight mode">${themeButton()}</button>
+        <div class="user-pill">
+          <div class="avatar">${esc(initials(u.displayName || u.email))}</div>
+          <div class="user-meta"><strong>${esc(who)}</strong><small>${esc(state.role || '')}</small></div>
+          <button class="signout" id="signout">Sign out</button>
+        </div>
+      </div>
+    </aside>
+    <div class="scrim no-print" id="scrim"></div>
+    <div class="content">
+      <header class="mobilebar no-print">
+        <button class="menu" id="menu" aria-label="Menu">☰</button>
+        <a class="brand" href="#/">${logoHtml()}</a>
+        <button class="theme-btn" data-theme-toggle>${themeButton()}</button>
+      </header>
+      <main id="view"></main>
+    </div>
+  </div>`;
   root.querySelector('#signout').addEventListener('click', () => signOut());
-  root.querySelector('#menu').addEventListener('click', () => root.querySelector('#nav').classList.toggle('open'));
+  root.querySelector('#menu').addEventListener('click', () => root.querySelector('#shell').classList.toggle('nav-open'));
+  root.querySelector('#scrim').addEventListener('click', () => root.querySelector('#shell').classList.remove('nav-open'));
+  root.querySelectorAll('[data-theme-toggle]').forEach((b) => b.addEventListener('click', toggleTheme));
+}
+
+// Live counts beside the sidebar links.
+function updateCounts() {
+  const d = state.data;
+  const set = (key, n, text, cls = '') => {
+    const el = document.querySelector(`[data-count="${key}"]`);
+    if (!el) return;
+    el.textContent = text ?? String(n);
+    el.className = `nav-count ${cls}${n ? '' : ' hidden'}`;
+  };
+  set('requests', R.newRequestCount(), null, 'accent');
+  set('jobs', d.jobs.filter((j) => !['complete', 'closed'].includes(j.status)).length);
+  set('estimates', d.estimates.filter((e) => ['draft', 'sent'].includes(e.status)).length, null, 'accent');
+  const openApps = d.payApps.filter((p) => ['submitted', 'approved'].includes(p.status)).length;
+  set('payapps', openApps, `${openApps} open`, 'amber');
+  const unpaid = d.invoices.filter((i) => i.status === 'unpaid').length;
+  set('invoices', unpaid, `${unpaid} unpaid`, 'amber');
 }
 
 function route() {
@@ -56,15 +156,18 @@ function route() {
   const params = new URLSearchParams(qs || '');
   const match = routes.find(([re]) => re.test(path));
   const view = match ? match[1](path.match(match[0]), params) : { html: '<p>Page not found. <a href="#/">Go to the dashboard</a>.</p>' };
-  current = view;
+  setCurrent(view);
   const el = document.getElementById('view');
   el.innerHTML = view.html;
   el.classList.toggle('print-view', !!view.title);
   view.mount?.(el);
   document.title = `${view.title || NAV.find(([h]) => path.split('/')[0] === h)?.[1] || 'Stellar Glass'} · Stellar Glass`;
   const section = path.split('/')[0];
+  const title = el.querySelector('.page-head .page-title');
+  if (title && !title.querySelector('p') && path === section && SUBTITLES[section]) title.insertAdjacentHTML('beforeend', `<p>${esc(SUBTITLES[section])}</p>`);
   document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === section));
-  document.getElementById('nav')?.classList.remove('open');
+  document.getElementById('shell')?.classList.remove('nav-open');
+  updateCounts();
 }
 
 // Clicking a table row opens its record.
@@ -77,6 +180,7 @@ window.addEventListener('hashchange', route);
 
 let pending = null;
 onChange(() => {
+  updateCounts();
   // Brand name may change; list views refresh live; editors refresh only while waiting for their record.
   if (!current || !(current.live || current.waiting)) return;
   cancelAnimationFrame(pending);
@@ -139,7 +243,7 @@ async function showJoin(user) {
     toast('That invite link has expired or was already used. Ask for a new one.', true);
     return false;
   }
-  current = null;
+  setCurrent(null);
   root.innerHTML = `
   <div class="auth-wrap"><div class="card auth-card stack">
     <div class="auth-logo">${logoHtml()}</div>
@@ -169,11 +273,12 @@ async function showJoin(user) {
 function start() {
   shell();
   route();
+  updateCounts();
 }
 
 onAuthStateChanged(auth, async (user) => {
+  setCurrent(null);
   stopWatching();
-  current = null;
   if (!user) {
     state.user = null;
     renderSignIn(root);

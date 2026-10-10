@@ -3,13 +3,14 @@
   "private": true,
   "scripts": {
     "postinstall": "npm --prefix functions install --no-audit --no-fund",
-    "dev": "firebase emulators:start --only auth,firestore,hosting --project demo-stellar-glass",
-    "dev:stripe": "firebase emulators:start --only auth,firestore,hosting,functions --project demo-stellar-glass",
+    "dev": "firebase emulators:start --only auth,firestore,storage,hosting --project demo-stellar-glass",
+    "dev:stripe": "firebase emulators:start --only auth,firestore,storage,hosting,functions --project demo-stellar-glass",
     "test": "firebase emulators:exec --only firestore,storage --project demo-stellar-glass \"mocha test functions/test\"",
     "test:calc": "mocha test/calc.test.mjs functions/test/lines.test.js",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage",
-    "deploy": "firebase deploy --only firestore:rules,firestore:indexes,hosting",
-    "deploy:functions": "firebase deploy --only functions"
+    "deploy": "firebase deploy --only firestore:rules,firestore:indexes,storage,hosting",
+    "deploy:functions": "firebase deploy --only functions",
+    "storage:cors": "gcloud storage buckets update gs://stellar-glass-jobs.firebasestorage.app --cors-file=cors.json"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.2",
