@@ -58,7 +58,7 @@ Start in Stripe's **test mode** (Stripe calls it a sandbox). Nothing real is cha
    ```bash
    npm install                  # also installs the server code's packages (functions/)
    npm test
-   npm run deploy               # rules, indexes and the web app
+   npm run deploy               # Firestore and Storage rules, indexes and the web app
    npm run deploy:functions     # the Stripe server code
    ```
 
