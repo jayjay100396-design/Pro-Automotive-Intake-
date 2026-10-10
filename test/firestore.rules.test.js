@@ -82,6 +82,26 @@ describe('Firestore rules', function () {
     await assertFails(setDoc(doc(f, 'companies/other/invoices/x'), { total: 1 }));
   });
 
+  it('keeps the Stripe fields for the server', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const f = ctx.firestore();
+      await setDoc(doc(f, 'companies/stellar/invoices/i1'), { number: 1001, status: 'unpaid', stripe: { status: 'open', invoiceId: 'in_1' } });
+      await setDoc(doc(f, 'companies/stellar/customers/c1'), { name: 'GC', stripeCustomerIds: { test: 'cus_1' } });
+    });
+    for (const uid of ['wes', 'cpa']) {
+      const f = db(uid);
+      // Normal edits still work, and leave the Stripe fields alone.
+      await assertSucceeds(updateDoc(doc(f, 'companies/stellar/invoices/i1'), { notes: 'Thanks', status: 'paid' }));
+      await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/i1'), { 'stripe.status': 'paid' }));
+      await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/i1'), { stripe: null }));
+      await assertFails(setDoc(doc(f, `companies/stellar/invoices/new-${uid}`), { number: 1002, stripe: { status: 'paid' } }));
+      await assertSucceeds(setDoc(doc(f, `companies/stellar/invoices/ok-${uid}`), { number: 1003 }));
+    }
+    await assertSucceeds(updateDoc(doc(db('crew'), 'companies/stellar/customers/c1'), { email: 'gc@example.com' }));
+    await assertFails(updateDoc(doc(db('crew'), 'companies/stellar/customers/c1'), { 'stripeCustomerIds.test': 'cus_2' }));
+    await assertFails(setDoc(doc(db('crew'), 'companies/stellar/customers/c2'), { name: 'X', stripeCustomerIds: { live: 'cus_3' } }));
+  });
+
   it('lets the owner invite an accountant', async () => {
     await assertSucceeds(setDoc(doc(db('wes'), 'companies/stellar/members/newcpa'), { role: 'accountant' }));
   });

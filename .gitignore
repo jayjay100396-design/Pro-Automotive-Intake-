@@ -1,3 +1,6 @@
 node_modules/
 .firebase/
 *-debug.log
+# Stripe test keys for the local emulator (STRIPE_SETUP.md)
+functions/.secret.local
+functions/.env.local

@@ -1,6 +1,6 @@
 // Printable documents. Each opens as a clean page; "Print / Save PDF" uses the browser's print dialog.
 import { state, get, where } from './data.js';
-import { estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, money, pctFmt, proposalOptions } from './calc.js';
+import { estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, money, pctFmt, proposalOptions, proposalTerms } from './calc.js';
 import { payAppSummary, g702Table } from './views.js';
 import { esc, fmtDate } from './ui.js';
 import { websiteUrl } from './brand.js';
@@ -59,6 +59,7 @@ export function estimateDoc(id) {
   const addr = String(c.address || '').replace(/,\s*(?=[^,]+,\s*[A-Z]{2}\b)/, '<br>');
   const phones = [c.phone && `Office ${esc(c.phone)}`, c.cell && `Cell ${esc(c.cell)}`].filter(Boolean).join(' · ');
   const opts = proposalOptions(e);
+  const terms = proposalTerms(e);
 
   return page(`Proposal ${e.number}`, `
     <header class="prop-band">
@@ -87,7 +88,7 @@ export function estimateDoc(id) {
     </div>`).join('')}
     ${e.priceNote ? `<p class="prop-note">${esc(e.priceNote)}</p>` : ''}
     ${e.exclusions ? `<p class="prop-excl"><b>Exclude:</b> ${esc(e.exclusions)}</p>` : ''}
-    ${e.terms ? `<div class="prop-terms">${esc(e.terms).replace(/\n/g, '<br>')}</div>` : ''}
+    ${terms ? `<div class="prop-terms">${esc(terms).replace(/\n/g, '<br>')}</div>` : ''}
     <section class="prop-sign">
       <div>
         <div class="label">Proposal prepared by</div>

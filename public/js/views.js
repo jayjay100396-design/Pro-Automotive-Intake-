@@ -1,12 +1,13 @@
 // Screens: dashboard, customers, jobs, estimates, contracts (with change orders), pay apps, invoices, settings.
 // Each view returns { html, mount(root), live }. Live views re-render when data changes;
 // editors render once so typing isn't interrupted.
-import { state, add, update, remove, get, where, nextNumber, can, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
+import { state, add, update, remove, get, where, nextNumber, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
-  proposalOptions, estimateAmount,
+  proposalOptions, estimateAmount, proposalDeposit, depositSentence, termsWithoutDeposit, proposalTerms, proposalPayment,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
+import { proposalBilling, mountProposalBilling, stripeCard, mountStripeCard, paymentsSettings, mountPaymentsSettings } from './billing.js';
 import { fileBrowser, countJobFiles } from './files.js';
 
 const go = (hash) => { location.hash = hash; };
@@ -254,7 +255,10 @@ const PROPOSAL_DEFAULTS = {
   intro: 'We propose to supply and install the following in prepared openings:',
   priceNote: '*Prices subject to change due to volatility of pricing in the marketplace.',
   exclusions: 'Cleaning; Protection; brake metal flashing.',
-  terms: 'A 50% deposit is required before materials can be ordered.',
+  terms: '',
+  // The deposit sentence is printed from these (calc.js depositSentence).
+  depositType: 'percent',
+  depositValue: 50,
 };
 const OPTION_SPECS = {
   storefront: 'Aluminum Framing- Clear anodized; non-thermal; non-impact resistant\nGlass: 1" Clear Low E Tempered Insulated',
@@ -306,8 +310,11 @@ export function estimates() {
   return {
     live: true,
     html: `${header('Estimates', can.edit() ? '<a class="btn primary" href="#/estimates/new">New proposal</a>' : '')}
-    <div class="card">${rows.length ? `<table class="list"><thead><tr><th>#</th><th>Job</th><th>Customer</th><th>Date</th><th>Status</th><th class="num">Total</th></tr></thead><tbody>
-    ${rows.map((e) => `<tr data-href="#/estimates/${esc(e.id)}"><td>${esc(e.number)}</td><td>${esc(jobName(e.jobId))}</td><td>${esc(customerName(get('jobs', e.jobId)?.customerId))}</td><td>${fmtDate(e.date)}</td><td>${badge(e.status)}</td><td class="num">${money(estimateAmount(e))}</td></tr>`).join('')}
+    <div class="card">${rows.length ? `<table class="list"><thead><tr><th>#</th><th>Job</th><th>Customer</th><th>Date</th><th>Status</th><th>Payment</th><th class="num">Total</th></tr></thead><tbody>
+    ${rows.map((e) => {
+    const pay = proposalPayment(e, where('invoices', 'estimateId', e.id)).status;
+    return `<tr data-href="#/estimates/${esc(e.id)}"><td>${esc(e.number)}</td><td>${esc(jobName(e.jobId))}</td><td>${esc(customerName(get('jobs', e.jobId)?.customerId))}</td><td>${fmtDate(e.date)}</td><td>${badge(e.status)}</td><td>${pay === 'not billed' ? '' : badge(pay)}</td><td class="num">${money(estimateAmount(e))}</td></tr>`;
+  }).join('')}
     </tbody></table>` : empty('No estimates yet.')}</div>`,
   };
 }
@@ -334,6 +341,9 @@ export function estimateEdit(id, params) {
   const lines = e.lines?.length ? e.lines : PRESETS[e.template] || PRESETS.storefront;
   const hasContract = !isNew && where('contracts', 'estimateId', id).length;
   const ro = can.edit() ? '' : 'disabled';
+  // Proposals saved before the deposit field: the field takes over their typed deposit sentence.
+  const dep = proposalDeposit(e);
+  const terms = e.depositType == null ? termsWithoutDeposit(e.terms) : e.terms;
 
   return {
     html: `${header(isNew ? 'New proposal' : `Proposal ${esc(e.number)}`, `
@@ -387,7 +397,10 @@ export function estimateEdit(id, params) {
         <h2 class="span4">Terms</h2>
         <label class="span4">Price note <input name="priceNote" value="${esc(e.priceNote ?? PROPOSAL_DEFAULTS.priceNote)}"></label>
         <label class="span4">Exclude <input name="exclusions" value="${esc(e.exclusions ?? '')}" placeholder="Cleaning; Protection; brake metal flashing."></label>
-        <label class="span4">Payment terms <textarea name="terms" rows="2">${esc(e.terms)}</textarea></label>
+        <label>Deposit <input name="depositValue" type="number" step="any" min="0" value="${esc(dep.value)}"></label>
+        <label>Deposit is <select name="depositType">${options([['percent', '% of the price'], ['amount', 'a dollar amount']], dep.type)}</select></label>
+        <p class="span2 hint" id="depnote"></p>
+        <label class="span4">Other payment terms <textarea name="terms" rows="2" placeholder="e.g. Balance due on completion.">${esc(terms)}</textarea></label>
         <h2 class="span4 top-gap">Proposal prepared by</h2>
         <label>Name <input name="preparedName" value="${esc(e.preparedName)}"></label>
         <label>Title <input name="preparedTitle" value="${esc(e.preparedTitle)}"></label>
@@ -395,7 +408,8 @@ export function estimateEdit(id, params) {
         <label>Email <input name="preparedEmail" type="email" value="${esc(e.preparedEmail)}"></label>
       </fieldset>
       <div class="row"><button class="btn primary" ${ro}>Save proposal</button></div>
-    </form>`,
+    </form>
+    ${isNew ? '' : proposalBilling(id)}`,
     mount(root) {
       const body = root.querySelector('#lines');
       const form = root.querySelector('#f');
@@ -426,6 +440,10 @@ export function estimateEdit(id, params) {
           <div class="tr"><span>Tax</span><span>${money(t.tax)}</span></div>
           <div class="tr"><span>Line-item total</span><span>${money(t.total)}</span></div>
           ${proposalOptions(cur).map((o) => `<div class="tr ${o.number - 1 === acceptedIndex() ? 'grand' : ''}"><span>Price ${o.number}${o.name ? ` (${esc(o.name)})` : ''}</span><span>${money(o.price)}</span></div>`).join('')}`;
+        const sentence = depositSentence({ ...cur, acceptedOption: acceptedIndex() });
+        root.querySelector('#depnote').textContent = sentence ? `Printed on the proposal: "${sentence}"` : 'No deposit.';
+        if (cur.depositType === 'percent') form.elements.depositValue.max = 100;
+        else form.elements.depositValue.removeAttribute('max');
       };
       form.addEventListener('input', recalc);
       form.addEventListener('change', recalc);
@@ -449,6 +467,7 @@ export function estimateEdit(id, params) {
         body.innerHTML = PRESETS[t].map(estLineRow).join(''); recalc();
       });
       recalc();
+      if (!isNew) mountProposalBilling(root, id, () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price), options: readOptions(optBox), acceptedOption: acceptedIndex() }));
 
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
@@ -485,7 +504,7 @@ export function estimateEdit(id, params) {
           const spec = (opt.specs || '').split('\n').map((x) => x.trim()).filter(Boolean).join('; ');
           sov = [{ item: 1, desc: `Supply and install per proposal ${cur.number}, Price ${opt.number}${opt.name ? ` (${opt.name})` : ''}${spec ? ': ' + spec : ''}`, value: opt.price }];
         }
-        const terms = [cur.terms, cur.exclusions ? `Exclude: ${cur.exclusions}` : ''].filter(Boolean).join('\n');
+        const terms = [proposalTerms(cur), cur.exclusions ? `Exclude: ${cur.exclusions}` : ''].filter(Boolean).join('\n');
         const r = await attempt(() => add('contracts', {
           number: nextNumber('contracts'), jobId: cur.jobId, customerId: cur.customerId || '', estimateId: id, date: today(),
           amount: opt.price, retainagePct: 10, status: 'draft', sov, terms,
@@ -775,10 +794,20 @@ export function invoices() {
   };
 }
 
+// "From proposal 1005", with how much of the proposal has been paid.
+function proposalLink(inv) {
+  const e = get('estimates', inv.estimateId);
+  if (!e) return '';
+  const pay = proposalPayment(e, where('invoices', 'estimateId', inv.estimateId));
+  return `${inv.kind === 'deposit' ? 'Deposit on' : 'From'} <a href="#/estimates/${esc(inv.estimateId)}">proposal ${esc(e.number)}</a>:
+    ${badge(pay.status)} ${money(pay.paid)} of ${money(pay.price)} paid`;
+}
+
 const invRow = (l = {}) => `<tr data-row>
   <td><input name="desc" value="${esc(l.desc)}" placeholder="Description"></td>
   <td><input name="qty" type="number" step="any" value="${esc(l.qty ?? 1)}" class="n"></td>
   <td><input name="price" type="number" step="0.01" value="${esc(l.price ?? 0)}" class="n"></td>
+  <td class="c"><input name="taxable" type="checkbox" ${l.taxable === false ? '' : 'checked'} title="Charge sales tax on this line"></td>
   <td class="num" data-total></td>
   <td><button type="button" class="icon" data-del>✕</button></td></tr>`;
 
@@ -796,6 +825,7 @@ export function invoiceEdit(id, params) {
       ${!isNew && can.bill() && inv.status === 'unpaid' ? '<button class="btn primary" id="paid">Mark paid</button>' : ''}
       ${!isNew && can.remove() ? '<button class="btn danger" id="del">Delete</button>' : ''}`)}
     ${inv.payAppId ? `<p class="muted">From <a href="#/payapps/${esc(inv.payAppId)}">pay app ${esc(get('payApps', inv.payAppId)?.number || '')}</a></p>` : ''}
+    ${inv.estimateId ? `<p class="muted" id="proposal-link">${proposalLink(inv)}</p>` : ''}
     <form id="f" class="stack">
       <fieldset class="card grid4" ${ro}>
         <label class="span2">Job <select name="jobId" required>${jobOptions(inv.jobId)}</select></label>
@@ -807,7 +837,7 @@ export function invoiceEdit(id, params) {
         <label>Sales tax % <input name="taxPct" type="number" step="any" value="${esc(inv.taxPct)}"></label>
       </fieldset>
       <fieldset class="card" ${ro}>
-        <table class="lines" data-lines><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th class="num">Amount</th><th></th></tr></thead>
+        <table class="lines" data-lines><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Tax</th><th class="num">Amount</th><th></th></tr></thead>
         <tbody id="lines">${(inv.lines || []).map(invRow).join('')}</tbody></table>
         <button type="button" class="btn small" id="addline">+ Add line</button>
       </fieldset>
@@ -816,7 +846,8 @@ export function invoiceEdit(id, params) {
         <div class="card totals" id="totals"></div>
       </div>
       <div class="row"><button class="btn primary" ${ro}>Save invoice</button></div>
-    </form>`,
+    </form>
+    ${isNew ? '' : stripeCard()}`,
     mount(root) {
       const body = root.querySelector('#lines');
       const form = root.querySelector('#f');
@@ -847,6 +878,17 @@ export function invoiceEdit(id, params) {
       root.querySelector('#del')?.addEventListener('click', async () => {
         if (confirmDelete('invoice') && await attempt(() => remove('invoices', id), 'Invoice deleted') !== null) go('#/invoices');
       });
+      if (!isNew) mountStripeCard(root, id, () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price) }));
+      // What's been paid on the proposal changes as payments come in.
+      const link = root.querySelector('#proposal-link');
+      if (link) {
+        let shown = proposalLink(inv);
+        const off = onChange(() => {
+          if (!link.isConnected) return off();
+          const html = proposalLink(get('invoices', id) || inv);
+          if (html !== shown) link.innerHTML = shown = html;
+        });
+      }
     },
   };
 }
@@ -987,6 +1029,7 @@ export function settings() {
       <p class="hint">Each link works once and expires in 7 days. Send it by text or email; they open it, sign in any way they like, and tap Join.</p>
       <div id="invites"></div>` : ''}
     </div>
+    ${paymentsSettings()}
     ${can.manage() ? `<div class="card"><h2>Transfer ownership</h2>
       <p class="small">Hand the business to another team member. They become the owner and you become an admin.</p>
       <div id="transfer"><p class="muted small">Loading team…</p></div></div>` : ''}`,
@@ -996,6 +1039,7 @@ export function settings() {
         await attempt(() => updateCompany(formData(e.target)), 'Company saved');
       });
       mountTeam(root);
+      mountPaymentsSettings(root);
       mountSite(root.querySelector('#site'));
       const box = root.querySelector('#transfer');
       if (!box) return;

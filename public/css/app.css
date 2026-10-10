@@ -164,7 +164,7 @@ ul.links li .num { margin-left: auto; }
 .badge { display: inline-flex; align-items: center; padding: .15rem .6rem; border-radius: 999px; font-size: .72rem; font-weight: 700; letter-spacing: .02em; background: color-mix(in srgb, var(--dim) 18%, transparent); color: var(--muted); text-transform: capitalize; white-space: nowrap; }
 .s-accepted, .s-signed, .s-paid, .s-approved, .s-complete { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .s-sent, .s-submitted, .s-contracted { background: color-mix(in srgb, #3b82f6 18%, transparent); color: #60a5fa; }
-.s-in-progress, .s-estimating { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.s-in-progress, .s-estimating, .s-partly-paid { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .s-unpaid, .s-pending { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 .s-declined, .s-rejected, .s-void { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
 :root[data-theme="light"] .s-sent, :root[data-theme="light"] .s-submitted, :root[data-theme="light"] .s-contracted { color: #1d4ed8; }
