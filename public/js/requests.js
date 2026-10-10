@@ -32,7 +32,7 @@ export function requestList() {
   const rows = all.filter((r) => filter === 'all' || (filter === 'new' ? r.status === 'new' : ['new', 'contacted'].includes(r.status)));
   return {
     live: true,
-    html: `<div class="page-head"><h1>Requests</h1><div class="actions"><a class="btn" href="#/settings">Website form settings</a></div></div>
+    html: `<div class="page-head"><div class="page-title"><h1>Requests</h1></div><div class="actions"><a class="btn" href="#/settings">Website form settings</a></div></div>
     <div class="chips">${FILTERS.map(([k, l]) => `<button type="button" class="chip ${filter === k ? 'on' : ''}" data-filter="${k}">${l}</button>`).join('')}</div>
     <div class="card">${rows.length ? `<table class="list"><thead><tr><th>Received</th><th>Name</th><th>Service</th><th>Status</th><th>Site</th><th>Phone</th></tr></thead><tbody>
       ${rows.map((r) => `<tr data-href="#/requests/${esc(r.id)}"><td>${fmtWhen(r)}</td><td>${esc(r.name)}${r.company ? `<br><span class="muted small">${esc(r.company)}</span>` : ''}</td><td>${esc(serviceLabel(r.service))}${r.files ? ` <span class="muted small" title="Photos or plans">📎${r.files}</span>` : ''}</td><td>${badge(r.status)}</td><td>${esc(r.siteAddress)}</td><td>${esc(r.phone)}</td></tr>`).join('')}
@@ -78,7 +78,7 @@ export function requestView(id) {
   const contact = [r.phone && `Phone ${phoneLink(r.phone)}`, r.email && `Email <a href="mailto:${esc(r.email)}">${esc(r.email)}</a>`].filter(Boolean).join('<br>');
 
   return {
-    html: `<div class="page-head"><h1>${esc(r.name)} ${badge(r.status)}</h1><div class="actions">
+    html: `<div class="page-head"><div class="page-title"><h1>${esc(r.name)} ${badge(r.status)}</h1></div><div class="actions">
       <a class="btn" href="#/requests">All requests</a>
       ${can.remove() ? '<button class="btn danger" id="del">Delete</button>' : ''}</div></div>
     <div class="cols">

@@ -11,10 +11,11 @@ export const BRAND = {
   website: 'www.stellarglassllc.com',
 };
 
-export const logoHtml = (cls = '') => `<picture class="logo-pic ${cls}">
-  <source srcset="img/logo-dark.png" media="(prefers-color-scheme: dark)">
-  <img src="img/logo.png" alt="Stellar Glass" class="logo-img">
-</picture>`;
+// Both versions are in the page; the stylesheet shows the one that suits the background.
+export const logoHtml = (cls = '') => `<span class="logo-pic ${cls}">
+  <img src="img/logo.png" alt="Stellar Glass" class="logo-img on-light">
+  <img src="img/logo-dark.png" alt="Stellar Glass" class="logo-img on-dark">
+</span>`;
 
 export const websiteUrl = (w) => (w ? (/^https?:\/\//.test(w) ? w : `https://${w}`) : '');
 
