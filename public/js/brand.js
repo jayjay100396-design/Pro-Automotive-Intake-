@@ -39,3 +39,16 @@ export const REQUEST_TIMELINES = [
   ['pricing', 'Just getting prices or bidding'],
 ];
 export const REQUEST_CONTACT = [['phone', 'Phone call'], ['text', 'Text message'], ['email', 'Email']];
+
+// Photos on the public page that the owner or an admin can replace (Website page in the app).
+// [place, where it shows, the starter photo quote.html shows until one is uploaded]
+export const SITE_PLACES = [
+  ['hero', 'Top of the page', 'img/site/hero.jpg'],
+  ['storefront', 'Storefronts and entrances', 'img/site/storefront-bank-2.jpg'],
+  ['interior', 'Office and interior glass', 'img/site/conference-room.jpg'],
+  ['shower', 'Frameless showers', 'img/site/shower-1.jpg'],
+  ['railing', 'Glass railings', 'img/site/balcony-railing.jpg'],
+];
+// The gallery's starter photos, shown until the first gallery photo is uploaded.
+export const SITE_STARTER_GALLERY = ['storefront-bank-1', 'storefront-bank-2', 'storefront-bank-5', 'office-glass', 'conference-room',
+  'office-partitions', 'glass-office', 'balcony-railing', 'interior-railing', 'shower-1', 'shower-2', 'shower-3'].map((n) => `img/site/${n}.jpg`);

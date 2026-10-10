@@ -9,13 +9,14 @@ rules_version = '2';
 //                                              changeOrders, payApps, invoices, files
 //   companies/{companyId}/requests/{requestId} quote requests sent from the public page (quote.html)
 //   sites/{siteId}                             which business the public page sends requests to
+//   sites/{siteId}/photos/{photoId}            photos the business put on the public page
 //   users/{uid}                                a signed-in user's own profile
 //
 // Roles: owner > admin > staff, plus accountant.
 // The accountant reads everything and creates/edits billing records (invoices, pay apps
 // with their G702/G703 lines, billing, documents and forms), but deletes nothing and
 // can't manage members.
-// The public (no sign-in) can only read sites/{siteId} and send a quote request.
+// The public (no sign-in) can only read sites/{siteId} and its photos, and send a quote request.
 // Anything not matched below is denied.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -122,6 +123,34 @@ service cloud.firestore {
 
     function isValidEmail(v) {
       return v.matches('^[^@\\s]+@[^@\\s]+[.][A-Za-z]{2,}$');
+    }
+
+    // Photos on the public page: the top photo, one per service, and the gallery.
+    // Anyone can see them; the owner or an admin of the business the site belongs to changes them.
+    // The picture itself is in Cloud Storage at companies/{companyId}/website/{file}.
+    function canEditSite(siteId) {
+      return signedIn() && exists(sitePath(siteId))
+        && hasRole(get(sitePath(siteId)).data.companyId, ['owner', 'admin']);
+    }
+
+    function isValidSitePhoto(siteId, photoId, d) {
+      let companyId = get(sitePath(siteId)).data.companyId;
+      return d.keys().hasOnly(['place', 'caption', 'url', 'path', 'order', 'updatedAt'])
+        && d.keys().hasAll(['place', 'caption', 'url', 'path', 'order', 'updatedAt'])
+        && d.place in ['hero', 'storefront', 'interior', 'shower', 'railing', 'gallery']
+        && (d.place == 'gallery' || photoId == d.place)
+        && isText(d.caption, 0, 80)
+        && isText(d.url, 1, 2000) && d.url.matches('^https?://.+')
+        && d.path is string
+        && d.path.matches('^companies/' + companyId + '/website/[A-Za-z0-9_-]{1,64}[.](jpg|png|webp)$')
+        && d.order is int && d.order >= 0 && d.order <= 9999
+        && d.updatedAt == request.time;
+    }
+
+    match /sites/{siteId}/photos/{photoId} {
+      allow read: if true;
+      allow create, update: if canEditSite(siteId) && isValidSitePhoto(siteId, photoId, request.resource.data);
+      allow delete: if canEditSite(siteId);
     }
 
     // Everything the customer fills in on the form, checked on create (and kept as sent afterwards).

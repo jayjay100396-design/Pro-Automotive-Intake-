@@ -4,7 +4,7 @@
 // firestore.rules and storage.rules only allow that shape, so keep this in step with them.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import {
-  getFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, collection, serverTimestamp,
+  getFirestore, connectFirestoreEmulator, doc, getDoc, getDocs, setDoc, collection, serverTimestamp,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { getStorage, connectStorageEmulator, ref, uploadBytesResumable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js';
 import { useEmulators, loadConfig } from './config.js';
@@ -62,6 +62,36 @@ async function findTarget() {
 }
 
 findTarget().then((t) => { if (!t) say(unavailable, true); }).catch((e) => console.warn('site lookup', e));
+
+// ---------- Photos the business uploaded (Website page in the app) ----------
+// sites/{SITE_ID}/photos: one per place (hero, storefront, interior, shower, railing) and any number
+// for the gallery. Until there are some, the starter photos in quote.html stay.
+async function showPhotos() {
+  const { db } = await firebase();
+  const photos = (await getDocs(collection(db, 'sites', SITE_ID, 'photos'))).docs.map((d) => d.data()).filter((p) => /^https?:\/\//.test(p.url || ''));
+  for (const p of photos) {
+    if (p.place === 'gallery') continue;
+    const img = document.querySelector(`img[data-place="${p.place}"]`);
+    if (img) { img.removeAttribute('width'); img.removeAttribute('height'); img.src = p.url; }
+  }
+  const gallery = photos.filter((p) => p.place === 'gallery').sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  if (!gallery.length) return;
+  $('#gallery-grid').innerHTML = gallery.map((p) => `<figure><button type="button" class="zoom" data-src="${esc(p.url)}" data-cap="${esc(p.caption)}" aria-label="Open ${esc(p.caption || 'photo')} full size">
+    <img src="${esc(p.url)}" alt="${esc(p.caption || 'Stellar Glass installation')}" loading="lazy"></button>${p.caption ? `<figcaption>${esc(p.caption)}</figcaption>` : ''}</figure>`).join('');
+}
+showPhotos().catch((e) => console.warn('photos', e));
+
+// Gallery photos open full size.
+const box = $('#lightbox');
+document.addEventListener('click', (e) => {
+  const z = e.target.closest('.zoom');
+  if (z && box?.showModal) {
+    $('#lightbox-img').src = z.dataset.src;
+    $('#lightbox-img').alt = z.dataset.cap || 'Stellar Glass installation';
+    $('#lightbox-cap').textContent = z.dataset.cap || '';
+    box.showModal();
+  } else if (e.target === box) box.close();
+});
 
 // ---------- Small page behaviors ----------
 document.getElementById('year').textContent = new Date().getFullYear();

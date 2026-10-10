@@ -284,6 +284,36 @@ describe('Firestore rules', function () {
       await assertFails(deleteDoc(s(db('bob'))));
       await assertSucceeds(deleteDoc(s(db('wes'))));
     });
+
+    it('shows website photos to everyone and lets the owner or an admin change them', async () => {
+      const photo = (over = {}) => ({
+        place: 'gallery', caption: 'Bank storefront', url: 'https://firebasestorage.googleapis.com/v0/b/x/o/a?alt=media',
+        path: 'companies/stellar/website/p1.jpg', order: 0, updatedAt: serverTimestamp(), ...over,
+      });
+      const p = (f, id = 'p1') => doc(f, `sites/stellar-glass/photos/${id}`);
+      // Not before the page belongs to a business.
+      await assertFails(setDoc(p(db('wes')), photo()));
+      await site({ companyId: 'stellar', open: true });
+      await assertSucceeds(setDoc(p(db('wes')), photo()));
+      await assertSucceeds(setDoc(p(db('admin1'), 'hero'), photo({ place: 'hero', path: 'companies/stellar/website/hero-1.jpg' })));
+      await assertSucceeds(getDocs(collection(anon(), 'sites/stellar-glass/photos')));
+      await assertSucceeds(getDoc(p(anon())));
+      for (const uid of ['crew', 'cpa', 'bob', 'stranger']) await assertFails(setDoc(p(db(uid), 'p2'), photo()));
+      await assertFails(setDoc(p(anon(), 'p2'), photo()));
+      // Shape: known places, slot photos stored under their own name, files from this business only.
+      await assertFails(setDoc(p(db('wes'), 'p2'), photo({ place: 'banner' })));
+      await assertFails(setDoc(p(db('wes'), 'p2'), photo({ place: 'hero' })));
+      await assertFails(setDoc(p(db('wes'), 'p2'), photo({ path: 'companies/other/website/p2.jpg' })));
+      await assertFails(setDoc(p(db('wes'), 'p2'), photo({ path: 'companies/stellar/photos/j1/p2.jpg' })));
+      await assertFails(setDoc(p(db('wes'), 'p2'), photo({ url: 'javascript:alert(1)' })));
+      await assertFails(setDoc(p(db('wes'), 'p2'), photo({ caption: 'x'.repeat(81) })));
+      await assertFails(setDoc(p(db('wes'), 'p2'), photo({ order: 1.5 })));
+      await assertFails(setDoc(p(db('wes'), 'p2'), photo({ extra: 1 })));
+      await assertSucceeds(updateDoc(p(db('admin1')), { caption: 'Lakeland bank', order: 3, updatedAt: serverTimestamp() }));
+      await assertFails(deleteDoc(p(db('crew'))));
+      await assertFails(deleteDoc(p(anon())));
+      await assertSucceeds(deleteDoc(p(db('wes'))));
+    });
   });
 
   it('keeps user profiles private', async () => {

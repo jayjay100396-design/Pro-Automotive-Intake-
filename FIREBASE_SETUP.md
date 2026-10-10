@@ -65,7 +65,7 @@ Customers can ask for a quote, with photos or plans, at **https://stellar-glass-
 - **Where requests go:** **Requests** in the menu (with a count of new ones) and a tile on the dashboard. Each request shows the contact details, the project and the photos. **Create customer and job** adds the customer (or picks a matching one by email or phone), a lead job with the site and details, and puts the photos and PDFs in the job's Files, ready for an estimate.
 - **Spam:** a hidden field and a short timer catch simple bots, and the security rules only accept the form's own fields, with size limits, at most 8 files of 20 MB (photos or PDFs), uploaded within an hour of sending. Nobody outside the team can read requests or their files.
 - **No email alert yet:** check Requests in the app. An email or text alert needs a Cloud Function and an email service.
-- **Gallery photos** in `public/img/site/` were cut from screenshots of the current website, so they're small. Swap in the originals with the same file names for sharper pictures.
+- **Photos on the page:** the owner or an admin changes them on the **Website** page in the app (under Admin). Replace the top photo and each service photo, and add gallery photos (many at once), with optional captions and an order; visitors can click a gallery photo to see it full size. Big photos are resized to 2400 px on the long side before upload. Until you upload your own, the page shows starter photos in `public/img/site/`, cut from screenshots of the old website, so they're small. The Website page works once website requests are turned on, because that connects the page to your business.
 
 ## 6. Try it locally first (optional)
 

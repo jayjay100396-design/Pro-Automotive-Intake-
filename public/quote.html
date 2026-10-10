@@ -42,7 +42,7 @@
   <main>
     <section id="home" class="band blue">
       <div class="wrap hero">
-        <img class="hero-img" src="img/site/hero.jpg" alt="Frameless glass office walls installed by Stellar Glass" width="449" height="318">
+        <img class="hero-img" data-place="hero" src="img/site/hero.jpg" alt="Frameless glass office walls installed by Stellar Glass" width="449" height="318">
         <div class="hero-text">
           <h1>Welcome to Stellar Glass</h1>
           <p class="hero-line">Commercial storefronts, office glass and frameless showers</p>
@@ -62,25 +62,25 @@
         <p class="lead">Custom glass, measured, built and installed by our own crew.</p>
         <div class="services">
           <article class="service">
-            <img src="img/site/storefront-bank-2.jpg" alt="" width="174" height="174" loading="lazy">
+            <img data-place="storefront" src="img/site/storefront-bank-2.jpg" alt="" width="174" height="174" loading="lazy">
             <div><h3>Storefronts and entrances</h3>
             <p>Aluminum storefront framing, entrance doors and hardware, and glass for new construction and remodels. We bid from plans for general contractors and owners.</p>
             <a href="#quote" data-service="storefront">Ask about a storefront</a></div>
           </article>
           <article class="service">
-            <img src="img/site/conference-room.jpg" alt="" width="174" height="174" loading="lazy">
+            <img data-place="interior" src="img/site/conference-room.jpg" alt="" width="174" height="174" loading="lazy">
             <div><h3>Office and interior glass</h3>
             <p>Glass office fronts, conference rooms and partition walls, with glass or sliding doors, clear or frosted.</p>
             <a href="#quote" data-service="interior">Ask about office glass</a></div>
           </article>
           <article class="service">
-            <img src="img/site/shower-1.jpg" alt="" width="174" height="174" loading="lazy">
+            <img data-place="shower" src="img/site/shower-1.jpg" alt="" width="174" height="174" loading="lazy">
             <div><h3>Frameless showers</h3>
             <p>Heavy glass shower doors, panels and enclosures, made to fit your space, with the hardware finish you pick.</p>
             <a href="#quote" data-service="shower">Ask about a shower</a></div>
           </article>
           <article class="service">
-            <img src="img/site/balcony-railing.jpg" alt="" width="174" height="174" loading="lazy">
+            <img data-place="railing" src="img/site/balcony-railing.jpg" alt="" width="174" height="174" loading="lazy">
             <div><h3>Glass railings</h3>
             <p>Glass railings and guards for balconies, lofts, stairs and pool areas.</p>
             <a href="#quote" data-service="railing">Ask about a railing</a></div>
@@ -93,7 +93,7 @@
       <div class="wrap">
         <h2>Gallery</h2>
         <p class="lead">Our latest and best photos.<br>We specialize in custom glass installations.</p>
-        <div class="gallery">
+        <div class="gallery" id="gallery-grid">
           <figure><img src="img/site/storefront-bank-1.jpg" alt="Bank storefront entrance" width="172" height="172" loading="lazy"><figcaption>Bank storefront</figcaption></figure>
           <figure><img src="img/site/storefront-bank-2.jpg" alt="Bank storefront and drive-through" width="174" height="174" loading="lazy"><figcaption>Storefront and entrance</figcaption></figure>
           <figure><img src="img/site/storefront-bank-5.jpg" alt="Bank building with storefront glass" width="156" height="156" loading="lazy"><figcaption>New construction</figcaption></figure>
@@ -182,6 +182,11 @@
         </div>
       </div>
     </section>
+    <dialog class="lightbox" id="lightbox" aria-label="Photo">
+      <form method="dialog"><button class="lb-close" aria-label="Close">✕</button></form>
+      <img id="lightbox-img" alt="">
+      <p id="lightbox-cap"></p>
+    </dialog>
   </main>
 
   <footer id="contact" class="site-foot">

@@ -69,7 +69,7 @@ h3 { font-size: 1.3rem; }
 .service a:hover { text-decoration: underline; }
 
 /* Gallery: three across, white caption bar under each photo. */
-.gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.1rem; }
+.gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.1rem; align-items: start; }
 .gallery figure { margin: 0; background: #fff; }
 .gallery img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
 .gallery figcaption { color: var(--text); padding: .55rem .75rem; font-size: .9rem; }
@@ -148,3 +148,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(1, 119, 193,
   .quote-form { padding: 1rem; }
   .foot-cols { grid-template-columns: 1fr; }
 }
+
+/* Uploaded gallery photos open full size. */
+.gallery .zoom { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.lightbox { max-width: min(92vw, 1400px); max-height: 92vh; padding: 0; border: 0; background: #111; color: #eee; }
+.lightbox::backdrop { background: rgba(0, 0, 0, .8); }
+.lightbox img { display: block; max-width: 100%; max-height: calc(92vh - 3rem); margin: 0 auto; }
+.lightbox p { margin: 0; padding: .6rem 1rem; font-size: .95rem; }
+.lightbox p:empty { display: none; }
+.lb-close { position: absolute; top: .4rem; right: .4rem; width: 2.2rem; height: 2.2rem; border: 0; border-radius: 50%; background: rgba(0, 0, 0, .6); color: #fff; font-size: 1.1rem; cursor: pointer; }

@@ -969,7 +969,7 @@ export function settings() {
       </fieldset>
     </form>
     <div class="card"><h2>Website quote requests</h2>
-      <p class="small">Customers can ask for a quote at <a href="${esc(siteLink())}" target="_blank" rel="noopener">${esc(siteLink())}</a>, with photos or plans. Link to it from your website or send it to customers. What they send shows up under <a href="#/requests">Requests</a>.</p>
+      <p class="small">Customers can ask for a quote at <a href="${esc(siteLink())}" target="_blank" rel="noopener">${esc(siteLink())}</a>, with photos or plans. Link to it from your website or send it to customers. What they send shows up under <a href="#/requests">Requests</a>. Change the page's photos on the <a href="#/website">Website</a> page.</p>
       <div id="site" class="row"><span class="muted small">Checking…</span></div>
     </div>
     <div class="card"><h2>Your account</h2>

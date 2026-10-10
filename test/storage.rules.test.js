@@ -99,6 +99,26 @@ describe('Storage rules', function () {
     await assertSucceeds(deleteObject(ref(st('wes'), 'companies/stellar/requests/r1/0-kitchen.jpg')));
   });
 
+  it('lets owners and admins put photos on the website, which anyone can see', async () => {
+    const anon = env.unauthenticatedContext().storage();
+    const jpg = { contentType: 'image/jpeg' };
+    const w = (s, name, meta = jpg, size = 4) => uploadBytes(ref(s, `companies/stellar/website/${name}`), new Uint8Array(size), meta);
+    await assertSucceeds(w(st('wes'), 'hero-1.jpg'));
+    await assertSucceeds(w(st('admin1'), 'g_2.webp', { contentType: 'image/webp' }));
+    await assertSucceeds(getBytes(ref(anon, 'companies/stellar/website/hero-1.jpg')));
+    await assertFails(w(anon, 'x.jpg'));
+    await assertFails(w(st('cpa'), 'x.jpg'));
+    await assertFails(w(st('crew'), 'x.jpg'));
+    await assertFails(w(st('stranger'), 'x.jpg'));
+    await assertFails(w(st('wes'), 'x.pdf', pdf));
+    await assertFails(w(st('wes'), 'page.html', { contentType: 'text/html' }));
+    await assertFails(w(st('wes'), 'big.jpg', jpg, 15 * 1024 * 1024));
+    await assertFails(deleteObject(ref(anon, 'companies/stellar/website/hero-1.jpg')));
+    await assertSucceeds(deleteObject(ref(st('admin1'), 'companies/stellar/website/hero-1.jpg')));
+    // Other company files stay private.
+    await assertFails(getBytes(ref(anon, 'companies/stellar/documents/notarized.pdf')));
+  });
+
   it('blocks outsiders and bad file types', async () => {
     await assertFails(getBytes(ref(st('stranger'), 'companies/stellar/documents/notarized.pdf')));
     await assertFails(uploadBytes(ref(st('stranger'), 'companies/stellar/documents/x.pdf'), bytes, pdf));
