@@ -50,6 +50,13 @@ export function stripeItems(inv) {
   return { items, totalCents: toCents(t.total) };
 }
 
+// What's been paid on a bill: what Stripe collected when it was paid through Stripe (the bill may
+// have been edited after it was sent), its total when marked paid by hand, else any part paid online.
+// Same as paidOn in public/js/calc.js.
+export const paidOn = (inv) => (inv.status === 'paid'
+  ? (inv.stripe?.status === 'paid' && inv.stripe.amountPaid != null ? num(inv.stripe.amountPaid) : invoiceTotals(inv).total)
+  : num(inv.stripe?.amountPaid));
+
 // For a bill made from a proposal: the proposal's price, what's been paid on it before this invoice
 // and what's left after it. It goes on the Stripe invoice, so the payment page shows where the job stands.
 export function proposalStatusText({ number, price, paidBefore, thisInvoice }) {

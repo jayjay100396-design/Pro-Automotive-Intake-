@@ -264,12 +264,19 @@ export function depositLine(est) {
   return { desc: `Deposit${pct} on proposal ${est.number}${opts.length > 1 ? `, ${optionLabel(opt)}` : ''}`, qty: 1, price: d.amount, taxable: false };
 }
 
+// What's been paid on a bill: what Stripe collected when it was paid through Stripe (the bill may
+// have been edited after it was sent), its total when marked paid by hand, else any part paid online.
+// Same as paidOn in functions/lines.js.
+export const paidOn = (inv) => (inv.status === 'paid'
+  ? (inv.stripe?.status === 'paid' && inv.stripe.amountPaid != null ? num(inv.stripe.amountPaid) : invoiceTotals(inv).total)
+  : num(inv.stripe?.amountPaid));
+
 // How much of a proposal's accepted price has been paid, from the invoices made from it (void ones
 // don't count). status: 'not billed', 'unpaid', 'partly paid' or 'paid'.
 export function proposalPayment(est, invoices) {
   const price = estimateAmount(est);
   const live = (invoices || []).filter((i) => i.status !== 'void');
-  const paid = round2(live.reduce((s, i) => s + (i.status === 'paid' ? invoiceTotals(i).total : num(i.stripe?.amountPaid)), 0));
+  const paid = round2(live.reduce((s, i) => s + paidOn(i), 0));
   const status = !live.length ? 'not billed' : paid <= 0 ? 'unpaid' : paid >= price ? 'paid' : 'partly paid';
   return { price, paid, balance: round2(Math.max(0, price - paid)), status };
 }

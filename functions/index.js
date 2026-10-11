@@ -21,7 +21,7 @@ setGlobalOptions({ region: 'us-central1', maxInstances: 2, memory: '256MiB' });
 // Stored in Google Secret Manager with `firebase functions:secrets:set`.
 const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
 const STRIPE_WEBHOOK_SECRET = defineSecret('STRIPE_WEBHOOK_SECRET');
-// Saved in functions/.env.<project id>; the deploy asks for it the first time.
+// From functions/.env.<project id>. The live one (.env.stellar-glass-jobs) is in the repo.
 const STRIPE_COMPANY_ID = defineString('STRIPE_COMPANY_ID', {
   description: 'Business ID from the app (Settings > Online payments). Only this business can bill through the Stripe account.',
 });

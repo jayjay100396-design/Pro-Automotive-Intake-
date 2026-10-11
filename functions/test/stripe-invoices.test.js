@@ -160,6 +160,14 @@ describe('Stripe invoices (server)', function () {
     assert.equal(d.stripe.issued, 1);
     assert.equal(d.stripe.createdBy, 'cpa');
     assert.equal(d.stripe.hostedUrl, `https://invoice.stripe.test/${d.stripe.invoiceId}`);
+    // What it was made from, so the app can tell when the bill is edited afterwards.
+    assert.deepEqual(d.stripe.sent, {
+      number: 1003, jobId: 'j1', taxPct: 7, dueDate: '2099-01-01', notes: 'Thank you for your business.',
+      lines: [
+        { desc: 'Storefront glass', qty: 4, price: 312.5, taxable: true },
+        { desc: 'Install labor', qty: 6.5, price: 85, taxable: false },
+      ],
+    });
     assert.equal((await data(db.doc(`companies/${C}/customers/c1`))).stripeCustomerIds.test, [...stripe.customers.values()][0].id);
   });
 
@@ -171,6 +179,35 @@ describe('Stripe invoices (server)', function () {
     await create();
     const [, params] = stripe.called('invoices.create')[0];
     assert.equal(params.description, 'Proposal 1005: $2,604.18\nPaid so far: $1,302.09\nThis invoice: $1,302.09\nLeft after this invoice: $0.00\n\nThank you.');
+  });
+
+  it('counts what Stripe collected on a bill edited after it was paid', async () => {
+    const lines = (price) => [{ desc: 'Line', qty: 1, price, taxable: false }];
+    await db.doc(`companies/${C}/invoices/dep`).set({
+      number: 1001, estimateId: 'e1', kind: 'deposit', status: 'paid', taxPct: 0, lines: lines(1302.09),
+      stripe: { status: 'paid', amountPaid: 1000 },
+    });
+    await inv().update({ estimateId: 'e1', kind: 'final', proposalNumber: 1005, proposalPrice: 2604.18, taxPct: 0, lines: lines(1604.18), notes: '' });
+    await create();
+    const [, params] = stripe.called('invoices.create')[0];
+    assert.equal(params.description, 'Proposal 1005: $2,604.18\nPaid so far: $1,000.00\nThis invoice: $1,604.18\nLeft after this invoice: $0.00');
+  });
+
+  it('emails an open invoice again to the customer\'s current address, and only to that customer', async () => {
+    await create({ send: true });
+    await db.doc(`companies/${C}/customers/c1`).update({ email: 'ap@lakelandbuilders.example' });
+    const again = await create({ send: true });
+    const updates = stripe.called('customers.update');
+    assert.equal(updates.at(-1)[2].email, 'ap@lakelandbuilders.example');
+    assert.ok(stripe.calls.indexOf(updates.at(-1)) < stripe.calls.indexOf(stripe.called('invoices.sendInvoice')[1]));
+    assert.equal(again.sentTo, 'ap@lakelandbuilders.example');
+
+    // Moved to another customer's job: the open Stripe invoice is addressed to the old customer.
+    await db.doc(`companies/${C}/customers/c2`).set({ name: 'Sam Ortiz', email: 'sam@example.com' });
+    await inv().update({ customerId: 'c2' });
+    await assert.rejects(create({ send: true }), /different customer/);
+    assert.equal(stripe.called('invoices.sendInvoice').length, 2);
+    assert.equal((await data()).stripe.sentTo, 'ap@lakelandbuilders.example');
   });
 
   it('reuses the open Stripe invoice instead of making a second one', async () => {
@@ -242,6 +279,18 @@ describe('Stripe invoices (server)', function () {
     assert.equal(update.number, '');
   });
 
+  it('cancels the Stripe invoice if the bill is deleted while it\'s being made', async () => {
+    const finalize = stripe.invoices.finalizeInvoice;
+    stripe.invoices.finalizeInvoice = async (...args) => {
+      const si = await finalize(...args);
+      await inv().delete(); // someone deletes the bill meanwhile
+      return si;
+    };
+    await assert.rejects(create(), { code: 'not-found' });
+    const [, voided] = stripe.called('invoices.voidInvoice')[0];
+    assert.equal(stripe.invoices.get(voided).status, 'void');
+  });
+
   it('picks up a Stripe invoice an earlier try made but never saved', async () => {
     const cus = await stripe.customers.create({ name: 'x' });
     await db.doc(`companies/${C}/customers/c1`).update({ stripeCustomerIds: { test: cus.id } });
@@ -297,6 +346,17 @@ describe('Stripe invoices (server)', function () {
     assert.ok(ids.test && ids.live && ids.test !== ids.live);
     // Back on a test key, the live invoice can't be voided by mistake.
     await assert.rejects(voidStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' }), /live/);
+  });
+
+  it('keeps a payable live Stripe invoice linked when the key is back on test', async () => {
+    stripe.livemode = true;
+    const live = await create({ livemode: true });
+    stripe.livemode = false;
+    await assert.rejects(create({ livemode: false }), /live Stripe invoice that can still be paid/);
+    const d = await data();
+    assert.equal(d.stripe.invoiceId, live.invoiceId);
+    assert.equal(d.stripe.status, 'open');
+    assert.equal(stripe.called('invoices.create').length, 1);
   });
 
   it('sets a test invoice aside once the live key is in', async () => {

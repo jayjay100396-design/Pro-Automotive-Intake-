@@ -164,6 +164,8 @@ describe('money math', () => {
     assert.equal(proposalPayment(est, [{ ...dep, status: 'void' }]).status, 'not billed');
     // Part paid online through Stripe
     assert.equal(proposalPayment(est, [{ ...dep, stripe: { status: 'open', amountPaid: 500 } }]).paid, 500);
+    // Paid through Stripe, then edited here: what Stripe collected counts.
+    assert.equal(proposalPayment(est, [{ ...dep, status: 'paid', lines: [{ qty: 1, price: 1500, taxable: false }], stripe: { status: 'paid', amountPaid: 1302.09 } }]).paid, 1302.09);
   });
 
   it('can hold a different retainage on stored materials', () => {

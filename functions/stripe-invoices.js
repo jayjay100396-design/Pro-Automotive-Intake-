@@ -5,11 +5,13 @@
 //   status      'creating' | 'open' | 'paid' | 'void' | 'uncollectible' (Stripe's invoice status)
 //   invoiceId   Stripe invoice id; number, hostedUrl (payment page), pdfUrl, amountDue, livemode
 //   issued      how many Stripe invoices have been finalized for this bill (numbers 1003, 1003-2, ...)
+//   sent        what the Stripe invoice was made from (number, job, lines, tax, notes, due date), so the
+//               app can tell when the bill is edited afterwards
 //   sentTo, sentAt, error
 // and the customer gets stripeCustomerIds: { test, live }. Only this server code writes those
 // fields; firestore.rules keeps the app from changing them.
 import { HttpsError } from 'firebase-functions/v2/https';
-import { stripeItems, invoiceTotals, proposalStatusText, daysUntilDue, floridaDate, clip } from './lines.js';
+import { stripeItems, invoiceTotals, paidOn, proposalStatusText, daysUntilDue, floridaDate, clip } from './lines.js';
 
 export const BILLING_ROLES = ['owner', 'admin', 'staff', 'accountant'];
 const CLAIM_MS = 180e3; // longer than the function's 120 s timeout
@@ -68,6 +70,13 @@ const fromStripe = (si) => ({
 
 const prefixed = (fields) => Object.fromEntries(Object.entries(fields).map(([k, v]) => [`stripe.${k}`, v]));
 
+// What a Stripe invoice is made from. The app compares it with the bill (billing.js stripeSig).
+const sentFrom = (inv) => ({
+  number: inv.number ?? null, jobId: inv.jobId ?? null, taxPct: inv.taxPct ?? null, dueDate: inv.dueDate ?? null,
+  notes: inv.notes ?? null,
+  lines: (inv.lines || []).map((l) => ({ desc: l.desc ?? '', qty: l.qty ?? null, price: l.price ?? null, taxable: l.taxable !== false })),
+});
+
 // The bill's job and customer. The customer comes from the invoice, or else from its job.
 async function billTo(db, companyId, inv) {
   const job = inv.jobId ? (await db.doc(`companies/${companyId}/jobs/${inv.jobId}`).get()).data() || {} : {};
@@ -111,10 +120,8 @@ async function proposalStatus(db, companyId, invoiceId, inv) {
   const price = Number(inv.proposalPrice);
   if (typeof inv.estimateId !== 'string' || !ID.test(inv.estimateId) || !(price > 0)) return '';
   const snap = await db.collection(`companies/${companyId}/invoices`).where('estimateId', '==', inv.estimateId).get();
-  const paidBefore = snap.docs.filter((d) => d.id !== invoiceId && d.data().status !== 'void').reduce((sum, d) => {
-    const other = d.data();
-    return sum + (other.status === 'paid' ? invoiceTotals(other).total : Number(other.stripe?.amountPaid) || 0);
-  }, 0);
+  const paidBefore = snap.docs.filter((d) => d.id !== invoiceId && d.data().status !== 'void')
+    .reduce((sum, d) => sum + paidOn(d.data()), 0);
   return proposalStatusText({ number: inv.proposalNumber ?? '', price, paidBefore, thisInvoice: invoiceTotals(inv).total });
 }
 
@@ -145,6 +152,10 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     if (inv.status === 'paid' || prev.status === 'paid') throw new HttpsError('failed-precondition', 'This invoice is already paid.');
     if (inv.status === 'void') throw new HttpsError('failed-precondition', 'This invoice is void.');
     if (prev.status === 'open' && !!prev.livemode === livemode) return { inv, prev, existing: true };
+    // A live Stripe invoice that can still be paid stays linked, or its payment couldn't be recorded.
+    if (prev.status === 'open' && prev.livemode) {
+      throw new HttpsError('failed-precondition', 'This invoice has a live Stripe invoice that can still be paid, but the app is using a test key right now.');
+    }
     const claimedAt = prev.claimedAt?.toDate?.() || null;
     if (prev.status === 'creating' && claimedAt && now - claimedAt < CLAIM_MS) {
       throw new HttpsError('aborted', 'The Stripe invoice is already being made. Wait a moment, then reopen the invoice.');
@@ -158,8 +169,19 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
   if (claim.existing) {
     let warning = null;
     if (send) {
-      const { cust } = await billTo(db, companyId, inv);
+      const { cust, customerId } = await billTo(db, companyId, inv);
       if (!cust?.email) throw new HttpsError('failed-precondition', 'Add an email address for this customer first (Customers page).');
+      // Stripe emails the address on its customer, so bring that up to date first. A bill that now
+      // goes to a different customer needs a new Stripe invoice.
+      try {
+        const customer = await ensureCustomer({ db, stripe, livemode, companyId, customerId, cust });
+        const si = await stripe.invoices.retrieve(prev.invoiceId);
+        if ((si.customer?.id ?? si.customer) !== customer) {
+          throw new HttpsError('failed-precondition', 'This invoice now goes to a different customer. Void the Stripe invoice, then send it again.');
+        }
+      } catch (e) {
+        throw friendlyError(e);
+      }
       warning = await sendEmail(stripe, ref, prev.invoiceId, cust.email);
     }
     return { ...summary((await ref.get()).data().stripe), warning };
@@ -231,13 +253,18 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
 
     await ref.update({
       stripe: {
-        ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid,
+        ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent: sentFrom(inv),
         sentTo: null, sentAt: null, error: null, claimedAt: null,
       },
     });
   } catch (e) {
     // A half-made draft is never sent; remove it so it doesn't clutter Stripe.
     if (draftId) await stripe.invoices.del(draftId).catch(() => {});
+    // The app invoice was deleted meanwhile, so nothing could record a payment: cancel the Stripe one.
+    if (finalized && !(await ref.get().then((d) => d.exists, () => true))) {
+      await stripe.invoices.voidInvoice(finalized.id).catch(() => {});
+      throw new HttpsError('not-found', 'That invoice was deleted, so its Stripe invoice was cancelled.');
+    }
     const err = friendlyError(e);
     if (err.code === 'internal') console.error('Stripe invoice failed', e);
     const restored = { ...prev, status: prev.status === 'creating' ? null : (prev.status ?? null), claimedAt: null, error: err.message, errorAt: new Date() };

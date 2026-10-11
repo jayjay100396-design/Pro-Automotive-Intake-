@@ -47,7 +47,7 @@ Steps 1 to 3 need Wes. Then he can add Jason on the Team page (<https://dashboar
 
 ### B. Firebase (Jason)
 
-7. **Blaze plan:** <https://console.firebase.google.com/project/stellar-glass-jobs/usage/details>, then Modify plan > Blaze, and set a $5 budget alert.
+7. **Blaze plan:** already on since October 9. If the $5 budget alert isn't set yet, add it at <https://console.cloud.google.com/billing> > Budgets & alerts.
 8. **Store the two Stripe secrets** from Terminal on the Mac, in the app's folder (the one used to deploy). Each command asks for the value at a hidden prompt; paste it and press Enter:
 
    ```bash
@@ -64,7 +64,9 @@ Steps 1 to 3 need Wes. Then he can add Jason on the Team page (<https://dashboar
    npm run deploy:functions     # the Stripe server code
    ```
 
-   The first functions deploy asks for **STRIPE_COMPANY_ID**: the Business ID shown in the app under **Settings > Online payments** once `npm run deploy` has run. Wes must have signed in and set up the business first, so the ID exists. The deploy saves it in `functions/.env.stellar-glass-jobs`. (A deploy that can't ask, like one Claude runs, needs that file first, holding the line `STRIPE_COMPANY_ID=` plus the ID. It isn't a secret, so it can be committed.) Only that business can use the Stripe account, so a stranger who signs up for their own business in the app can't bill through Wes's Stripe.
+   Only one business in the app can use the Stripe account, so a stranger who signs up for their own business can't bill through Wes's Stripe. That's **STRIPE_COMPANY_ID** in `functions/.env.stellar-glass-jobs`, already set to `KGoWhoXpLaKg0ieruQ2j`: the Stellar Glass business Jason set up on October 9, which the website's quote page also feeds. Before the first functions deploy, check that it matches the Business ID in the app under **Settings > Online payments**. It isn't a secret.
+
+   Wes joins that business with an invite link from Jason (**Settings > Team**, role Admin), and Jason can then hand it over with **Settings > Transfer ownership**. The Business ID stays the same. If Wes signs in without the link, the app makes him a second, empty business instead.
 
 ### C. Try it, then go live
 

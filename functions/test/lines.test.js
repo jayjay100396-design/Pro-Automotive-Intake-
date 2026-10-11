@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { stripeItems, itemsTotalCents, invoiceTotals, proposalStatusText, daysUntilDue, floridaDate, clip } from '../lines.js';
-import { invoiceTotals as appTotals, estimateTotals, proposalBill } from '../../public/js/calc.js';
+import { stripeItems, itemsTotalCents, invoiceTotals, paidOn, proposalStatusText, daysUntilDue, floridaDate, clip } from '../lines.js';
+import { invoiceTotals as appTotals, estimateTotals, proposalBill, paidOn as appPaidOn } from '../../public/js/calc.js';
 
 describe('Stripe invoice items', () => {
   it('sends whole quantities as quantity x unit price, and tax as its own line', () => {
@@ -70,6 +70,19 @@ describe('Stripe invoice details', () => {
     assert.equal(proposalStatusText({ number: 1005, price: 2604.18, paidBefore: 1302.09, thisInvoice: 1302.09 }),
       'Proposal 1005: $2,604.18\nPaid so far: $1,302.09\nThis invoice: $1,302.09\nLeft after this invoice: $0.00');
     assert.match(proposalStatusText({ number: 1005, price: 2604.18, paidBefore: 0, thisInvoice: 1302.09 }), /Left after this invoice: \$1,302\.09$/);
+  });
+
+  it('counts what has been paid on a bill the same way as the app', () => {
+    const bill = { status: 'unpaid', taxPct: 7, lines: [{ qty: 2, price: 245 }] };
+    for (const inv of [
+      bill,
+      { ...bill, status: 'paid' },
+      { ...bill, stripe: { status: 'open', amountPaid: 100 } },
+      { ...bill, status: 'paid', stripe: { status: 'paid', amountPaid: 400 } },
+      { ...bill, status: 'paid', stripe: { status: 'void' } },
+    ]) assert.equal(paidOn(inv), appPaidOn(inv), JSON.stringify(inv));
+    assert.equal(paidOn({ ...bill, status: 'paid', stripe: { status: 'paid', amountPaid: 400 } }), 400);
+    assert.equal(paidOn({ ...bill, status: 'paid' }), 524.3);
   });
 
   it('clips text to Stripe limits', () => {

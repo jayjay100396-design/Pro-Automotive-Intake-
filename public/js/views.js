@@ -7,7 +7,7 @@ import {
   proposalOptions, estimateAmount, proposalDeposit, depositSentence, termsWithoutDeposit, proposalTerms, proposalPayment,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
-import { proposalBilling, mountProposalBilling, stripeCard, mountStripeCard, paymentsSettings, mountPaymentsSettings } from './billing.js';
+import { proposalBilling, mountProposalBilling, stripeCard, mountStripeCard, settleStripeFirst, paymentsSettings, mountPaymentsSettings } from './billing.js';
 import { fileBrowser, countJobFiles } from './files.js';
 
 const go = (hash) => { location.hash = hash; };
@@ -869,6 +869,7 @@ export function invoiceEdit(id, params) {
           const r = await attempt(() => add('invoices', { ...data, payAppId: inv.payAppId || '' }), 'Invoice saved');
           if (r) go(`#/invoices/${r.id}`);
         } else {
+          if (!(await settleStripeFirst(id, data.status))) return;
           const done = attempt(() => update('invoices', id, data), 'Invoice saved');
           if (extra.status) rerender(); else await done;
         }
