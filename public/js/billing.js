@@ -265,6 +265,8 @@ export function mountStripeCard(root, invoiceId, current) {
       toast(`Invoice ${inv.number} is paid`);
     }
     wasPaid = inv.status === 'paid';
+    // Paid through Stripe for real, the bill stays as it was paid (firestore.rules), so the form locks.
+    if (inv.stripe?.status === 'paid' && inv.stripe.livemode) root.querySelectorAll('#f fieldset, #f button').forEach((el) => { el.disabled = true; });
   };
 
   const act = async (fn, ok) => {

@@ -819,7 +819,9 @@ export function invoiceEdit(id, params) {
     ? { number: nextNumber('invoices'), jobId: job?.id || '', date: today(), dueDate: addDays(today(), 30), status: 'unpaid', taxPct: 7, lines: [{ desc: '', qty: 1, price: 0 }] }
     : get('invoices', id);
   if (!inv) return { waiting: true, html: '<p class="muted">Loading…</p>' };
-  const ro = can.bill() ? '' : 'disabled';
+  // Paid through Stripe for real: it stays as it was paid, like Stripe's receipt (firestore.rules too).
+  const locked = inv.stripe?.status === 'paid' && !!inv.stripe.livemode;
+  const ro = can.bill() && !locked ? '' : 'disabled';
   return {
     html: `${header(isNew ? 'New invoice' : `Invoice ${esc(inv.number)}`, `
       ${!isNew ? `<a class="btn" href="#/invoices/${esc(id)}/print">Print / PDF</a>` : ''}
@@ -827,6 +829,7 @@ export function invoiceEdit(id, params) {
       ${!isNew && can.remove() ? '<button class="btn danger" id="del">Delete</button>' : ''}`)}
     ${inv.payAppId ? `<p class="muted">From <a href="#/payapps/${esc(inv.payAppId)}">pay app ${esc(get('payApps', inv.payAppId)?.number || '')}</a></p>` : ''}
     ${inv.estimateId ? `<p class="muted" id="proposal-link">${proposalLink(inv)}</p>` : ''}
+    ${locked ? '<p class="muted">Paid through Stripe, so this invoice stays as it was paid.</p>' : ''}
     <form id="f" class="stack">
       <fieldset class="card grid4" ${ro}>
         <label class="span2">Job <select name="jobId" required>${jobOptions(inv.jobId)}</select></label>

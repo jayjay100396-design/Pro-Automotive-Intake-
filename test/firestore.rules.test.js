@@ -4,7 +4,7 @@ const path = require('path');
 const {
   initializeTestEnvironment, assertSucceeds, assertFails,
 } = require('@firebase/rules-unit-testing');
-const { doc, getDoc, getDocs, collection, setDoc, updateDoc, deleteDoc, writeBatch, Timestamp } = require('firebase/firestore');
+const { doc, getDoc, getDocs, collection, setDoc, updateDoc, deleteDoc, writeBatch, Timestamp, serverTimestamp } = require('firebase/firestore');
 
 let env;
 const db = (uid) => env.authenticatedContext(uid).firestore();
@@ -102,7 +102,7 @@ describe('Firestore rules', function () {
     await assertFails(setDoc(doc(db('crew'), 'companies/stellar/customers/c2'), { name: 'X', stripeCustomerIds: { live: 'cus_3' } }));
   });
 
-  it('keeps an invoice paid through Stripe paid, and keeps it', async () => {
+  it('keeps an invoice paid through Stripe as it was paid, and keeps it', async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       const f = ctx.firestore();
       await setDoc(doc(f, 'companies/stellar/invoices/live'), { number: 1001, status: 'paid', stripe: { status: 'paid', livemode: true } });
@@ -111,14 +111,16 @@ describe('Firestore rules', function () {
     });
     for (const uid of ['wes', 'cpa']) {
       const f = db(uid);
-      await assertSucceeds(updateDoc(doc(f, 'companies/stellar/invoices/live'), { notes: 'Thanks', status: 'paid' }));
-      await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/live'), { status: 'unpaid' }));
-      await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/live'), { status: 'void' }));
+      // A save that changes nothing goes through (data.js stamps updatedAt); the bill stays as it was paid.
+      await assertSucceeds(updateDoc(doc(f, 'companies/stellar/invoices/live'), { number: 1001, status: 'paid', updatedAt: serverTimestamp() }));
+      for (const change of [{ status: 'unpaid' }, { status: 'void' }, { notes: 'Thanks' }, { number: 1009 }, { lines: [{ desc: 'Glass', qty: 1, price: 5 }] }]) {
+        await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/live'), change));
+      }
     }
     await assertFails(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/live')));
     await assertFails(deleteDoc(doc(db('admin1'), 'companies/stellar/invoices/live')));
     // Paid in test mode, or paid by check after its Stripe invoice was voided: those can change.
-    await assertSucceeds(updateDoc(doc(db('wes'), 'companies/stellar/invoices/test'), { status: 'void' }));
+    await assertSucceeds(updateDoc(doc(db('wes'), 'companies/stellar/invoices/test'), { notes: 'Thanks', status: 'void' }));
     await assertSucceeds(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/test')));
     await assertSucceeds(updateDoc(doc(db('cpa'), 'companies/stellar/invoices/check'), { status: 'unpaid' }));
     await assertSucceeds(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/check')));

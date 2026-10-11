@@ -79,9 +79,9 @@ service cloud.firestore {
         || (resource != null && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['stripe', 'stripeCustomerIds']));
     }
 
-    // An invoice paid through Stripe for real (live mode) stays paid and isn't deleted: it's the
-    // record of money that came in, and refunds are credit notes in Stripe. Test-mode payments
-    // aren't real.
+    // An invoice paid through Stripe for real (live mode) stays as it was paid (only the app's
+    // updatedAt stamp changes) and isn't deleted: it's the record of money that came in, like the
+    // Stripe receipt, and refunds are credit notes in Stripe. Test-mode payments aren't real.
     function paidThroughStripe(collection) {
       return collection == 'invoices' && resource != null
         && resource.data.get('stripe', {}).get('status', '') == 'paid'
@@ -344,7 +344,7 @@ service cloud.firestore {
         allow read: if isRecord(collection) && isMember(companyId);
         allow create, update: if isRecord(collection) && canEditCollection(companyId, collection)
           && keepsServerFields()
-          && (!paidThroughStripe(collection) || request.resource.data.get('status', '') == 'paid')
+          && (!paidThroughStripe(collection) || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']))
           && (!payableThroughStripe(collection) || request.resource.data.get('status', '') == resource.data.get('status', ''));
         allow delete: if isRecord(collection) && canManage(companyId) && !paidThroughStripe(collection) && !payableThroughStripe(collection);
       }
