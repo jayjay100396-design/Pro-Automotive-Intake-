@@ -55,9 +55,9 @@ service cloud.firestore {
         || (isBillingCollection(collection) && hasRole(companyId, ['accountant']));
     }
 
-    // Business records. members, invites and requests have their own rules below.
+    // Business records. members, invites, requests and files have their own rules below.
     function isRecord(collection) {
-      return !(collection in ['members', 'invites', 'requests']);
+      return !(collection in ['members', 'invites', 'requests', 'files']);
     }
 
     function invitePath(companyId, inviteId) {
@@ -70,6 +70,48 @@ service cloud.firestore {
 
     function unchanged(field) {
       return request.resource.data[field] == resource.data[field];
+    }
+
+    // ---------- Job files ----------
+    //
+    // companies/{companyId}/files/{fileId}: one job file's record. The file itself is in Cloud Storage.
+    //   jobId, customerId, category (photos|plans|documents|forms|other), name, contentType, size, note,
+    //   path and thumbPath (where the file and its small preview are stored, in this company's folder),
+    //   url and thumbUrl (their Cloud Storage download links), createdBy, createdByName, createdAt,
+    //   drive.{uid} (that person's copy in their own Google Drive), updatedAt.
+    // Where a file is stored, its links and who added it are set once and never change, so a record
+    // can't be pointed at anything but the file that was uploaded.
+
+    function isFileCategory(c) {
+      return c in ['photos', 'plans', 'documents', 'forms', 'other'];
+    }
+
+    // A download link for a file in this company's folder of the app's own Cloud Storage bucket
+    // (stellar-glass-jobs), or of the Storage emulator's demo bucket in local testing.
+    function isStorageUrl(companyId, v) {
+      return v is string && v.size() <= 2000
+        && (v.matches('https://firebasestorage[.]googleapis[.]com/v0/b/stellar-glass-jobs[.](firebasestorage[.]app|appspot[.]com)/o/companies%2F' + companyId + '%2F.+')
+          || v.matches('http://(127[.]0[.]0[.]1|localhost):9199/v0/b/demo-stellar-glass[.]appspot[.]com/o/companies%2F' + companyId + '%2F.+'));
+    }
+
+    function isStoragePath(companyId, v) {
+      return v is string && v.size() <= 1024 && v.matches('companies/' + companyId + '/.+');
+    }
+
+    // A new record has no Drive copies yet; each person adds their own afterwards.
+    function isValidNewFile(companyId, d) {
+      return d.createdBy == request.auth.uid
+        && isFileCategory(d.category)
+        && isStoragePath(companyId, d.path)
+        && isStorageUrl(companyId, d.url)
+        && (d.get('thumbPath', '') == '' || isStoragePath(companyId, d.thumbPath))
+        && (d.get('thumbUrl', '') == '' || isStorageUrl(companyId, d.thumbUrl))
+        && !('drive' in d);
+    }
+
+    function keepsFileOrigin() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['path', 'url', 'thumbPath', 'thumbUrl', 'createdBy', 'createdAt', 'drive']);
     }
 
     // A user's own profile. Nobody else can read or write it.
@@ -294,23 +336,33 @@ service cloud.firestore {
         allow delete: if canManage(companyId);
       }
 
-      // Job files (photos, plans, documents): the file is in Cloud Storage, this is its record.
-      // Editors work with files through the general rules below. On top of those:
-      // the accountant can add contracts and documents, and permits and forms, and fix up their own;
-      // any member can note that they copied a file to their own Google Drive;
-      // staff can delete files they uploaded (owners and admins can delete any).
+      // Job files (see the note with the job file checks above).
       match /files/{fileId} {
-        allow create: if hasRole(companyId, ['accountant'])
-          && request.resource.data.category in ['documents', 'forms']
-          && request.resource.data.createdBy == request.auth.uid;
+        allow read: if isMember(companyId);
+        // Owners, admins and staff add any kind of file; the accountant adds contracts and documents,
+        // and permits and forms.
+        allow create: if isValidNewFile(companyId, request.resource.data)
+          && (canEdit(companyId)
+            || (hasRole(companyId, ['accountant']) && request.resource.data.category in ['documents', 'forms']));
+        // Owners, admins and staff rename any file, move it to another category and add notes.
+        allow update: if canEdit(companyId)
+          && keepsFileOrigin()
+          && isFileCategory(request.resource.data.category);
+        // The accountant does the same for the contracts, documents, permits and forms they added.
         allow update: if hasRole(companyId, ['accountant'])
           && resource.data.createdBy == request.auth.uid
           && request.resource.data.category in ['documents', 'forms']
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'category', 'note', 'updatedAt']);
+        // Anyone on the team notes that they copied a file to their own Google Drive, and only that.
         allow update: if isMember(companyId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['drive', 'updatedAt'])
           && request.resource.data.drive.diff(resource.data.get('drive', {})).affectedKeys().hasOnly([request.auth.uid]);
-        allow delete: if canEdit(companyId) && resource.data.createdBy == request.auth.uid;
+        // Owners and admins delete any file. Staff delete the ones they added, except photos a customer
+        // sent with a quote request: the website stored those, so only owners and admins can remove them.
+        allow delete: if canManage(companyId)
+          || (canEdit(companyId)
+            && resource.data.createdBy == request.auth.uid
+            && !resource.data.path.matches('companies/[^/]+/requests/.+'));
       }
 
       match /{collection}/{docId} {
