@@ -410,13 +410,17 @@ export function takeoffPage(fileId, params) {
   }
 
   async function readAll() {
+    // Stops quietly if the page is left or another drawing is opened while sheets are being read.
+    const doc = pdf;
+    const stale = () => gone || pdf !== doc;
     try {
       const list = [];
-      for (let n = 1; n <= pdf.numPages; n++) {
-        if (gone) return;
-        renderRead(`Reading sheet ${n} of ${pdf.numPages}…`);
+      for (let n = 1; n <= doc.numPages; n++) {
+        if (stale()) return;
+        renderRead(`Reading sheet ${n} of ${doc.numPages}…`);
         list.push(await model(n));
       }
+      if (stale()) return;
       result = analyze(list);
       result.scanned = list.every((m) => !m.text.length && m.segs.length < 50);
       const labels = result.openings.map((o) => o.label);
@@ -434,6 +438,7 @@ export function takeoffPage(fileId, params) {
       renderMeasure();
       overlay();
     } catch (err) {
+      if (stale()) return;
       console.error(err);
       toast('Couldn\'t read this drawing.', true);
       renderRead();

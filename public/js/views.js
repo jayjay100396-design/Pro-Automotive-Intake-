@@ -321,7 +321,8 @@ function fromTakeoff(template, jobId) {
   if (!draft || draft.jobId !== jobId || !draft.lines?.length) return {};
   const preset = PRESETS[template] || PRESETS.storefront;
   const like = (kind) => preset.find((l) => l.kind === kind) || {};
-  const lines = draft.lines.map((l) => ({ ...like(l.kind), ...l, price: like(l.kind).price ?? 0, taxable: like(l.kind).taxable ?? true }));
+  // A type without a size comes over priced each, so the template's per-sq-ft price doesn't fit it.
+  const lines = draft.lines.map((l) => ({ ...like(l.kind), ...l, price: like(l.kind).unit === l.unit ? like(l.kind).price ?? 0 : 0, taxable: like(l.kind).taxable ?? true }));
   const kinds = new Set(draft.lines.map((l) => l.kind));
   return { lines: [...lines, ...preset.filter((l) => !kinds.has(l.kind))], scope: draft.scope || '' };
 }
