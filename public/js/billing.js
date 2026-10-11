@@ -2,7 +2,7 @@
 //   - Billing card on a proposal: deposit and final invoices, line by line from the proposal.
 //   - Online payment card on an invoice: send it with Stripe, copy the link, check, void.
 //   - Online payments card in Settings: is Stripe connected, and the Business ID for setup.
-import { state, add, get, where, nextNumber, can, onChange } from './data.js';
+import { state, putOnce, get, where, nextNumber, can, onChange } from './data.js';
 import {
   invoiceTotals, proposalBill, depositLine, proposalDeposit, proposalPayment, proposalOptions, estimateAmount, money, paidOn,
 } from './calc.js';
@@ -32,6 +32,13 @@ function unsavedCheck(current, saved, sig) {
 const KIND = { deposit: 'Deposit', final: 'Final' };
 const fromProposal = (estimateId) => where('invoices', 'estimateId', estimateId)
   .sort((a, b) => n(a.number) - n(b.number));
+// Invoices made here take the next id in the proposal's own series (its id, then -1, -2, …),
+// and putOnce only makes one if that id is free. So two devices clicking at the same moment
+// can't both bill the same balance: the second finds its id taken.
+const nextProposalId = (estimateId) => {
+  const seq = (id) => (id.startsWith(`${estimateId}-`) && /^\d+$/.test(id.slice(estimateId.length + 1)) ? Number(id.slice(estimateId.length + 1)) : 0);
+  return `${estimateId}-${Math.max(0, ...fromProposal(estimateId).map((i) => seq(i.id))) + 1}`;
+};
 
 const proposalSig = (e) => {
   const d = proposalDeposit(e);
@@ -142,12 +149,16 @@ export function mountProposalBilling(root, estimateId, current) {
     const more = kind === 'final' ? ` for the ${money(inv.total)} left` : '';
     if (same.length && !confirm(`This proposal already has ${kind} invoice ${same.map((i) => i.number).join(', ')}. Make another one${more}?`)) return;
     try {
-      const r = await add('invoices', inv);
+      const id = nextProposalId(estimateId);
+      if (!(await putOnce('invoices', id, inv))) {
+        return toast('Someone just made an invoice from this proposal. It shows in the Billing card; make another only if it\'s still needed.', true);
+      }
       toast(`${KIND[kind]} invoice ${inv.number} created`);
-      go(`#/invoices/${r.id}`);
+      go(`#/invoices/${id}`);
     } catch (err) {
       console.error(err);
-      toast(err.code === 'permission-denied' ? 'Your role can\'t make invoices.' : err.message, true);
+      toast(err.code === 'permission-denied' ? 'Your role can\'t make invoices.'
+        : err.code === 'unavailable' ? 'You\'re offline. Connect to the internet, then make the invoice.' : err.message, true);
     }
   };
   card.addEventListener('click', (ev) => {

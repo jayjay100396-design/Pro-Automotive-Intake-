@@ -2,7 +2,7 @@
 import { db } from './firebase.js';
 import { SITE_ID } from './brand.js';
 import {
-  doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch, serverTimestamp, Timestamp,
+  doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch, runTransaction, serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices', 'requests'];
@@ -80,6 +80,13 @@ export const remove = (c, id) => deleteDoc(ref(c, id));
 // For records whose id is needed before they're written, e.g. a file's storage path.
 export const newId = (c) => doc(col(c)).id;
 export const put = (c, id, data) => setDoc(ref(c, id), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
+// Creates the record only if no record has that id yet, so two devices can't both make it (a
+// transaction, so it needs a connection). False: the id was taken.
+export const putOnce = (c, id, data) => runTransaction(db, async (tx) => {
+  if ((await tx.get(ref(c, id))).exists()) return false;
+  tx.set(ref(c, id), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
+  return true;
+});
 export const updateCompany = (data) => updateDoc(doc(db, 'companies', state.companyId), data);
 
 // Remembers who prepares proposals, so the next one is pre-filled. Private to this user.
