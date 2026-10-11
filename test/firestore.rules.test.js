@@ -129,15 +129,20 @@ describe('Firestore rules', function () {
       const f = ctx.firestore();
       await setDoc(doc(f, 'companies/stellar/invoices/out'), { number: 1004, status: 'unpaid', stripe: { status: 'open', livemode: true } });
       await setDoc(doc(f, 'companies/stellar/invoices/testout'), { number: 1005, status: 'unpaid', stripe: { status: 'open', livemode: false } });
+      // Marked uncollectible in Stripe after $500 was paid on it: Stripe still takes payment on it.
+      await setDoc(doc(f, 'companies/stellar/invoices/written'), { number: 1006, status: 'unpaid', stripe: { status: 'uncollectible', livemode: true, amountPaid: 500 } });
     });
     // Say from a tab that was offline when the Stripe invoice went out.
     for (const uid of ['wes', 'cpa']) {
       const f = db(uid);
-      await assertSucceeds(updateDoc(doc(f, 'companies/stellar/invoices/out'), { notes: 'Thanks', status: 'unpaid' }));
-      await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/out'), { status: 'paid' }));
-      await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/out'), { status: 'void' }));
+      for (const id of ['out', 'written']) {
+        await assertSucceeds(updateDoc(doc(f, `companies/stellar/invoices/${id}`), { notes: 'Thanks', status: 'unpaid' }));
+        await assertFails(updateDoc(doc(f, `companies/stellar/invoices/${id}`), { status: 'paid' }));
+        await assertFails(updateDoc(doc(f, `companies/stellar/invoices/${id}`), { status: 'void' }));
+      }
     }
     await assertFails(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/out')));
+    await assertFails(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/written')));
     // Once the Cloud Function has voided it, the bill can change.
     await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'companies/stellar/invoices/out'), { 'stripe.status': 'void' }));
     await assertSucceeds(updateDoc(doc(db('cpa'), 'companies/stellar/invoices/out'), { status: 'paid' }));

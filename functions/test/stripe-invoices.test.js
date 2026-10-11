@@ -397,6 +397,26 @@ describe('Stripe invoices (server)', function () {
     assert.equal(stripe.called('invoices.sendInvoice').length, 0);
   });
 
+  it('cancels the Stripe invoice if the customer or the default notes change while it\'s being made', async () => {
+    await inv().update({ notes: FieldValue.delete() }); // so the business's default notes go on it
+    const finalize = stripe.invoices.finalizeInvoice;
+    for (const [path, change] of [['customers/c1', { email: 'ap@lakelandbuilders.example' }], ['', { invoiceNotes: 'Net 30.' }]]) {
+      stripe.invoices.finalizeInvoice = async (...args) => {
+        const si = await finalize(...args);
+        await db.doc(`companies/${C}${path && `/${path}`}`).update(change); // edited on another device meanwhile
+        return si;
+      };
+      await assert.rejects(create({ send: true }), { code: 'failed-precondition', message: /its customer was changed while its Stripe invoice was being made/ });
+      const [, voided] = stripe.called('invoices.voidInvoice').at(-1);
+      assert.equal(stripe.invoices.get(voided).status, 'void');
+    }
+    assert.equal(stripe.called('invoices.sendInvoice').length, 0);
+    // Tried again, it goes to the new address with the new notes.
+    stripe.invoices.finalizeInvoice = finalize;
+    assert.equal((await create({ send: true })).sentTo, 'ap@lakelandbuilders.example');
+    assert.equal(stripe.called('invoices.create').at(-1)[1].description, 'Net 30.');
+  });
+
   // A first try whose answer from Stripe is lost after Stripe finalized the invoice, so it's never saved.
   const lostTry = async () => {
     const finalize = stripe.invoices.finalizeInvoice;
@@ -497,6 +517,58 @@ describe('Stripe invoices (server)', function () {
     assert.equal(await handleStripeEvent({ db, stripe, event: note(other.id), allowed: C }), 'ignored');
   });
 
+  it('keeps a Stripe invoice marked uncollectible linked until it\'s voided, since it can still be paid', async () => {
+    const { invoiceId } = await create();
+    const check = () => syncStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' });
+    // Marked uncollectible in Stripe's dashboard after $500 was paid on it.
+    Object.assign(stripe.invoices.get(invoiceId), { status: 'uncollectible', amount_paid: 50000 });
+    const event = { type: 'invoice.marked_uncollectible', data: { object: { id: invoiceId, metadata: { companyId: C, invoiceId: 'i1' } } } };
+    assert.equal(await handleStripeEvent({ db, stripe, event, allowed: C }), 'updated');
+    let d = await data();
+    assert.equal(d.stripe.status, 'uncollectible');
+    assert.equal(d.stripe.amountPaid, 500);
+    // A new Stripe invoice would bill that $500 again and leave this one payable.
+    await assert.rejects(create({ send: true }), { code: 'failed-precondition', message: /uncollectible, but it can still be paid\. Void it first/ });
+    assert.equal(stripe.called('invoices.create').length, 1);
+    // Stripe won't void it with a payment on it, so the bill keeps the payment.
+    stripe.fail['invoices.voidInvoice'] = stripeError('StripeInvalidRequestError', 'You can\'t void an invoice with a payment on it.');
+    await assert.rejects(voidStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' }), /Stripe: You can't void an invoice with a payment on it/);
+    d = await data();
+    assert.equal(d.stripe.status, 'uncollectible');
+    assert.equal(d.stripe.amountPaid, 500);
+    // Without one, it's voided from the app, and then a new one goes out.
+    stripe.invoices.get(invoiceId).amount_paid = 0;
+    await check();
+    assert.equal((await voidStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' })).status, 'void');
+    assert.equal(stripe.invoices.get(invoiceId).status, 'void');
+    const r = await create({ send: true });
+    assert.equal(r.number, '1003-2');
+    assert.equal(r.sentTo, 'pat@example.com');
+  });
+
+  it('keeps a payment recorded while a new Stripe invoice was being made', async () => {
+    const { invoiceId: old } = await create();
+    Object.assign(stripe.invoices.get(old), { status: 'uncollectible' });
+    await syncStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' });
+    // Once the live key is in, a test-mode one doesn't hold up a new live invoice. While that's
+    // being made, the earlier Stripe invoice is paid and recorded (as the webhook would).
+    stripe.livemode = true;
+    const finalize = stripe.invoices.finalizeInvoice;
+    stripe.invoices.finalizeInvoice = async (...args) => {
+      const si = await finalize(...args);
+      stripe.pay(old);
+      await applyStripeInvoice(db, await stripe.invoices.retrieve(old));
+      return si;
+    };
+    await assert.rejects(create({ livemode: true }), { code: 'failed-precondition', message: /marked paid while its Stripe invoice was being made/ });
+    const d = await data();
+    assert.equal(d.status, 'paid');
+    assert.equal(d.stripe.status, 'paid');
+    assert.equal(d.stripe.invoiceId, old);
+    assert.equal(d.stripe.amountPaid, 1890);
+    assert.equal([...stripe.invoices.values()].at(-1).status, 'void'); // the new one was cancelled
+  });
+
   it('doesn\'t let an older read of the Stripe invoice undo its payment', async () => {
     const { invoiceId } = await create();
     const stale = await stripe.invoices.retrieve(invoiceId); // a check that read it just before the payment
@@ -544,9 +616,16 @@ describe('Stripe invoices (server)', function () {
     const live = await create({ livemode: true });
     stripe.livemode = false;
     await assert.rejects(create({ livemode: false }), /live Stripe invoice that can still be paid/);
-    const d = await data();
+    let d = await data();
     assert.equal(d.stripe.invoiceId, live.invoiceId);
     assert.equal(d.stripe.status, 'open');
+    // Marked uncollectible in Stripe, it can still be paid too.
+    await inv().update({ 'stripe.status': 'uncollectible' });
+    await assert.rejects(create({ livemode: false }), /uncollectible, but it can still be paid/);
+    await assert.rejects(voidStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' }), /live, but the app is using a test key/);
+    d = await data();
+    assert.equal(d.stripe.invoiceId, live.invoiceId);
+    assert.equal(d.stripe.status, 'uncollectible');
     assert.equal(stripe.called('invoices.create').length, 1);
   });
 

@@ -88,12 +88,14 @@ service cloud.firestore {
         && resource.data.get('stripe', {}).get('livemode', false) == true;
     }
 
-    // While its live Stripe invoice can still be paid, an invoice keeps its status and isn't
-    // deleted. The app has the Cloud Function void the Stripe invoice first, so this only stops a
-    // stale or offline tab from leaving a payment link out for a bill marked paid, void or deleted.
-    function openThroughStripe(collection) {
+    // While its live Stripe invoice can still be paid (open, or marked uncollectible, which Stripe
+    // still takes payment on), an invoice keeps its status and isn't deleted. The app has the Cloud
+    // Function void the Stripe invoice first, so this only stops a stale or offline tab from leaving a
+    // payment link out for a bill marked paid, void or deleted. One with a payment on it can't be
+    // voided, so it stays: it's the record of that payment.
+    function payableThroughStripe(collection) {
       return collection == 'invoices' && resource != null
-        && resource.data.get('stripe', {}).get('status', '') == 'open'
+        && resource.data.get('stripe', {}).get('status', '') in ['open', 'uncollectible']
         && resource.data.get('stripe', {}).get('livemode', false) == true;
     }
 
@@ -343,8 +345,8 @@ service cloud.firestore {
         allow create, update: if isRecord(collection) && canEditCollection(companyId, collection)
           && keepsServerFields()
           && (!paidThroughStripe(collection) || request.resource.data.get('status', '') == 'paid')
-          && (!openThroughStripe(collection) || request.resource.data.get('status', '') == resource.data.get('status', ''));
-        allow delete: if isRecord(collection) && canManage(companyId) && !paidThroughStripe(collection) && !openThroughStripe(collection);
+          && (!payableThroughStripe(collection) || request.resource.data.get('status', '') == resource.data.get('status', ''));
+        allow delete: if isRecord(collection) && canManage(companyId) && !paidThroughStripe(collection) && !payableThroughStripe(collection);
       }
 
       // Line items (e.g. G703 continuation lines), attachment metadata and other nested records.

@@ -107,6 +107,10 @@ function customerFields(cust, companyId, customerId) {
   return fields;
 }
 
+// A fingerprint of what a Stripe invoice is made from: the bill and its job (sentFrom), and who it's to.
+const fingerprint = (sent, cust, companyId, customerId) => createHash('sha256')
+  .update(JSON.stringify([sent, customerFields(cust, companyId, customerId)])).digest('hex').slice(0, 40);
+
 // Finds or makes the Stripe customer for an app customer, and refreshes their details.
 // Test-mode and live-mode customers are separate in Stripe, so each mode keeps its own id.
 async function ensureCustomer({ db, stripe, livemode, companyId, customerId, cust }) {
@@ -168,6 +172,11 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     // A live Stripe invoice that can still be paid stays linked, or its payment couldn't be recorded.
     if (prev.status === 'open' && prev.livemode) {
       throw new HttpsError('failed-precondition', 'This invoice has a live Stripe invoice that can still be paid, but the app is using a test key right now.');
+    }
+    // So does one Stripe marked uncollectible: it can still be paid, so it's voided before another
+    // is made (unless it's from test mode and the live key is in).
+    if (prev.status === 'uncollectible' && (prev.livemode || !livemode)) {
+      throw new HttpsError('failed-precondition', 'Stripe marked this invoice\'s Stripe invoice uncollectible, but it can still be paid. Void it first (Online payment), then send a new one.');
     }
     const claimedAt = prev.claimedAt?.toDate?.() || null;
     if (prev.status === 'creating' && claimedAt && now - claimedAt < CLAIM_MS) {
@@ -240,7 +249,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     // What this Stripe invoice is made from. It goes on the invoice too, so a later try can tell
     // whether an invoice it finds there is still right.
     const sent = sentFrom(inv, job, defaultNotes);
-    const madeFrom = createHash('sha256').update(JSON.stringify([sent, customerFields(cust, companyId, customerId)])).digest('hex').slice(0, 40);
+    const madeFrom = fingerprint(sent, cust, companyId, customerId);
 
     // An earlier try may have finished in Stripe but never got saved here. Its invoice is used if it
     // was made from the bill as it is now; one made from an older version is cancelled, like a void.
@@ -298,16 +307,20 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       draftId = null;
     }
 
-    // Save it, unless the bill was deleted, paid, voided or edited meanwhile (say on another device).
-    // Then the Stripe invoice is wrong or shouldn't be payable, so it's cancelled.
+    // Save it, unless the bill was deleted, paid, voided or edited meanwhile (say on another device),
+    // or its job, customer or the default notes were. Then the Stripe invoice is wrong or shouldn't be
+    // payable, so it's cancelled.
     const changed = await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
       if (!snap.exists) return 'deleted';
       const cur = snap.data();
       if (['paid', 'void'].includes(cur.status)) return `marked ${cur.status}`;
-      // The job's name, site and PO are on the Stripe invoice too.
-      const curJob = cur.jobId ? (await tx.get(db.doc(`companies/${companyId}/jobs/${cur.jobId}`))).data() || {} : {};
-      if (JSON.stringify(sentFrom(cur, curJob, defaultNotes)) !== JSON.stringify(sent) || (cur.customerId || null) !== (inv.customerId || null)) return 'changed';
+      const read = async (path) => (await tx.get(db.doc(`companies/${companyId}${path}`))).data();
+      const curJob = (cur.jobId && await read(`/jobs/${cur.jobId}`)) || {};
+      const curCustomerId = cur.customerId || curJob.customerId || null;
+      const curCust = curCustomerId && await read(`/customers/${curCustomerId}`);
+      const curNotes = (await read(''))?.invoiceNotes ?? '';
+      if (!curCust || fingerprint(sentFrom(cur, curJob, curNotes), curCust, companyId, curCustomerId) !== madeFrom) return 'changed';
       tx.update(ref, {
         stripe: {
           ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent,
@@ -318,29 +331,36 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     });
     if (changed) {
       await stripe.invoices.voidInvoice(finalized.id).catch(() => {});
+      const what = changed === 'changed' ? 'This invoice, its job or its customer was changed' : `This invoice was ${changed}`;
       throw new HttpsError(changed === 'deleted' ? 'not-found' : 'failed-precondition',
-        `This invoice was ${changed} while its Stripe invoice was being made, so the Stripe invoice was cancelled.`);
+        `${what} while its Stripe invoice was being made, so the Stripe invoice was cancelled.`);
     }
   } catch (e) {
     // A half-made draft is never sent; remove it so it doesn't clutter Stripe.
     if (draftId) await stripe.invoices.del(draftId).catch(() => {});
     const err = friendlyError(e);
     if (err.code === 'internal') console.error('Stripe invoice failed', e);
+    // Put back what was there, unless something recorded a newer state meanwhile (say the webhook
+    // heard the earlier Stripe invoice was paid): that stays.
     const restored = { ...prev, status: prev.status === 'creating' ? null : (prev.status ?? null), claimedAt: null, error: err.message, errorAt: new Date() };
-    await ref.update({ stripe: restored }).catch(() => {});
+    await db.runTransaction(async (tx) => {
+      const s = (await tx.get(ref)).data()?.stripe;
+      if (s?.status === 'creating' && s.claimedAt?.toMillis?.() === now.getTime()) tx.update(ref, { stripe: restored });
+    }).catch(() => {});
     throw err;
   }
   const warning = send ? await sendEmail(stripe, ref, finalized.id, finalized.customer_email || cust.email) : null;
   return { ...summary((await ref.get()).data().stripe), warning };
 }
 
-// Voids the open Stripe invoice (to correct it, or because it was paid by check).
+// Voids the Stripe invoice that can still be paid (to correct it, or because it was paid by check):
+// an open one, or one Stripe marked uncollectible.
 export async function voidStripeInvoice({ db, stripe, livemode, companyId, invoiceId }) {
   const ref = invoiceRef(db, companyId, invoiceId);
   const snap = await ref.get();
   if (!snap.exists) throw new HttpsError('not-found', 'That invoice no longer exists.');
   const s = snap.data().stripe || {};
-  if (!s.invoiceId || s.status !== 'open') throw new HttpsError('failed-precondition', 'There\'s no open Stripe invoice to void.');
+  if (!s.invoiceId || !['open', 'uncollectible'].includes(s.status)) throw new HttpsError('failed-precondition', 'There\'s no open Stripe invoice to void.');
   if (!!s.livemode !== livemode) {
     if (s.livemode) throw new HttpsError('failed-precondition', 'That Stripe invoice is live, but the app is using a test key right now.');
     // Made with the test key: the live key can't see it, and nobody can pay it for real.
@@ -354,9 +374,9 @@ export async function voidStripeInvoice({ db, stripe, livemode, companyId, invoi
   } catch (e) {
     // Most likely the customer just paid it: record that instead.
     const current = await stripe.invoices.retrieve(s.invoiceId).catch(() => null);
-    if (current && current.status !== 'open') {
+    if (current?.status === 'paid' || current?.status === 'void') {
       await applyStripeInvoice(db, current);
-      throw new HttpsError('failed-precondition', current.status === 'paid' ? 'The customer already paid this Stripe invoice.' : `The Stripe invoice is already ${current.status}.`);
+      throw new HttpsError('failed-precondition', current.status === 'paid' ? 'The customer already paid this Stripe invoice.' : 'The Stripe invoice is already void.');
     }
     throw friendlyError(e);
   }

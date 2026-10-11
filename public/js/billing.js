@@ -43,12 +43,17 @@ const proposalSig = (e) => {
   ]);
 };
 
+// A Stripe invoice that can still be paid: an open one, or one marked uncollectible in Stripe (Stripe
+// still takes payment on it).
+const payable = (st) => st?.status === 'open' || st?.status === 'uncollectible';
+
 // Where an invoice stands, in a few words.
 function invoiceNote(inv) {
   const st = inv.stripe || {};
   if (inv.status === 'paid') return st.status === 'paid' ? `paid online${st.paidAt ? ` ${when(st.paidAt)}` : ''}` : `paid${inv.paidDate ? ` ${fmtDate(inv.paidDate)}` : ''}`;
-  if (st.status === 'open') {
+  if (payable(st)) {
     if (n(st.amountPaid) > 0) return `${money(st.amountPaid)} paid online`;
+    if (st.status === 'uncollectible') return 'uncollectible in Stripe';
     return st.sentTo ? `emailed with Stripe${st.sentAt ? ` ${when(st.sentAt)}` : ''}` : 'payment link ready';
   }
   return '';
@@ -118,7 +123,7 @@ export function mountProposalBilling(root, estimateId, current) {
       const prior = earlier.filter((i) => i.kind === 'deposit' || i.kind === 'final');
       // One edited after its Stripe invoice went out: the customer would still pay the Stripe amount,
       // so that gets sorted out first.
-      const stale = prior.find((d) => d.status === 'unpaid' && d.stripe?.status === 'open'
+      const stale = prior.find((d) => d.status === 'unpaid' && payable(d.stripe)
         && Math.round(invoiceTotals(d).total * 100) !== Math.round(n(d.stripe.amountDue) * 100));
       if (stale) {
         return toast(`Invoice ${stale.number} comes to ${money(invoiceTotals(stale).total)}, but its Stripe invoice asks for ${money(stale.stripe.amountDue)}. Void that Stripe invoice and send a new one first.`, true);
@@ -178,9 +183,10 @@ const stillCreating = (st) => st.status === 'creating' && Date.now() - (st.claim
 // A refund through a credit note on the Stripe invoice comes back to the app (the webhook hears of it).
 const GIVE_BACK = 'To give money back, open the invoice in Stripe and issue a credit note with a refund; it then shows here.';
 
-// Part paid online: Stripe won't void an invoice that has payments on it.
-const partPaid = (st) => (st.status === 'open' && n(st.amountPaid) > 0
-  ? `${money(st.amountPaid)} of this invoice was paid online, and Stripe can't void an invoice with a payment on it. If the rest came another way, mark the invoice paid in Stripe's dashboard and it turns Paid here. To cancel it, first refund the payment and mark the invoice uncollectible there.`
+// Part paid online: Stripe won't void an invoice that has payments on it. (A credit note for the whole
+// invoice turns it paid, with what was paid refunded; Stripe's dashboard has none for uncollectible ones.)
+const partPaid = (st) => (payable(st) && n(st.amountPaid) > 0
+  ? `${money(st.amountPaid)} of this invoice was paid online, and Stripe can't void an invoice with a payment on it. If the rest came another way, mark the invoice paid in Stripe's dashboard and it turns Paid here.${st.status === 'open' ? ' To cancel it, issue a credit note there for the whole invoice, refunding what was paid.' : ''}`
   : '');
 
 function stripeHtml(inv, busy) {
@@ -194,24 +200,27 @@ function stripeHtml(inv, busy) {
     body = `<p class="ok">Paid through Stripe${st.paidAt ? ` on ${when(st.paidAt)}` : ''}${test}.</p>
       ${n(st.credited) > 0 ? `<p class="small">${money(st.credited)} of it was refunded or credited back in Stripe, so ${money(st.amountPaid)} counts as paid.</p>` : ''}
       ${st.hostedUrl || st.pdfUrl ? `<div class="row">${st.hostedUrl ? `<a class="btn small" href="${esc(st.hostedUrl)}" target="_blank" rel="noopener">Receipt page</a>` : ''}${st.pdfUrl ? `<a class="btn small" href="${esc(st.pdfUrl)}" target="_blank" rel="noopener">Stripe PDF</a>` : ''}</div>` : ''}`;
-  } else if (st.status === 'open') {
+  } else if (payable(st)) {
     const now = invoiceTotals(inv).total;
     const changed = Math.round(now * 100) !== Math.round(n(st.amountDue) * 100);
     // Edited since the Stripe invoice was made: lines, tax, notes, due date, number, job, or the
     // job's name, site or PO.
     const edited = changed || (!!st.sent && stripeSig({ ...inv, job: get('jobs', inv.jobId) }) !== stripeSig(st.sent));
     const part = n(st.amountPaid) > 0 ? ` ${money(st.amountPaid)} is paid so far, ${money(n(st.amountDue) - n(st.amountPaid))} to go.` : '';
-    body = `<p>Stripe invoice ${esc(st.number || '')}${test} is waiting for payment: <b>${money(st.amountDue)}</b>.${part}
-      ${!st.sentTo ? 'It hasn\'t been emailed; send the link yourself, or email it from here.'
-    : st.livemode ? `Stripe emailed it to ${esc(st.sentTo)}${st.sentAt ? ` on ${when(st.sentAt)}` : ''}.`
-      : `Marked as emailed to ${esc(st.sentTo)}, but Stripe doesn't send emails in test mode.`}</p>
+    // Marked uncollectible in Stripe's dashboard: it isn't emailed again, and a new one waits for a void.
+    const written = st.status === 'uncollectible';
+    body = `<p>Stripe invoice ${esc(st.number || '')}${test} ${written ? 'was marked uncollectible in Stripe, but it can still be paid' : 'is waiting for payment'}: <b>${money(st.amountDue)}</b>.${part}
+      ${written ? (n(st.amountPaid) > 0 ? '' : 'Void it before sending a new one.')
+    : !st.sentTo ? 'It hasn\'t been emailed; send the link yourself, or email it from here.'
+      : st.livemode ? `Stripe emailed it to ${esc(st.sentTo)}${st.sentAt ? ` on ${when(st.sentAt)}` : ''}.`
+        : `Marked as emailed to ${esc(st.sentTo)}, but Stripe doesn't send emails in test mode.`}</p>
       ${changed ? `<p class="warn small">This invoice now comes to ${money(now)}. Void the Stripe invoice and send a new one so the customer sees the new amount.</p>`
     : edited ? '<p class="warn small">This invoice or its job changed after the Stripe invoice was made. Void the Stripe invoice and send a new one so the customer sees the changes.</p>' : ''}
       <div class="row">
         ${st.hostedUrl ? `<a class="btn small" href="${esc(st.hostedUrl)}" target="_blank" rel="noopener">Open payment page</a>
         <button type="button" class="btn small" data-act="copy">Copy payment link</button>` : ''}
         ${st.pdfUrl ? `<a class="btn small" href="${esc(st.pdfUrl)}" target="_blank" rel="noopener">Stripe PDF</a>` : ''}
-        ${email && !edited ? `<button type="button" class="btn small" data-act="email">${st.sentTo ? 'Email it again' : 'Email it'}</button>` : ''}
+        ${email && !edited && !written ? `<button type="button" class="btn small" data-act="email">${st.sentTo ? 'Email it again' : 'Email it'}</button>` : ''}
         <button type="button" class="btn small" data-act="sync">Check payment</button>
         <button type="button" class="btn small danger" data-act="void">Void Stripe invoice</button>
       </div>`;
@@ -304,7 +313,7 @@ export function mountStripeCard(root, invoiceId, current) {
     if (!ev.target.closest('#del')) return;
     const st = get('invoices', invoiceId)?.stripe || {};
     const why = busy || stillCreating(st) ? 'Wait until Stripe has finished with this invoice.'
-      : st.status === 'open' ? 'Void the Stripe invoice first (Online payment, below), then delete this invoice.'
+      : payable(st) ? partPaid(st) || 'Void the Stripe invoice first (Online payment, below), then delete this invoice.'
         : st.status === 'paid' && st.livemode ? `This invoice was paid through Stripe, so it stays as the record of that payment. ${GIVE_BACK}` : '';
     if (!why) return;
     ev.stopPropagation();
@@ -319,7 +328,7 @@ export function mountStripeCard(root, invoiceId, current) {
   });
   // Opening an invoice that's out for payment asks Stripe whether it has been paid.
   const inv = get('invoices', invoiceId);
-  if (inv?.stripe?.status === 'open' && inv.status !== 'paid') checkWithStripe(invoiceId).catch(() => {});
+  if (payable(inv?.stripe) && inv.status !== 'paid') checkWithStripe(invoiceId).catch(() => {});
 }
 
 // Saving a bill as paid or void here (Mark paid, or the Status field) while its Stripe invoice can
@@ -338,7 +347,7 @@ export async function settleStripeFirst(invoiceId, status) {
     toast('Wait until Stripe has finished with this invoice.', true);
     return false;
   }
-  if (st.status !== 'open') return true;
+  if (!payable(st)) return true;
   if (partPaid(st)) {
     toast(partPaid(st), true);
     return false;
