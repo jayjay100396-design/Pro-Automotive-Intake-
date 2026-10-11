@@ -75,13 +75,17 @@ const prefixed = (fields) => Object.fromEntries(Object.entries(fields).map(([k, 
 const sameEmail = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
 // What a Stripe invoice is made from: the bill, and its job's name, site and PO (custom fields).
+// A bill without notes of its own gets the business's default notes, as the app shows it.
 // The app compares it with the bill and its job (billing.js stripeSig).
-const sentFrom = (inv, job = {}) => ({
+const sentFrom = (inv, job = {}, defaultNotes = '') => ({
   number: inv.number ?? null, jobId: inv.jobId ?? null, taxPct: inv.taxPct ?? null, dueDate: inv.dueDate ?? null,
-  notes: inv.notes ?? null,
+  notes: inv.notes ?? defaultNotes,
   lines: (inv.lines || []).map((l) => ({ desc: l.desc ?? '', qty: l.qty ?? null, price: l.price ?? null, taxable: l.taxable !== false })),
   job: { name: job.name ?? '', siteAddress: job.siteAddress ?? '', poNumber: job.poNumber ?? '' },
 });
+
+// The business's default invoice notes, which the app shows on a bill without notes of its own.
+const defaultNotesOf = async (db, companyId) => (await db.doc(`companies/${companyId}`).get()).data()?.invoiceNotes ?? '';
 
 // The bill's job and customer. The customer comes from the invoice, or else from its job.
 async function billTo(db, companyId, inv) {
@@ -109,7 +113,8 @@ async function ensureCustomer({ db, stripe, livemode, companyId, customerId, cus
   const known = cust.stripeCustomerIds?.[mode];
   if (known) {
     try {
-      await stripe.customers.update(known, fields);
+      // Details cleared in the app are cleared in Stripe too (an empty value unsets a Stripe field).
+      await stripe.customers.update(known, { email: '', phone: '', address: '', ...fields });
       return known;
     } catch (e) {
       if (e?.code !== 'resource_missing') throw e;
@@ -175,8 +180,14 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
   if (claim.existing) {
     let warning = null;
     if (send) {
-      const { cust, customerId } = await billTo(db, companyId, inv);
+      const { cust, customerId, job } = await billTo(db, companyId, inv);
       if (!cust?.email) throw new HttpsError('failed-precondition', 'Add an email address for this customer first (Customers page).');
+      const defaultNotes = await defaultNotesOf(db, companyId);
+      // Changed since the Stripe invoice was made (the app hides Email it again then, but another
+      // device may have just changed it): the Stripe invoice still shows the old details.
+      if (prev.sent && JSON.stringify(sentFrom(inv, job, defaultNotes)) !== JSON.stringify(sentFrom(prev.sent, prev.sent.job))) {
+        throw new HttpsError('failed-precondition', 'This invoice changed after its Stripe invoice was made. Void the Stripe invoice and send a new one so the customer sees the changes.');
+      }
       // A Stripe invoice keeps the customer's email from when it was made, and Stripe emails that
       // address. If the bill now goes to someone else, or the email changed, it needs a new one.
       let si;
@@ -207,6 +218,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     const bill = await billTo(db, companyId, inv);
     cust = bill.cust;
     const { job, customerId } = bill;
+    const defaultNotes = await defaultNotesOf(db, companyId);
     if (!cust) throw new HttpsError('failed-precondition', 'Pick a job with a customer for this invoice first.');
     if (send && !cust.email) throw new HttpsError('failed-precondition', `Add an email address for ${cust.name || 'this customer'} first (Customers page), or use Get a payment link.`);
 
@@ -219,7 +231,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     const customer = await ensureCustomer({ db, stripe, livemode, companyId, customerId, cust });
     // What this Stripe invoice is made from. It goes on the invoice too, so a later try can tell
     // whether an invoice it finds there is still right.
-    const sent = sentFrom(inv, job);
+    const sent = sentFrom(inv, job, defaultNotes);
     const madeFrom = createHash('sha256').update(JSON.stringify([sent, customerFields(cust, companyId, customerId)])).digest('hex').slice(0, 40);
 
     // An earlier try may have finished in Stripe but never got saved here. Its invoice is used if it
@@ -229,7 +241,8 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       if (!finalized && si.metadata.madeFrom === madeFrom) {
         finalized = si;
       } else {
-        await stripe.invoices.voidInvoice(si.id).catch(() => {});
+        // If this fails, so does the send, rather than leave two payable invoices for one bill.
+        await stripe.invoices.voidInvoice(si.id);
         issued += 1;
       }
     }
@@ -242,7 +255,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       // If Stripe won't take the number (say it was already used), Stripe numbers the invoice
       // and the app's number goes in a custom field instead.
       const numberField = () => ({ custom_fields: [...custom, { name: 'Invoice #', value: clip(String(inv.number), 140) }] });
-      const memo = [await proposalStatus(db, companyId, invoiceId, inv), String(inv.notes || '').trim()].filter(Boolean).join('\n\n');
+      const memo = [await proposalStatus(db, companyId, invoiceId, inv), String(sent.notes || '').trim()].filter(Boolean).join('\n\n');
       const params = {
         customer,
         collection_method: 'send_invoice',
@@ -284,7 +297,9 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       if (!snap.exists) return 'deleted';
       const cur = snap.data();
       if (['paid', 'void'].includes(cur.status)) return `marked ${cur.status}`;
-      if (JSON.stringify(sentFrom(cur, job)) !== JSON.stringify(sent) || (cur.customerId || null) !== (inv.customerId || null)) return 'changed';
+      // The job's name, site and PO are on the Stripe invoice too.
+      const curJob = cur.jobId ? (await tx.get(db.doc(`companies/${companyId}/jobs/${cur.jobId}`))).data() || {} : {};
+      if (JSON.stringify(sentFrom(cur, curJob, defaultNotes)) !== JSON.stringify(sent) || (cur.customerId || null) !== (inv.customerId || null)) return 'changed';
       tx.update(ref, {
         stripe: {
           ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent,

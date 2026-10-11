@@ -56,7 +56,7 @@ export function dashboard() {
   const active = D().jobs.filter((j) => ['contracted', 'in progress'].includes(j.status));
   const unpaid = D().invoices.filter((i) => i.status === 'unpaid');
   // Less anything already paid online on them.
-  const owed = unpaid.reduce((s, i) => s + invoiceTotals(i).total - paidOn(i), 0);
+  const owed = unpaid.reduce((s, i) => s + Math.max(0, invoiceTotals(i).total - paidOn(i)), 0);
   const overdue = unpaid.filter((i) => i.dueDate && i.dueDate < today());
   const pending = D().payApps.filter((p) => ['submitted', 'approved'].includes(p.status));
   const pendingDue = pending.reduce((s, p) => s + payAppSummary(p).currentDue, 0);

@@ -174,6 +174,11 @@ const customerOf = (inv) => get('customers', inv.customerId || get('jobs', inv.j
 // The server gives up on a half-made Stripe invoice after 3 minutes, so it can be tried again.
 const stillCreating = (st) => st.status === 'creating' && Date.now() - (st.claimedAt?.toMillis?.() || 0) < 180e3;
 
+// Part paid online: Stripe won't void an invoice that has payments on it.
+const partPaid = (st) => (st.status === 'open' && n(st.amountPaid) > 0
+  ? `${money(st.amountPaid)} of this invoice was paid online, and Stripe can't void an invoice with a payment on it. If the rest came another way, mark the invoice paid in Stripe's dashboard and it turns Paid here. To cancel it, first refund the payment and mark the invoice uncollectible there.`
+  : '');
+
 function stripeHtml(inv, busy) {
   const st = inv.stripe || {};
   const email = customerOf(inv)?.email || '';
@@ -281,6 +286,7 @@ export function mountStripeCard(root, invoiceId, current) {
     } else if (kind === 'sync') {
       act(() => checkWithStripe(invoiceId), null);
     } else if (kind === 'void') {
+      if (partPaid(inv.stripe)) return toast(partPaid(inv.stripe), true);
       if (confirm('Void the Stripe invoice? Its payment link stops working.')) act(() => voidWithStripe(invoiceId), 'Stripe invoice voided');
     }
   });
@@ -328,6 +334,10 @@ export async function settleStripeFirst(invoiceId, status) {
     return false;
   }
   if (st.status !== 'open') return true;
+  if (partPaid(st)) {
+    toast(partPaid(st), true);
+    return false;
+  }
   if (!confirm(status === 'paid'
     ? 'Marking this invoice paid voids its Stripe invoice, so the customer can\'t pay it online too. Go ahead?'
     : 'Voiding this invoice voids its Stripe invoice too, so the payment link stops working. Go ahead?')) return false;
