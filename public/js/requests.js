@@ -20,7 +20,7 @@ const sorted = () => [...state.data.requests].sort((a, b) => when(b) - when(a));
 export const newRequestCount = () => state.data.requests.filter((r) => r.status === 'new').length;
 
 // ---------- Emails about new requests ----------
-// The server (functions/request-alert.js) emails each new request to requestAlertEmails on the company,
+// The server (functions-alerts/request-alert.js) emails each new request to requestAlertEmails on the company,
 // or to the company's email until that's saved, and notes how it went on the request as `alert`.
 export const MAX_ALERT_EMAILS = 5;
 export const alertEmails = (c) => (Array.isArray(c?.requestAlertEmails) ? c.requestAlertEmails : [c?.email].filter(Boolean));

@@ -1,5 +1,5 @@
 {
-  "name": "stellar-glass-functions",
+  "name": "stellar-glass-alerts",
   "description": "Server code for the Stellar Glass app: email alerts for website quote requests (see ../EMAIL_ALERTS.md).",
   "private": true,
   "type": "module",

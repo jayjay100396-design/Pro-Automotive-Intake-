@@ -8,8 +8,8 @@
   },
   "functions": [
     {
-      "source": "functions",
-      "codebase": "default",
+      "source": "functions-alerts",
+      "codebase": "alerts",
       "ignore": [
         "node_modules",
         ".git",

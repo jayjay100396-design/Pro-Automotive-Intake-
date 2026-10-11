@@ -1,7 +1,7 @@
 // A fake mail server for local testing: it takes every email and keeps it instead of delivering it.
-// In the emulator (functions/.env.demo-stellar-glass points the alerts at 127.0.0.1:2525), run
-//   node functions/test/smtp-sink.js [port] [folder]
-// and each alert is saved as a .eml file (default folder: functions/test/mail/), which any mail app can open.
+// In the emulator (functions-alerts/.env.demo-stellar-glass points the alerts at 127.0.0.1:2525), run
+//   npm run dev:mail   (or node functions-alerts/test/smtp-sink.js [port] [folder])
+// and each alert is saved as a .eml file (default folder: functions-alerts/test/mail/), which any mail app can open.
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';

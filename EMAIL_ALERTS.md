@@ -30,10 +30,10 @@ Nothing at Wes's volume. Gmail sends up to 500 emails a day from a free account 
    npm install
    npm test
    npm run deploy             # the web app and rules (the Settings field and the email status)
-   npm run deploy:functions   # the server code that sends the emails
+   npm run deploy:alerts      # the server code that sends the emails
    ```
 
-   The first functions deploy asks for **EMAIL_USER**, the address of the account from step 1, and saves it in `functions/.env.stellar-glass-jobs`. A deploy that can't ask, like one Claude runs, needs that file first, holding the line `EMAIL_USER=` plus the address. It isn't a secret, so it can be committed. If the first deploy stops with an Eventarc or permission error, wait five minutes and run `npm run deploy:functions` again: Google is still setting up permissions for the new trigger.
+   The first functions deploy asks for **EMAIL_USER**, the address of the account from step 1, and saves it in `functions-alerts/.env.stellar-glass-jobs`. A deploy that can't ask, like one Claude runs, needs that file first, holding the line `EMAIL_USER=` plus the address. It isn't a secret, so it can be committed. If the first deploy stops with an Eventarc or permission error, wait five minutes and run `npm run deploy:alerts` again: Google is still setting up permissions for the new trigger.
 4. **Cleanup policy** (after the first functions deploy): `npx firebase functions:artifacts:setpolicy --project stellar-glass-jobs` deletes old copies of the function's code after a day.
 5. **Try it.** In the app, check the addresses under Settings > Website quote requests and press Save. Then send a request from `/quote` with a photo. The email arrives within seconds (up to two minutes with big photos), and the request in the app says "Emailed to …".
 
@@ -41,7 +41,7 @@ Nothing at Wes's volume. Gmail sends up to 500 emails a day from a free account 
 
 The request page and Settings say what happened:
 
-- **"refused the login. It needs a new app password"**: the app password was revoked, which happens when that Google account's password changes. Make a new one (step 1), store it (step 2), then run `npm run deploy:functions` so the function picks it up.
+- **"refused the login. It needs a new app password"**: the app password was revoked, which happens when that Google account's password changes. Make a new one (step 1), store it (step 2), then run `npm run deploy:alerts` so the function picks it up.
 - **"Couldn't send it yet"**: Gmail didn't answer. It tries again for two hours.
 - **"Not emailed: nobody is set to get request emails"**: the Settings field is blank.
 - **No note at all on new requests**: the function isn't deployed (step 3).
@@ -49,9 +49,10 @@ The request page and Settings say what happened:
 
 ## For developers
 
-- Server code: `functions/request-alert.js` (who to email, the email itself, waiting for files, retries) and `functions/index.js` (`requestAlert`, a Firestore trigger on `companies/{companyId}/requests/{requestId}` in us-central1, next to the nam5 database, with retries on and a 5-minute timeout). Node 22 and firebase-functions 6, the same as the Stripe branch.
+- Server code: `functions-alerts/request-alert.js` (who to email, the email itself, waiting for files, retries) and `functions-alerts/index.js` (`requestAlert`, a Firestore trigger on `companies/{companyId}/requests/{requestId}` in us-central1, next to the nam5 database, with retries on and a 5-minute timeout). Node 22 and firebase-functions 6, the same as the Stripe branch.
+- It's its own Firebase codebase, `alerts` in `firebase.json`, apart from the Stripe functions in `functions/` (codebase `default`). So deploying the emails needs none of Stripe's keys, and deploying either one never removes the other's functions. `npm run deploy:alerts` names the function in full (`--only functions:alerts:requestAlert`) on purpose: a bare `functions:alerts` also means "a function called alerts in the default codebase", which makes the CLI load the Stripe code and ask for its keys.
 - Data: the company's `requestAlertEmails` (array of addresses; until it's saved the email goes to the company's `email`; the existing rules let only the owner change the company). The server writes `alert` on each request: `{ status: 'sending' | 'sent' | 'failed' | 'off' | 'held', at, tries, to, attached, error }`. The rules keep the team's request edits to status, notes, customerId and jobId, so only the server writes `alert`. It claims a request in a transaction before sending, so a repeated event doesn't send a second email.
-- Mail goes out with nodemailer through `smtp.gmail.com:465`, logging in as `EMAIL_USER` with `EMAIL_PASSWORD`. `SMTP_HOST` and `SMTP_PORT` in `functions/.env.stellar-glass-jobs` switch to another provider with a free SMTP relay. Secret values are fixed when the function deploys, so redeploy after changing one.
-- Local: run `npm run dev:mail` (a fake mail server that saves each email as a `.eml` file in `functions/test/mail/`) and `npm run dev:functions`. `functions/.env.demo-stellar-glass` points the emulator at the fake server.
+- Mail goes out with nodemailer through `smtp.gmail.com:465`, logging in as `EMAIL_USER` with `EMAIL_PASSWORD`. `SMTP_HOST` and `SMTP_PORT` in `functions-alerts/.env.stellar-glass-jobs` switch to another provider with a free SMTP relay. Secret values are fixed when the function deploys, so redeploy after changing one.
+- Local: run `npm run dev:mail` (a fake mail server that saves each email as a `.eml` file in `functions-alerts/test/mail/`) and `npm run dev:functions`. `functions-alerts/.env.demo-stellar-glass` points the emulator at the fake server.
 - `npm test` covers the email's content and escaping, recipients, attachments, waiting for uploads, retries, repeated events and the spam guard (against the Firestore and Storage emulators), plus a real SMTP conversation with the fake server.
-- The Stripe branch (PR #2) also adds `functions/`. When the two meet, keep both sets of exports in `functions/index.js`, both dependency lists in `functions/package.json` (then run `npm install` in `functions/` to rebuild the lockfile), and both blocks in `functions/.env.demo-stellar-glass`, `.gitignore`, `package.json` scripts and the README.
+- The Stripe branch (PR #2) has its own folder, so the two never edit the same code. When they meet, only shared files conflict: in `firebase.json` keep both entries of the `functions` list; in `package.json` make `postinstall` install both folders, make `test` run `mocha test functions/test functions-alerts/test`, and change Stripe's `deploy:functions` to `firebase deploy --only functions:default`, because a bare `--only functions` deploys both codebases and would ask for the email password too. `.gitignore` and the README keep both sides.

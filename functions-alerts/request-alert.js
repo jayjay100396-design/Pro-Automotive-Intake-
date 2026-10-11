@@ -7,7 +7,7 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import nodemailer from 'nodemailer';
 
-// The form's choices, worded as in public/js/brand.js (functions/test/request-alert.test.js checks they match).
+// The form's choices, worded as in public/js/brand.js (functions-alerts/test/request-alert.test.js checks they match).
 export const REQUEST_SERVICES = [
   ['storefront', 'Commercial storefront or entrance'],
   ['interior', 'Office or interior glass walls'],

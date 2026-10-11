@@ -22,8 +22,8 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 | `public/quote.html`, `js/site.js`, `css/site.css` | The public quote request page; `js/requests.js` is the Requests screen in the app and `js/website.js` the Website photos page |
 | `public/js/files.js`, `drive.js` | Job files (Cloud Storage) and the Google Drive copies |
 | `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
-| `functions/` | Cloud Functions: the quote request emails |
-| `test/`, `functions/test/` | Rules tests (emulator), money-math tests, email tests |
+| `functions-alerts/` | Cloud Functions: the quote request emails (their own codebase, `alerts`) |
+| `test/`, `functions-alerts/test/` | Rules tests (emulator), money-math tests, email tests |
 | `FIREBASE_SETUP.md` | Console steps, deploy and local dev |
 | `EMAIL_ALERTS.md` | Turning on the quote request emails |
 
