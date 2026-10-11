@@ -52,6 +52,7 @@ export function stripeItems(inv) {
 
 // What's been paid on a bill: what Stripe collected when it was paid through Stripe (the bill may
 // have been edited after it was sent), its total when marked paid by hand, else any part paid online.
+// What Stripe collected counts credit on the customer's Stripe account that it used on the invoice.
 // Same as paidOn in public/js/calc.js.
 export const paidOn = (inv) => (inv.status === 'paid'
   ? (inv.stripe?.status === 'paid' && inv.stripe.amountPaid != null ? num(inv.stripe.amountPaid) : invoiceTotals(inv).total)

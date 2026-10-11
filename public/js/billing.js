@@ -57,9 +57,15 @@ const payable = (st) => st?.status === 'open' || st?.status === 'uncollectible';
 // Where an invoice stands, in a few words.
 function invoiceNote(inv) {
   const st = inv.stripe || {};
-  if (inv.status === 'paid') return st.status === 'paid' ? `paid online${st.paidAt ? ` ${when(st.paidAt)}` : ''}` : `paid${inv.paidDate ? ` ${fmtDate(inv.paidDate)}` : ''}`;
+  if (inv.status === 'paid') {
+    if (st.status !== 'paid') return `paid${inv.paidDate ? ` ${fmtDate(inv.paidDate)}` : ''}`;
+    // Credit on the customer's Stripe account can pay it all, with no payment.
+    const how = n(st.paidOnline) > 0 || !(n(st.balanceApplied) > 0) ? 'paid online' : 'paid from credit in Stripe';
+    return `${how}${st.paidAt ? ` ${when(st.paidAt)}` : ''}`;
+  }
   if (payable(st)) {
-    if (n(st.amountPaid) > 0) return `${money(st.amountPaid)} paid online`;
+    if (n(st.paidOnline) > 0) return `${money(st.paidOnline)} paid online`;
+    if (n(st.balanceApplied) > 0) return `${money(st.balanceApplied)} credited in Stripe`;
     if (st.status === 'uncollectible') return 'uncollectible in Stripe';
     return st.sentTo ? `emailed with Stripe${st.sentAt ? ` ${when(st.sentAt)}` : ''}` : 'payment link ready';
   }
@@ -131,9 +137,9 @@ export function mountProposalBilling(root, estimateId, current) {
       // One edited after its Stripe invoice went out: the customer would still pay the Stripe amount,
       // so that gets sorted out first.
       const stale = prior.find((d) => d.status === 'unpaid' && payable(d.stripe)
-        && Math.round(invoiceTotals(d).total * 100) !== Math.round(n(d.stripe.amountDue) * 100));
+        && Math.round(invoiceTotals(d).total * 100) !== Math.round(stripeBilled(d.stripe) * 100));
       if (stale) {
-        return toast(`Invoice ${stale.number} comes to ${money(invoiceTotals(stale).total)}, but its Stripe invoice asks for ${money(stale.stripe.amountDue)}. Void that Stripe invoice and send a new one first.`, true);
+        return toast(`Invoice ${stale.number} comes to ${money(invoiceTotals(stale).total)}, but its Stripe invoice is for ${money(stripeBilled(stale.stripe))}. Void that Stripe invoice and send a new one first.`, true);
       }
       // Deposits and any earlier final invoice come off: what was paid on them (Stripe's amount when
       // paid through Stripe, less refunds), or what they bill while unpaid. One refunded in full
@@ -194,10 +200,15 @@ const stillCreating = (st) => st.status === 'creating' && Date.now() - (st.claim
 // A refund through a credit note on the Stripe invoice comes back to the app (the webhook hears of it).
 const GIVE_BACK = 'To give money back, open the invoice in Stripe and issue a credit note with a refund; it then shows here.';
 
+// What a Stripe invoice bills: what it asks for, plus credit on the customer's Stripe account that Stripe
+// used on it (less a balance they owed that it added).
+const stripeBilled = (st) => n(st.amountDue) + n(st.balanceApplied);
+
 // Part paid online: Stripe won't void an invoice that has payments on it. (A credit note for the whole
 // invoice turns it paid, with what was paid refunded; Stripe's dashboard has none for uncollectible ones.)
-const partPaid = (st) => (payable(st) && n(st.amountPaid) > 0
-  ? `${money(st.amountPaid)} of this invoice was paid online, and Stripe can't void an invoice with a payment on it. If the rest came another way, mark the invoice paid in Stripe's dashboard and it turns Paid here.${st.status === 'open' ? ' To cancel it, issue a credit note there for the whole invoice, refunding what was paid.' : ''}`
+// Credit from the customer's Stripe account isn't a payment: a void gives it back to them.
+const partPaid = (st) => (payable(st) && n(st.paidOnline) > 0
+  ? `${money(st.paidOnline)} of this invoice was paid online, and Stripe can't void an invoice with a payment on it. If the rest came another way, mark the invoice paid in Stripe's dashboard and it turns Paid here.${st.status === 'open' ? ' To cancel it, issue a credit note there for the whole invoice, refunding what was paid.' : ''}`
   : '');
 
 function stripeHtml(inv, busy) {
@@ -209,19 +220,22 @@ function stripeHtml(inv, busy) {
     body = '<p class="muted">Working with Stripe…</p>';
   } else if (st.status === 'paid') {
     body = `<p class="ok">Paid through Stripe${st.paidAt ? ` on ${when(st.paidAt)}` : ''}${test}.</p>
+      ${n(st.balanceApplied) > 0 ? `<p class="small">${money(st.balanceApplied)} of it came from credit on the customer's Stripe account.</p>` : ''}
       ${n(st.credited) > 0 ? `<p class="small">${money(st.credited)} of it was refunded or credited back in Stripe, so ${money(st.amountPaid)} counts as paid.</p>` : ''}
       ${st.hostedUrl || st.pdfUrl ? `<div class="row">${st.hostedUrl ? `<a class="btn small" href="${esc(st.hostedUrl)}" target="_blank" rel="noopener">Receipt page</a>` : ''}${st.pdfUrl ? `<a class="btn small" href="${esc(st.pdfUrl)}" target="_blank" rel="noopener">Stripe PDF</a>` : ''}</div>` : ''}`;
   } else if (payable(st)) {
     const now = invoiceTotals(inv).total;
-    const changed = Math.round(now * 100) !== Math.round(n(st.amountDue) * 100);
+    const changed = Math.round(now * 100) !== Math.round(stripeBilled(st) * 100);
     // Edited since the Stripe invoice was made: lines, tax, notes, due date, number, job, or the
     // job's name, site or PO.
     const edited = changed || (!!st.sent && stripeSig({ ...inv, job: get('jobs', inv.jobId) }) !== stripeSig(st.sent));
-    const part = n(st.amountPaid) > 0 ? ` ${money(st.amountPaid)} is paid so far, ${money(n(st.amountDue) - n(st.amountPaid))} to go.` : '';
+    const part = n(st.paidOnline) > 0 ? ` ${money(st.paidOnline)} is paid so far, ${money(n(st.amountDue) - n(st.paidOnline))} to go.` : '';
+    const credit = n(st.balanceApplied) > 0 ? ` Stripe took off ${money(st.balanceApplied)} of credit on the customer's account.`
+      : n(st.balanceApplied) < 0 ? ` Stripe added ${money(-n(st.balanceApplied))} the customer owed from before.` : '';
     // Marked uncollectible in Stripe's dashboard: it isn't emailed again, and a new one waits for a void.
     const written = st.status === 'uncollectible';
-    body = `<p>Stripe invoice ${esc(st.number || '')}${test} ${written ? 'was marked uncollectible in Stripe, but it can still be paid' : 'is waiting for payment'}: <b>${money(st.amountDue)}</b>.${part}
-      ${written ? (n(st.amountPaid) > 0 ? '' : 'Void it before sending a new one.')
+    body = `<p>Stripe invoice ${esc(st.number || '')}${test} ${written ? 'was marked uncollectible in Stripe, but it can still be paid' : 'is waiting for payment'}: <b>${money(st.amountDue)}</b>.${credit}${part}
+      ${written ? (n(st.paidOnline) > 0 ? '' : 'Void it before sending a new one.')
     : !st.sentTo ? 'It hasn\'t been emailed; send the link yourself, or email it from here.'
       : st.livemode ? `Stripe emailed it to ${esc(st.sentTo)}${st.sentAt ? ` on ${when(st.sentAt)}` : ''}.`
         : `Marked as emailed to ${esc(st.sentTo)}, but Stripe doesn't send emails in test mode.`}</p>

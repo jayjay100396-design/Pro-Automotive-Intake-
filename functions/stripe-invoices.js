@@ -4,8 +4,10 @@
 // The app invoice at companies/{companyId}/invoices/{invoiceId} gets a `stripe` map:
 //   status      'creating' | 'open' | 'paid' | 'void' | 'uncollectible' (Stripe's invoice status)
 //   invoiceId   Stripe invoice id; number, hostedUrl (payment page), pdfUrl, amountDue, livemode
-//   amountPaid  what was paid on it, less credit notes after payment (refunds or credits); credited
-//               is that credit note total
+//   amountPaid  what counts as paid on the bill: payments, plus credit on the customer's Stripe account
+//               used on it, less credit notes after payment (refunds or credits). credited is that
+//               credit note total, paidOnline the payments alone, and balanceApplied the customer's
+//               Stripe balance used on it (negative: a balance they owed, added to it)
 //   issued      how many Stripe invoices have been finalized for this bill (numbers 1003, 1003-2, ...)
 //   sent        what the Stripe invoice was made from (number, lines, tax, notes, due date, and the job's
 //               name, site and PO), so the app can tell when the bill or its job is edited afterwards
@@ -67,10 +69,23 @@ const summary = (s) => ({
   pdfUrl: s.pdfUrl ?? null, amountDue: s.amountDue ?? null, livemode: !!s.livemode, sentTo: s.sentTo ?? null, error: s.error ?? null,
 });
 
-const fromStripe = (si) => ({
-  status: si.status, invoiceId: si.id, number: si.number || null, hostedUrl: si.hosted_invoice_url || null,
-  pdfUrl: si.invoice_pdf || null, amountDue: (si.amount_due ?? 0) / 100, livemode: !!si.livemode,
-});
+// Credit on the customer's Stripe account (say from a credit note that credited their balance) is used
+// on their next invoice when it's finalized: Stripe asks for less, or marks it paid outright. A balance
+// they owe is added the same way. That amount counts toward what's paid on the bill, and a void
+// invoice gives it back. A credit note after payment (a refund, or a credit) takes back part of it.
+const fromStripe = (si) => {
+  const applied = si.status === 'void' || si.ending_balance == null ? 0 : si.ending_balance - (si.starting_balance ?? 0);
+  const credited = si.post_payment_credit_notes_amount ?? 0;
+  return {
+    status: si.status, invoiceId: si.id, number: si.number || null, hostedUrl: si.hosted_invoice_url || null,
+    pdfUrl: si.invoice_pdf || null, amountDue: (si.amount_due ?? 0) / 100, livemode: !!si.livemode,
+    paidOnline: (si.amount_paid ?? 0) / 100, balanceApplied: applied / 100,
+    amountPaid: Math.max(0, (si.amount_paid ?? 0) + applied - credited) / 100, credited: credited / 100,
+  };
+};
+
+// When Stripe recorded the payment.
+const paidAtOf = (si) => new Date((si.status_transitions?.paid_at || Math.floor(Date.now() / 1000)) * 1000);
 
 const prefixed = (fields) => Object.fromEntries(Object.entries(fields).map(([k, v]) => [`stripe.${k}`, v]));
 
@@ -127,8 +142,17 @@ async function ensureCustomer({ db, stripe, livemode, companyId, customerId, cus
     }
   }
   const created = await stripe.customers.create(fields);
-  await db.doc(`companies/${companyId}/customers/${customerId}`).update({ [`stripeCustomerIds.${mode}`]: created.id });
-  return created.id;
+  // Two invoices for a new customer sent at the same moment each make a Stripe customer. The first one
+  // saved is kept and the other is deleted, so all of the customer's invoices go to one Stripe customer.
+  const ref = db.doc(`companies/${companyId}/customers/${customerId}`);
+  const kept = await db.runTransaction(async (tx) => {
+    const saved = (await tx.get(ref)).data()?.stripeCustomerIds?.[mode];
+    if (saved && saved !== known) return saved;
+    tx.update(ref, { [`stripeCustomerIds.${mode}`]: created.id });
+    return created.id;
+  });
+  if (kept !== created.id) await stripe.customers.del(created.id).catch(() => {});
+  return kept;
 }
 
 // For a bill made from a proposal (deposit or final invoice): the proposal's price, what's been paid
@@ -256,8 +280,13 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
 
     // An earlier try may have finished in Stripe but never got saved here. Its invoice is used if it
     // was made from the bill as it is now; one made from an older version is cancelled, like a void.
-    const open = await stripe.invoices.list({ customer, status: 'open', limit: 100 });
-    for (const si of open.data.filter((x) => x.metadata?.companyId === companyId && x.metadata?.invoiceId === invoiceId)) {
+    // One that credit on the customer's Stripe account paid when it was finalized can't be, so it's
+    // used either way. (A paid one from before this bill was made is from a deleted bill with its id.)
+    const mine = (si) => si.metadata?.companyId === companyId && si.metadata?.invoiceId === invoiceId;
+    const madeAt = Math.floor((inv.createdAt?.toMillis?.() ?? Infinity) / 1000);
+    const [open, paid] = await Promise.all(['open', 'paid'].map((status) => stripe.invoices.list({ customer, status, limit: 100 })));
+    finalized = paid.data.find((si) => mine(si) && si.created >= madeAt) || null;
+    for (const si of open.data.filter(mine)) {
       if (!finalized && si.metadata.madeFrom === madeFrom) {
         finalized = si;
       } else {
@@ -310,29 +339,36 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       draftId = null;
     }
 
+    // Credit on the customer's Stripe account can cover the whole invoice when it's finalized. Then it's
+    // paid already, so the bill is too.
+    const paidAt = finalized.status === 'paid' ? paidAtOf(finalized) : null;
     // Save it, unless the bill was deleted, paid, voided or edited meanwhile (say on another device),
     // or its job, customer or the default notes were. Then the Stripe invoice is wrong or shouldn't be
-    // payable, so it's cancelled.
+    // payable, so it's cancelled. One that's paid can't be, so it's recorded on the bill regardless.
     const changed = await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
       if (!snap.exists) return 'deleted';
       const cur = snap.data();
-      if (['paid', 'void'].includes(cur.status)) return `marked ${cur.status}`;
-      const read = async (path) => (await tx.get(db.doc(`companies/${companyId}${path}`))).data();
-      const curJob = (cur.jobId && await read(`/jobs/${cur.jobId}`)) || {};
-      const curCustomerId = cur.customerId || curJob.customerId || null;
-      const curCust = curCustomerId && await read(`/customers/${curCustomerId}`);
-      const curNotes = (await read(''))?.invoiceNotes ?? '';
-      if (!curCust || fingerprint(sentFrom(cur, curJob, curNotes), curCust, companyId, curCustomerId) !== madeFrom) return 'changed';
+      if (!paidAt) {
+        if (['paid', 'void'].includes(cur.status)) return `marked ${cur.status}`;
+        const read = async (path) => (await tx.get(db.doc(`companies/${companyId}${path}`))).data();
+        const curJob = (cur.jobId && await read(`/jobs/${cur.jobId}`)) || {};
+        const curCustomerId = cur.customerId || curJob.customerId || null;
+        const curCust = curCustomerId && await read(`/customers/${curCustomerId}`);
+        const curNotes = (await read(''))?.invoiceNotes ?? '';
+        if (!curCust || fingerprint(sentFrom(cur, curJob, curNotes), curCust, companyId, curCustomerId) !== madeFrom) return 'changed';
+      }
       tx.update(ref, {
         stripe: {
           ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent,
-          sentTo: null, sentAt: null, error: null, claimedAt: null,
+          sentTo: null, sentAt: null, error: null, claimedAt: null, ...(paidAt ? { paidAt } : {}),
         },
+        ...(paidAt && cur.status !== 'paid' ? { status: 'paid', paidDate: floridaDate(paidAt.getTime()) } : {}),
       });
       return null;
     });
     if (changed) {
+      if (paidAt) throw new HttpsError('not-found', 'This invoice was deleted while its Stripe invoice was being made, and credit on the customer\'s Stripe account had already paid it.');
       await stripe.invoices.voidInvoice(finalized.id).catch(() => {});
       const what = changed === 'changed' ? 'This invoice, its job or its customer was changed' : `This invoice was ${changed}`;
       throw new HttpsError(changed === 'deleted' ? 'not-found' : 'failed-precondition',
@@ -352,7 +388,10 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     }).catch(() => {});
     throw err;
   }
-  const warning = send ? await sendEmail(stripe, ref, finalized.id, finalized.customer_email || cust.email) : null;
+  // Paid already: there's nothing for the customer to pay, so nothing is emailed.
+  const warning = finalized.status === 'paid'
+    ? 'Credit on this customer\'s Stripe account covered the whole invoice, so Stripe marked it paid and there was nothing to send.'
+    : send ? await sendEmail(stripe, ref, finalized.id, finalized.customer_email || cust.email) : null;
   return { ...summary((await ref.get()).data().stripe), warning };
 }
 
@@ -366,8 +405,9 @@ export async function voidStripeInvoice({ db, stripe, livemode, companyId, invoi
   if (!s.invoiceId || !['open', 'uncollectible'].includes(s.status)) throw new HttpsError('failed-precondition', 'There\'s no open Stripe invoice to void.');
   if (!!s.livemode !== livemode) {
     if (s.livemode) throw new HttpsError('failed-precondition', 'That Stripe invoice is live, but the app is using a test key right now.');
-    // Made with the test key: the live key can't see it, and nobody can pay it for real.
-    await ref.update({ 'stripe.status': 'void', 'stripe.voidedAt': new Date() });
+    // Made with the test key: the live key can't see it, and nobody can pay it for real. Nothing on it
+    // counts as paid any more (say test credit that Stripe used on it).
+    await ref.update({ 'stripe.status': 'void', 'stripe.voidedAt': new Date(), 'stripe.amountPaid': 0, 'stripe.paidOnline': 0, 'stripe.balanceApplied': 0 });
     return summary({ ...s, status: 'void' });
   }
   try {
@@ -417,18 +457,13 @@ export async function applyStripeInvoice(db, si) {
     // (say a check that crossed with the payment).
     const was = inv.stripe.status;
     if ((was === 'paid' || was === 'void') && si.status !== was) return false;
-    // A credit note on a paid invoice (a refund, or a credit) gives back part of what was paid.
-    const credited = si.post_payment_credit_notes_amount ?? 0;
-    const update = {
-      ...prefixed(fromStripe(si)), 'stripe.amountPaid': Math.max(0, (si.amount_paid ?? 0) - credited) / 100,
-      'stripe.credited': credited / 100, 'stripe.updatedAt': new Date(),
-    };
+    const update = { ...prefixed(fromStripe(si)), 'stripe.updatedAt': new Date() };
     if (si.status === 'paid') {
-      const paidMs = (si.status_transitions?.paid_at || Math.floor(Date.now() / 1000)) * 1000;
-      update['stripe.paidAt'] = new Date(paidMs);
+      const paidAt = paidAtOf(si);
+      update['stripe.paidAt'] = paidAt;
       if (inv.status !== 'paid') {
         update.status = 'paid';
-        update.paidDate = floridaDate(paidMs);
+        update.paidDate = floridaDate(paidAt.getTime());
       }
     }
     tx.update(ref, update);
