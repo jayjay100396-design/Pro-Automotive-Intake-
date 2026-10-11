@@ -4,6 +4,8 @@
 // The app invoice at companies/{companyId}/invoices/{invoiceId} gets a `stripe` map:
 //   status      'creating' | 'open' | 'paid' | 'void' | 'uncollectible' (Stripe's invoice status)
 //   invoiceId   Stripe invoice id; number, hostedUrl (payment page), pdfUrl, amountDue, livemode
+//   amountPaid  what was paid on it, less credit notes after payment (refunds or credits); credited
+//               is that credit note total
 //   issued      how many Stripe invoices have been finalized for this bill (numbers 1003, 1003-2, ...)
 //   sent        what the Stripe invoice was made from (number, lines, tax, notes, due date, and the job's
 //               name, site and PO), so the app can tell when the bill or its job is edited afterwards
@@ -204,6 +206,12 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
         const to = si.customer_email ? `is addressed to ${si.customer_email}` : 'was made without an email address';
         throw new HttpsError('failed-precondition', `This Stripe invoice ${to}. Void it and send a new one so it goes to ${String(cust.email).trim()}.`);
       }
+      // It keeps the bill-to name, phone and address from then too.
+      const want = customerFields(cust, companyId, customerId);
+      const same = (a, b) => String(a ?? '').trim() === String(b ?? '').trim();
+      if (!same(si.customer_name, want.name) || !same(si.customer_phone, want.phone) || !same(si.customer_address?.line1, want.address?.line1)) {
+        throw new HttpsError('failed-precondition', 'This customer\'s name, phone or address changed after the Stripe invoice was made. Void it and send a new one so it shows the new details.');
+      }
       warning = await sendEmail(stripe, ref, prev.invoiceId, si.customer_email);
     }
     return { ...summary((await ref.get()).data().stripe), warning };
@@ -386,7 +394,12 @@ export async function applyStripeInvoice(db, si) {
     // (say a check that crossed with the payment).
     const was = inv.stripe.status;
     if ((was === 'paid' || was === 'void') && si.status !== was) return false;
-    const update = { ...prefixed(fromStripe(si)), 'stripe.amountPaid': (si.amount_paid ?? 0) / 100, 'stripe.updatedAt': new Date() };
+    // A credit note on a paid invoice (a refund, or a credit) gives back part of what was paid.
+    const credited = si.post_payment_credit_notes_amount ?? 0;
+    const update = {
+      ...prefixed(fromStripe(si)), 'stripe.amountPaid': Math.max(0, (si.amount_paid ?? 0) - credited) / 100,
+      'stripe.credited': credited / 100, 'stripe.updatedAt': new Date(),
+    };
     if (si.status === 'paid') {
       const paidMs = (si.status_transitions?.paid_at || Math.floor(Date.now() / 1000)) * 1000;
       update['stripe.paidAt'] = new Date(paidMs);
@@ -400,17 +413,20 @@ export async function applyStripeInvoice(db, si) {
   });
 }
 
-// Webhook events: re-read the invoice from Stripe rather than trusting the event body, then record it.
+// Webhook events about an invoice, or a credit note on one: re-read the invoice from Stripe rather
+// than trusting the event body, then record it.
 export async function handleStripeEvent({ db, stripe, event, allowed, emulated = false }) {
-  if (!String(event?.type || '').startsWith('invoice.')) return 'ignored';
+  const type = String(event?.type || '');
   const obj = event.data?.object || {};
-  if (!obj.id || !obj.metadata?.invoiceId || !companyAllowed(obj.metadata.companyId, allowed, emulated)) return 'ignored';
+  const id = type.startsWith('invoice.') ? obj.id : type.startsWith('credit_note.') ? (obj.invoice?.id ?? obj.invoice) : null;
+  if (!id || (type.startsWith('invoice.') && (!obj.metadata?.invoiceId || !companyAllowed(obj.metadata.companyId, allowed, emulated)))) return 'ignored';
   let current;
   try {
-    current = await stripe.invoices.retrieve(obj.id);
+    current = await stripe.invoices.retrieve(id);
   } catch (e) {
     if (e?.code === 'resource_missing') return 'ignored'; // a deleted draft
     throw e;
   }
+  if (!companyAllowed(current.metadata?.companyId, allowed, emulated)) return 'ignored';
   return (await applyStripeInvoice(db, current)) ? 'updated' : 'ignored';
 }

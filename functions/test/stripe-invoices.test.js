@@ -56,8 +56,10 @@ function fakeStripe() {
       finalizeInvoice: async (id, p) => {
         log('invoices.finalizeInvoice', id, p);
         const si = get(id);
+        const c = customers.get(si.customer) || {};
         Object.assign(si, {
-          status: 'open', number: si.number || `AUTO-${++n}`, amount_due: total(si), customer_email: customers.get(si.customer)?.email ?? null,
+          status: 'open', number: si.number || `AUTO-${++n}`, amount_due: total(si),
+          customer_email: c.email || null, customer_name: c.name || null, customer_phone: c.phone || null, customer_address: c.address || null,
           hosted_invoice_url: `https://invoice.stripe.test/${id}`, invoice_pdf: `https://invoice.stripe.test/${id}.pdf`,
         });
         return { ...si };
@@ -236,6 +238,17 @@ describe('Stripe invoices (server)', function () {
     await assert.rejects(create({ send: true }), /different customer/);
     assert.equal(stripe.called('invoices.sendInvoice').length, 1);
     assert.equal((await data()).stripe.sentTo, 'pat@example.com');
+  });
+
+  it('won\'t email an open Stripe invoice again once the customer\'s name, phone or address changed', async () => {
+    await create();
+    for (const change of [{ company: 'Lakeland Builders Inc' }, { phone: '863-555-0199' }, { address: '200 Main St, Lakeland FL' }]) {
+      await db.doc(`companies/${C}/customers/c1`).update(change);
+      await assert.rejects(create({ send: true }), { code: 'failed-precondition', message: /name, phone or address changed after the Stripe invoice was made/ });
+      await db.doc(`companies/${C}/customers/c1`).set({ company: 'Lakeland Builders', phone: '863-555-0100', address: '100 Main St, Lakeland FL' }, { merge: true });
+    }
+    assert.equal(stripe.called('invoices.sendInvoice').length, 0);
+    assert.equal((await create({ send: true })).sentTo, 'pat@example.com');
   });
 
   it('won\'t email an open Stripe invoice again once the bill or its job has changed', async () => {
@@ -456,6 +469,32 @@ describe('Stripe invoices (server)', function () {
     // An event about an older Stripe invoice for this bill changes nothing.
     const old = await stripe.invoices.create({ customer: 'cus_x', metadata: { companyId: C, invoiceId: 'i1' } });
     assert.equal(await handleStripeEvent({ db, stripe, event: { type: 'invoice.voided', data: { object: { ...old } } }, allowed: C }), 'ignored');
+  });
+
+  it('counts a refund or credit made with a credit note on a paid Stripe invoice', async () => {
+    const { invoiceId } = await create();
+    stripe.pay(invoiceId);
+    const paid = { type: 'invoice.paid', data: { object: { id: invoiceId, metadata: { companyId: C, invoiceId: 'i1' } } } };
+    assert.equal(await handleStripeEvent({ db, stripe, event: paid, allowed: C }), 'updated');
+    // $500 refunded through a credit note in Stripe's dashboard.
+    stripe.invoices.get(invoiceId).post_payment_credit_notes_amount = 50000;
+    const note = (invoice) => ({ type: 'credit_note.created', data: { object: { id: 'cn_1', invoice } } });
+    assert.equal(await handleStripeEvent({ db, stripe, event: note(invoiceId), allowed: 'someone-else' }), 'ignored');
+    assert.equal((await data()).stripe.amountPaid, 1890);
+    assert.equal(await handleStripeEvent({ db, stripe, event: note(invoiceId), allowed: C }), 'updated');
+    let d = await data();
+    assert.equal(d.status, 'paid');
+    assert.equal(d.stripe.amountPaid, 1390);
+    assert.equal(d.stripe.credited, 500);
+    // Refunded in full (an expanded invoice in the event works too).
+    stripe.invoices.get(invoiceId).post_payment_credit_notes_amount = 189000;
+    assert.equal(await handleStripeEvent({ db, stripe, event: note({ id: invoiceId }), allowed: C }), 'updated');
+    d = await data();
+    assert.equal(d.stripe.amountPaid, 0);
+    assert.equal(d.stripe.credited, 1890);
+    // A credit note on an invoice made some other way is ignored.
+    const other = await stripe.invoices.create({ customer: 'cus_x', metadata: {} });
+    assert.equal(await handleStripeEvent({ db, stripe, event: note(other.id), allowed: C }), 'ignored');
   });
 
   it('doesn\'t let an older read of the Stripe invoice undo its payment', async () => {

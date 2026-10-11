@@ -80,10 +80,20 @@ service cloud.firestore {
     }
 
     // An invoice paid through Stripe for real (live mode) stays paid and isn't deleted: it's the
-    // record of money that came in, and refunds happen in Stripe. Test-mode payments aren't real.
+    // record of money that came in, and refunds are credit notes in Stripe. Test-mode payments
+    // aren't real.
     function paidThroughStripe(collection) {
       return collection == 'invoices' && resource != null
         && resource.data.get('stripe', {}).get('status', '') == 'paid'
+        && resource.data.get('stripe', {}).get('livemode', false) == true;
+    }
+
+    // While its live Stripe invoice can still be paid, an invoice keeps its status and isn't
+    // deleted. The app has the Cloud Function void the Stripe invoice first, so this only stops a
+    // stale or offline tab from leaving a payment link out for a bill marked paid, void or deleted.
+    function openThroughStripe(collection) {
+      return collection == 'invoices' && resource != null
+        && resource.data.get('stripe', {}).get('status', '') == 'open'
         && resource.data.get('stripe', {}).get('livemode', false) == true;
     }
 
@@ -332,8 +342,9 @@ service cloud.firestore {
         allow read: if isRecord(collection) && isMember(companyId);
         allow create, update: if isRecord(collection) && canEditCollection(companyId, collection)
           && keepsServerFields()
-          && (!paidThroughStripe(collection) || request.resource.data.get('status', '') == 'paid');
-        allow delete: if isRecord(collection) && canManage(companyId) && !paidThroughStripe(collection);
+          && (!paidThroughStripe(collection) || request.resource.data.get('status', '') == 'paid')
+          && (!openThroughStripe(collection) || request.resource.data.get('status', '') == resource.data.get('status', ''));
+        allow delete: if isRecord(collection) && canManage(companyId) && !paidThroughStripe(collection) && !openThroughStripe(collection);
       }
 
       // Line items (e.g. G703 continuation lines), attachment metadata and other nested records.

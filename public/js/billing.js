@@ -124,11 +124,12 @@ export function mountProposalBilling(root, estimateId, current) {
         return toast(`Invoice ${stale.number} comes to ${money(invoiceTotals(stale).total)}, but its Stripe invoice asks for ${money(stale.stripe.amountDue)}. Void that Stripe invoice and send a new one first.`, true);
       }
       // Deposits and any earlier final invoice come off: what was paid on them (Stripe's amount when
-      // paid through Stripe), or what they bill while unpaid.
+      // paid through Stripe, less refunds), or what they bill while unpaid. One refunded in full
+      // takes nothing off.
       const credits = prior.map((d) => ({
         desc: `Less ${d.kind === 'final' ? 'final invoice' : 'deposit, invoice'} ${d.number}`, qty: 1,
         price: -(d.status === 'paid' ? paidOn(d) : invoiceTotals(d).total), taxable: false,
-      }));
+      })).filter((l) => l.price);
       inv = { ...base, kind, dueDate: addDays(today(), 30), taxPct: bill.taxPct, lines: [...bill.lines, ...credits] };
     }
     inv.total = invoiceTotals(inv).total;
@@ -174,6 +175,9 @@ const customerOf = (inv) => get('customers', inv.customerId || get('jobs', inv.j
 // The server gives up on a half-made Stripe invoice after 3 minutes, so it can be tried again.
 const stillCreating = (st) => st.status === 'creating' && Date.now() - (st.claimedAt?.toMillis?.() || 0) < 180e3;
 
+// A refund through a credit note on the Stripe invoice comes back to the app (the webhook hears of it).
+const GIVE_BACK = 'To give money back, open the invoice in Stripe and issue a credit note with a refund; it then shows here.';
+
 // Part paid online: Stripe won't void an invoice that has payments on it.
 const partPaid = (st) => (st.status === 'open' && n(st.amountPaid) > 0
   ? `${money(st.amountPaid)} of this invoice was paid online, and Stripe can't void an invoice with a payment on it. If the rest came another way, mark the invoice paid in Stripe's dashboard and it turns Paid here. To cancel it, first refund the payment and mark the invoice uncollectible there.`
@@ -188,6 +192,7 @@ function stripeHtml(inv, busy) {
     body = '<p class="muted">Working with Stripe…</p>';
   } else if (st.status === 'paid') {
     body = `<p class="ok">Paid through Stripe${st.paidAt ? ` on ${when(st.paidAt)}` : ''}${test}.</p>
+      ${n(st.credited) > 0 ? `<p class="small">${money(st.credited)} of it was refunded or credited back in Stripe, so ${money(st.amountPaid)} counts as paid.</p>` : ''}
       ${st.hostedUrl || st.pdfUrl ? `<div class="row">${st.hostedUrl ? `<a class="btn small" href="${esc(st.hostedUrl)}" target="_blank" rel="noopener">Receipt page</a>` : ''}${st.pdfUrl ? `<a class="btn small" href="${esc(st.pdfUrl)}" target="_blank" rel="noopener">Stripe PDF</a>` : ''}</div>` : ''}`;
   } else if (st.status === 'open') {
     const now = invoiceTotals(inv).total;
@@ -300,7 +305,7 @@ export function mountStripeCard(root, invoiceId, current) {
     const st = get('invoices', invoiceId)?.stripe || {};
     const why = busy || stillCreating(st) ? 'Wait until Stripe has finished with this invoice.'
       : st.status === 'open' ? 'Void the Stripe invoice first (Online payment, below), then delete this invoice.'
-        : st.status === 'paid' && st.livemode ? 'This invoice was paid through Stripe, so it stays as the record of that payment. To give the money back, refund it in Stripe.' : '';
+        : st.status === 'paid' && st.livemode ? `This invoice was paid through Stripe, so it stays as the record of that payment. ${GIVE_BACK}` : '';
     if (!why) return;
     ev.stopPropagation();
     toast(why, true);
@@ -325,7 +330,7 @@ export async function settleStripeFirst(invoiceId, status) {
   const st = inv.stripe || {};
   // Paid through Stripe: the money came in, so the bill stays paid.
   if (st.status === 'paid' && status !== 'paid') {
-    toast('This invoice was paid through Stripe, so it stays paid. To give the money back, refund it in Stripe.', true);
+    toast(`This invoice was paid through Stripe, so it stays paid. ${GIVE_BACK}`, true);
     return false;
   }
   if (!['paid', 'void'].includes(status)) return true;
