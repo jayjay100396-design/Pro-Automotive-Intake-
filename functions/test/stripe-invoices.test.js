@@ -163,6 +163,11 @@ describe('Stripe invoices (server)', function () {
     assert.deepEqual(stripe.called('invoiceItems.create').map(([, p]) => p.description),
       ['Storefront glass', 'Install labor (6.5 × $85.00)', 'Sales tax (7% on $1,250.00)']);
     assert.equal(stripe.called('invoices.sendInvoice').length, 1);
+    // Stripe's reminders need automatic collection: off while it's made, on once it's emailed.
+    assert.equal(stripe.called('invoices.finalizeInvoice')[0][2].auto_advance, false);
+    const names = stripe.calls.map((c) => c[0]);
+    assert.ok(names.lastIndexOf('invoices.update') > names.indexOf('invoices.sendInvoice'));
+    assert.deepEqual(stripe.called('invoices.update').map((c) => c.slice(1)), [[r.invoiceId, { auto_advance: true }]]);
 
     const d = await data();
     assert.equal(d.stripe.status, 'open');
@@ -270,6 +275,7 @@ describe('Stripe invoices (server)', function () {
     assert.equal(stripe.called('invoices.create').length, 1);
     assert.equal(stripe.called('invoices.sendInvoice').length, 1);
     assert.equal(again.sentTo, 'pat@example.com');
+    assert.deepEqual(stripe.called('invoices.update').map((c) => c[2]), [{ auto_advance: true }]);
   });
 
   it('refuses while another request is making the invoice, and when paid', async () => {
@@ -288,6 +294,16 @@ describe('Stripe invoices (server)', function () {
     const r = await create({ send: false });
     assert.equal(r.status, 'open');
     assert.equal(r.sentTo, null);
+    assert.equal(stripe.called('invoices.update').length, 0); // no reminders for a link sent by hand
+  });
+
+  it('keeps the Stripe invoice, and says so, when Stripe can\'t email it', async () => {
+    stripe.fail['invoices.sendInvoice'] = stripeError('StripeConnectionError', 'socket hang up');
+    const r = await create({ send: true });
+    assert.equal(r.status, 'open');
+    assert.match(r.warning, /Made the Stripe invoice, but Stripe couldn't email it\. Couldn't reach Stripe/);
+    assert.equal(stripe.called('invoices.update').length, 0);
+    assert.match((await data()).stripe.error, /couldn't email it/);
   });
 
   it('refuses amounts Stripe can\'t collect', async () => {
@@ -515,6 +531,18 @@ describe('Stripe invoices (server)', function () {
     // A credit note on an invoice made some other way is ignored.
     const other = await stripe.invoices.create({ customer: 'cus_x', metadata: {} });
     assert.equal(await handleStripeEvent({ db, stripe, event: note(other.id), allowed: C }), 'ignored');
+  });
+
+  it('follows a credit note on an open Stripe invoice, and its void', async () => {
+    const { invoiceId } = await create();
+    const note = (type) => ({ type, data: { object: { id: 'cn_2', invoice: invoiceId } } });
+    // $100 taken off the open invoice in Stripe's dashboard, then that credit note voided.
+    stripe.invoices.get(invoiceId).amount_due = 179000;
+    assert.equal(await handleStripeEvent({ db, stripe, event: note('credit_note.created'), allowed: C }), 'updated');
+    assert.equal((await data()).stripe.amountDue, 1790);
+    stripe.invoices.get(invoiceId).amount_due = 189000;
+    assert.equal(await handleStripeEvent({ db, stripe, event: note('credit_note.voided'), allowed: C }), 'updated');
+    assert.equal((await data()).stripe.amountDue, 1890);
   });
 
   it('keeps a Stripe invoice marked uncollectible linked until it\'s voided, since it can still be paid', async () => {

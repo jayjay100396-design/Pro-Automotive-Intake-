@@ -36,10 +36,10 @@ Steps 1 to 3 need Wes. Then he can add Jason on the Team page (<https://dashboar
 1. **Create the account** at <https://dashboard.stripe.com/register> with Wes's business email. It should be Stellar Glass LLC's own account, because payouts go to its bank. Test mode works before the business details are filled in.
 2. **Branding:** Settings > Business > Branding. Upload the logo and set the colors to navy `#123764` and blue `#0071bc`. These show on Stripe's invoice emails, invoice PDFs and payment page.
 3. **Payment methods:** Settings > Payments > Payment methods. Keep **Cards** on and turn on **ACH Direct Debit** (bank), which is much cheaper on large invoices.
-4. **Invoice emails (optional):** Settings > Billing > Invoices and customer emails. Turn on payment receipts, and reminders for unpaid invoices if you want Stripe to nudge customers.
+4. **Invoice emails (optional):** Settings > Billing > Invoices and customer emails. Turn on payment receipts, and reminders for unpaid invoices if you want Stripe to nudge customers. Reminders go out for invoices the app emails with Stripe, not for payment links you send yourself.
 5. **API key:** Developers > API keys > **Create restricted key**. Name it `Stellar Glass app`, set **Customers: Write** and **Invoices: Write**, leave everything else at None, and create it. Copy the key (it starts with `rk_test_`). Don't paste it into chat, email or a document.
 6. **Webhook:** Developers > Webhooks > **Add destination** (older dashboards say Add endpoint).
-   - Events: `invoice.paid`, `invoice.voided`, `invoice.marked_uncollectible`, `credit_note.created`
+   - Events: `invoice.paid`, `invoice.voided`, `invoice.marked_uncollectible`, `credit_note.created`, `credit_note.voided`
    - Destination type: Webhook endpoint
    - URL: `https://us-central1-stellar-glass-jobs.cloudfunctions.net/stripeWebhook`
 

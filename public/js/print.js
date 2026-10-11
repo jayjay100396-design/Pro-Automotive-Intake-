@@ -1,6 +1,6 @@
 // Printable documents. Each opens as a clean page; "Print / Save PDF" uses the browser's print dialog.
 import { state, get, where } from './data.js';
-import { estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, money, pctFmt, proposalOptions, proposalTerms } from './calc.js';
+import { estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, money, pctFmt, proposalOptions, proposalTerms, paidOn } from './calc.js';
 import { payAppSummary, g702Table } from './views.js';
 import { esc, fmtDate } from './ui.js';
 import { websiteUrl } from './brand.js';
@@ -183,12 +183,14 @@ export function invoiceDoc(id) {
   const inv = get('invoices', id);
   if (!inv) return { waiting: true, html: '<p class="muted">Loading…</p>' };
   const t = invoiceTotals(inv);
+  // Part paid online (through Stripe): what's paid comes off what's due.
+  const paid = inv.status === 'paid' ? 0 : Math.min(paidOn(inv), t.total);
   return page(`Invoice ${inv.number}`, `
     ${letterhead('Invoice', `<div>No. ${esc(inv.number)}</div><div>${fmtDate(inv.date)}</div>${inv.dueDate ? `<div class="small">Due ${fmtDate(inv.dueDate)}</div>` : ''}${inv.status === 'paid' ? `<div class="paid-stamp">PAID ${fmtDate(inv.paidDate)}</div>` : ''}`)}
     ${party(inv.jobId, inv.customerId)}
     <table class="doc-table"><thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Amount</th></tr></thead><tbody>
     ${(inv.lines || []).map((l) => `<tr><td>${esc(l.desc)}</td><td class="num">${esc(l.qty)}</td><td class="num">${money(l.price)}</td><td class="num">${money((Number(l.qty) || 0) * (Number(l.price) || 0))}</td></tr>`).join('')}
     </tbody></table>
-    <div class="doc-totals"><div class="tr"><span>Subtotal</span><span>${money(t.subtotal)}</span></div><div class="tr"><span>Sales tax</span><span>${money(t.tax)}</span></div><div class="tr grand"><span>Total due</span><span>${money(inv.status === 'paid' ? 0 : t.total)}</span></div></div>
+    <div class="doc-totals"><div class="tr"><span>Subtotal</span><span>${money(t.subtotal)}</span></div><div class="tr"><span>Sales tax</span><span>${money(t.tax)}</span></div>${paid > 0 ? `<div class="tr"><span>Total</span><span>${money(t.total)}</span></div><div class="tr"><span>Paid online</span><span>${money(-paid)}</span></div>` : ''}<div class="tr grand"><span>${paid > 0 ? 'Balance due' : 'Total due'}</span><span>${money(inv.status === 'paid' ? 0 : t.total - paid)}</span></div></div>
     ${inv.notes ? `<div class="doc-terms">${nl(inv.notes)}</div>` : ''}`);
 }

@@ -147,12 +147,15 @@ async function sendEmail(stripe, ref, stripeInvoiceId, email) {
   try {
     await stripe.invoices.sendInvoice(stripeInvoiceId);
     await ref.update({ 'stripe.sentTo': email || null, 'stripe.sentAt': new Date(), 'stripe.error': null });
-    return null;
   } catch (e) {
     const message = `Made the Stripe invoice, but Stripe couldn't email it. ${friendlyError(e).message}`;
     await ref.update({ 'stripe.error': message });
     return message;
   }
+  // Stripe's reminders for unpaid invoices (if they're on in its settings) need automatic collection.
+  // It stays off until here, so Stripe never emails an invoice by itself (a payment link isn't emailed).
+  await stripe.invoices.update(stripeInvoiceId, { auto_advance: true }).catch(() => {});
+  return null;
 }
 
 // Makes (or reuses) the Stripe invoice for an app invoice: same number, one item per line plus
@@ -433,8 +436,8 @@ export async function applyStripeInvoice(db, si) {
   });
 }
 
-// Webhook events about an invoice, or a credit note on one: re-read the invoice from Stripe rather
-// than trusting the event body, then record it.
+// Webhook events about an invoice, or a credit note on one (made or voided): re-read the invoice from
+// Stripe rather than trusting the event body, then record it.
 export async function handleStripeEvent({ db, stripe, event, allowed, emulated = false }) {
   const type = String(event?.type || '');
   const obj = event.data?.object || {};
