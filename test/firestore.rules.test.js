@@ -102,6 +102,28 @@ describe('Firestore rules', function () {
     await assertFails(setDoc(doc(db('crew'), 'companies/stellar/customers/c2'), { name: 'X', stripeCustomerIds: { live: 'cus_3' } }));
   });
 
+  it('keeps an invoice paid through Stripe paid, and keeps it', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const f = ctx.firestore();
+      await setDoc(doc(f, 'companies/stellar/invoices/live'), { number: 1001, status: 'paid', stripe: { status: 'paid', livemode: true } });
+      await setDoc(doc(f, 'companies/stellar/invoices/test'), { number: 1002, status: 'paid', stripe: { status: 'paid', livemode: false } });
+      await setDoc(doc(f, 'companies/stellar/invoices/check'), { number: 1003, status: 'paid', stripe: { status: 'void', livemode: true } });
+    });
+    for (const uid of ['wes', 'cpa']) {
+      const f = db(uid);
+      await assertSucceeds(updateDoc(doc(f, 'companies/stellar/invoices/live'), { notes: 'Thanks', status: 'paid' }));
+      await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/live'), { status: 'unpaid' }));
+      await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/live'), { status: 'void' }));
+    }
+    await assertFails(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/live')));
+    await assertFails(deleteDoc(doc(db('admin1'), 'companies/stellar/invoices/live')));
+    // Paid in test mode, or paid by check after its Stripe invoice was voided: those can change.
+    await assertSucceeds(updateDoc(doc(db('wes'), 'companies/stellar/invoices/test'), { status: 'void' }));
+    await assertSucceeds(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/test')));
+    await assertSucceeds(updateDoc(doc(db('cpa'), 'companies/stellar/invoices/check'), { status: 'unpaid' }));
+    await assertSucceeds(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/check')));
+  });
+
   it('lets the owner invite an accountant', async () => {
     await assertSucceeds(setDoc(doc(db('wes'), 'companies/stellar/members/newcpa'), { role: 'accountant' }));
   });

@@ -5,16 +5,18 @@
 //   status      'creating' | 'open' | 'paid' | 'void' | 'uncollectible' (Stripe's invoice status)
 //   invoiceId   Stripe invoice id; number, hostedUrl (payment page), pdfUrl, amountDue, livemode
 //   issued      how many Stripe invoices have been finalized for this bill (numbers 1003, 1003-2, ...)
-//   sent        what the Stripe invoice was made from (number, job, lines, tax, notes, due date), so the
-//               app can tell when the bill is edited afterwards
+//   sent        what the Stripe invoice was made from (number, lines, tax, notes, due date, and the job's
+//               name, site and PO), so the app can tell when the bill or its job is edited afterwards
 //   sentTo, sentAt, error
 // and the customer gets stripeCustomerIds: { test, live }. Only this server code writes those
 // fields; firestore.rules keeps the app from changing them.
+import { createHash } from 'node:crypto';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { stripeItems, invoiceTotals, paidOn, proposalStatusText, daysUntilDue, floridaDate, clip } from './lines.js';
 
 export const BILLING_ROLES = ['owner', 'admin', 'staff', 'accountant'];
 const CLAIM_MS = 180e3; // longer than the function's 120 s timeout
+const MAX_ITEMS = 250; // the most items Stripe takes on one invoice
 const ID = /^[\w-]{1,128}$/;
 
 // Only the business named in STRIPE_COMPANY_ID can bill through the Stripe account. '*' (any
@@ -72,11 +74,13 @@ const prefixed = (fields) => Object.fromEntries(Object.entries(fields).map(([k, 
 
 const sameEmail = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
-// What a Stripe invoice is made from. The app compares it with the bill (billing.js stripeSig).
-const sentFrom = (inv) => ({
+// What a Stripe invoice is made from: the bill, and its job's name, site and PO (custom fields).
+// The app compares it with the bill and its job (billing.js stripeSig).
+const sentFrom = (inv, job = {}) => ({
   number: inv.number ?? null, jobId: inv.jobId ?? null, taxPct: inv.taxPct ?? null, dueDate: inv.dueDate ?? null,
   notes: inv.notes ?? null,
   lines: (inv.lines || []).map((l) => ({ desc: l.desc ?? '', qty: l.qty ?? null, price: l.price ?? null, taxable: l.taxable !== false })),
+  job: { name: job.name ?? '', siteAddress: job.siteAddress ?? '', poNumber: job.poNumber ?? '' },
 });
 
 // The bill's job and customer. The customer comes from the invoice, or else from its job.
@@ -195,7 +199,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
   }
 
   // Stripe invoices already made for this bill in this mode (test-mode tries don't count).
-  const issued = !!prev.livemode === livemode ? prev.issued || 0 : 0;
+  let issued = !!prev.livemode === livemode ? prev.issued || 0 : 0;
   let cust = null;
   let finalized = null;
   let draftId = null;
@@ -208,12 +212,27 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
 
     const { items, totalCents } = stripeItems(inv);
     if (totalCents < 50) throw new HttpsError('failed-precondition', 'Stripe can only collect invoices of $0.50 or more.');
+    if (items.length > MAX_ITEMS) {
+      throw new HttpsError('failed-precondition', `Stripe takes up to ${MAX_ITEMS} lines on an invoice, counting sales tax as one. This one has ${items.length}.`);
+    }
 
     const customer = await ensureCustomer({ db, stripe, livemode, companyId, customerId, cust });
+    // What this Stripe invoice is made from. It goes on the invoice too, so a later try can tell
+    // whether an invoice it finds there is still right.
+    const sent = sentFrom(inv, job);
+    const madeFrom = createHash('sha256').update(JSON.stringify([sent, customerFields(cust, companyId, customerId)])).digest('hex').slice(0, 40);
 
-    // If an earlier try finished in Stripe but never got saved here, use that invoice.
+    // An earlier try may have finished in Stripe but never got saved here. Its invoice is used if it
+    // was made from the bill as it is now; one made from an older version is cancelled, like a void.
     const open = await stripe.invoices.list({ customer, status: 'open', limit: 100 });
-    finalized = open.data.find((si) => si.metadata?.companyId === companyId && si.metadata?.invoiceId === invoiceId) || null;
+    for (const si of open.data.filter((x) => x.metadata?.companyId === companyId && x.metadata?.invoiceId === invoiceId)) {
+      if (!finalized && si.metadata.madeFrom === madeFrom) {
+        finalized = si;
+      } else {
+        await stripe.invoices.voidInvoice(si.id).catch(() => {});
+        issued += 1;
+      }
+    }
 
     if (!finalized) {
       // The app's number (1003), or 1003-2, 1003-3 ... when a bill is sent again after a void.
@@ -231,7 +250,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
         auto_advance: false,
         pending_invoice_items_behavior: 'exclude',
         currency: 'usd',
-        metadata: { companyId, invoiceId, appNumber: String(inv.number ?? '') },
+        metadata: { companyId, invoiceId, appNumber: String(inv.number ?? ''), madeFrom },
         ...(custom.length ? { custom_fields: custom } : {}),
         ...(memo ? { description: clip(memo, 1500) } : {}),
       };
@@ -265,10 +284,10 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       if (!snap.exists) return 'deleted';
       const cur = snap.data();
       if (['paid', 'void'].includes(cur.status)) return `marked ${cur.status}`;
-      if (JSON.stringify(sentFrom(cur)) !== JSON.stringify(sentFrom(inv)) || (cur.customerId || null) !== (inv.customerId || null)) return 'changed';
+      if (JSON.stringify(sentFrom(cur, job)) !== JSON.stringify(sent) || (cur.customerId || null) !== (inv.customerId || null)) return 'changed';
       tx.update(ref, {
         stripe: {
-          ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent: sentFrom(inv),
+          ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent,
           sentTo: null, sentAt: null, error: null, claimedAt: null,
         },
       });

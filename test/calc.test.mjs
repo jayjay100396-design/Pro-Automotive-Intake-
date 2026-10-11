@@ -157,6 +157,22 @@ describe('money math', () => {
     const old = { ...est, depositType: undefined, depositValue: undefined, terms: 'A 50% deposit is required before materials can be ordered.\nNet 30.' };
     assert.equal(proposalTerms(old), old.terms);
     assert.equal(termsWithoutDeposit(old.terms), 'Net 30.');
+    // Other wordings: whatever sentence the deposit is read from is the one taken out, so it isn't
+    // printed twice once the proposal is saved with the deposit field.
+    for (const [terms, value, rest] of [
+      ['30% deposit due at signing.', 30, ''],
+      ['Net 30. A 25% deposit is due on acceptance.\nThank you.', 25, 'Net 30. Thank you.'],
+      ['Balance due on completion\n40 % deposit to order glass\nPrices good for 30 days.', 40, 'Balance due on completion\nPrices good for 30 days.'],
+    ]) {
+      assert.equal(proposalDeposit({ ...old, terms }).value, value, terms);
+      assert.equal(termsWithoutDeposit(terms), rest, terms);
+      const saved = { ...old, terms: termsWithoutDeposit(terms), depositType: 'percent', depositValue: value };
+      assert.equal(proposalTerms(saved).match(/deposit/gi).length, 1, terms);
+    }
+    // A sentence that isn't only about the deposit stays as typed, and no deposit is read from it.
+    const schedule = 'Payment: 30% deposit, 60% at rough-in, 10% at completion.';
+    assert.equal(proposalDeposit({ ...old, terms: schedule }).value, 0);
+    assert.equal(termsWithoutDeposit(schedule), schedule);
   });
 
   it('tracks what has been paid on a proposal', () => {

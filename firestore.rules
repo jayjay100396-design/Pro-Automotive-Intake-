@@ -79,6 +79,14 @@ service cloud.firestore {
         || (resource != null && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['stripe', 'stripeCustomerIds']));
     }
 
+    // An invoice paid through Stripe for real (live mode) stays paid and isn't deleted: it's the
+    // record of money that came in, and refunds happen in Stripe. Test-mode payments aren't real.
+    function paidThroughStripe(collection) {
+      return collection == 'invoices' && resource != null
+        && resource.data.get('stripe', {}).get('status', '') == 'paid'
+        && resource.data.get('stripe', {}).get('livemode', false) == true;
+    }
+
     // A user's own profile. Nobody else can read or write it.
     match /users/{uid} {
       allow read, write: if signedIn() && request.auth.uid == uid;
@@ -323,8 +331,9 @@ service cloud.firestore {
       match /{collection}/{docId} {
         allow read: if isRecord(collection) && isMember(companyId);
         allow create, update: if isRecord(collection) && canEditCollection(companyId, collection)
-          && keepsServerFields();
-        allow delete: if isRecord(collection) && canManage(companyId);
+          && keepsServerFields()
+          && (!paidThroughStripe(collection) || request.resource.data.get('status', '') == 'paid');
+        allow delete: if isRecord(collection) && canManage(companyId) && !paidThroughStripe(collection);
       }
 
       // Line items (e.g. G703 continuation lines), attachment metadata and other nested records.

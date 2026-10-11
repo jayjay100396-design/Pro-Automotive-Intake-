@@ -4,7 +4,7 @@
 import { state, add, update, remove, get, where, nextNumber, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
-  proposalOptions, estimateAmount, proposalDeposit, depositSentence, termsWithoutDeposit, proposalTerms, proposalPayment,
+  proposalOptions, estimateAmount, proposalDeposit, depositSentence, termsWithoutDeposit, proposalTerms, proposalPayment, paidOn,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
 import { proposalBilling, mountProposalBilling, stripeCard, mountStripeCard, settleStripeFirst, paymentsSettings, mountPaymentsSettings } from './billing.js';
@@ -55,7 +55,8 @@ export function dashboard() {
   const estValue = est.reduce((s, e) => s + estimateAmount(e), 0);
   const active = D().jobs.filter((j) => ['contracted', 'in progress'].includes(j.status));
   const unpaid = D().invoices.filter((i) => i.status === 'unpaid');
-  const owed = unpaid.reduce((s, i) => s + invoiceTotals(i).total, 0);
+  // Less anything already paid online on them.
+  const owed = unpaid.reduce((s, i) => s + invoiceTotals(i).total - paidOn(i), 0);
   const overdue = unpaid.filter((i) => i.dueDate && i.dueDate < today());
   const pending = D().payApps.filter((p) => ['submitted', 'approved'].includes(p.status));
   const pendingDue = pending.reduce((s, p) => s + payAppSummary(p).currentDue, 0);

@@ -115,9 +115,17 @@ export function mountProposalBilling(root, estimateId, current) {
       inv = { ...base, kind, dueDate: today(), taxPct: 0, lines: [line] };
     } else {
       const bill = proposalBill(e);
+      const prior = earlier.filter((i) => i.kind === 'deposit' || i.kind === 'final');
+      // One edited after its Stripe invoice went out: the customer would still pay the Stripe amount,
+      // so that gets sorted out first.
+      const stale = prior.find((d) => d.status === 'unpaid' && d.stripe?.status === 'open'
+        && Math.round(invoiceTotals(d).total * 100) !== Math.round(n(d.stripe.amountDue) * 100));
+      if (stale) {
+        return toast(`Invoice ${stale.number} comes to ${money(invoiceTotals(stale).total)}, but its Stripe invoice asks for ${money(stale.stripe.amountDue)}. Void that Stripe invoice and send a new one first.`, true);
+      }
       // Deposits and any earlier final invoice come off: what was paid on them (Stripe's amount when
       // paid through Stripe), or what they bill while unpaid.
-      const credits = earlier.filter((i) => i.kind === 'deposit' || i.kind === 'final').map((d) => ({
+      const credits = prior.map((d) => ({
         desc: `Less ${d.kind === 'final' ? 'final invoice' : 'deposit, invoice'} ${d.number}`, qty: 1,
         price: -(d.status === 'paid' ? paidOn(d) : invoiceTotals(d).total), taxable: false,
       }));
@@ -151,10 +159,12 @@ export function mountProposalBilling(root, estimateId, current) {
 }
 
 // ---------- Invoice: send with Stripe ----------
-// Everything a Stripe invoice shows from the bill. The server keeps what it sent in stripe.sent.
+// Everything a Stripe invoice shows from the bill, and from its job (i.job: name, site and PO).
+// The server keeps what it sent in stripe.sent.
 const stripeSig = (i) => JSON.stringify([
   s(i.number), s(i.jobId), n(i.taxPct), s(i.dueDate), s(i.notes ?? state.company?.invoiceNotes),
   (i.lines || []).filter((l) => l.desc || l.price).map((l) => [s(l.desc), n(l.qty), n(l.price), l.taxable !== false]),
+  [s(i.job?.name), s(i.job?.siteAddress), s(i.job?.poNumber)],
 ]);
 // Unsaved changes that matter before sending: the above, and the status (paid or void bills aren't sent).
 const invoiceSig = (i) => `${stripeSig(i)}${s(i.status)}`;
@@ -177,15 +187,16 @@ function stripeHtml(inv, busy) {
   } else if (st.status === 'open') {
     const now = invoiceTotals(inv).total;
     const changed = Math.round(now * 100) !== Math.round(n(st.amountDue) * 100);
-    // Edited since the Stripe invoice was made: lines, tax, notes, due date, number or job.
-    const edited = changed || (!!st.sent && stripeSig(inv) !== stripeSig(st.sent));
+    // Edited since the Stripe invoice was made: lines, tax, notes, due date, number, job, or the
+    // job's name, site or PO.
+    const edited = changed || (!!st.sent && stripeSig({ ...inv, job: get('jobs', inv.jobId) }) !== stripeSig(st.sent));
     const part = n(st.amountPaid) > 0 ? ` ${money(st.amountPaid)} is paid so far, ${money(n(st.amountDue) - n(st.amountPaid))} to go.` : '';
     body = `<p>Stripe invoice ${esc(st.number || '')}${test} is waiting for payment: <b>${money(st.amountDue)}</b>.${part}
       ${!st.sentTo ? 'It hasn\'t been emailed; send the link yourself, or email it from here.'
     : st.livemode ? `Stripe emailed it to ${esc(st.sentTo)}${st.sentAt ? ` on ${when(st.sentAt)}` : ''}.`
       : `Marked as emailed to ${esc(st.sentTo)}, but Stripe doesn't send emails in test mode.`}</p>
       ${changed ? `<p class="warn small">This invoice now comes to ${money(now)}. Void the Stripe invoice and send a new one so the customer sees the new amount.</p>`
-    : edited ? '<p class="warn small">This invoice changed after the Stripe invoice was made. Void the Stripe invoice and send a new one so the customer sees the changes.</p>' : ''}
+    : edited ? '<p class="warn small">This invoice or its job changed after the Stripe invoice was made. Void the Stripe invoice and send a new one so the customer sees the changes.</p>' : ''}
       <div class="row">
         ${st.hostedUrl ? `<a class="btn small" href="${esc(st.hostedUrl)}" target="_blank" rel="noopener">Open payment page</a>
         <button type="button" class="btn small" data-act="copy">Copy payment link</button>` : ''}
@@ -275,12 +286,15 @@ export function mountStripeCard(root, invoiceId, current) {
   });
 
   // Deleting the bill would leave its Stripe invoice payable, with nowhere to record the payment.
+  // Once paid through Stripe for real, the bill is the record of that payment (firestore.rules too);
+  // a test-mode one can go.
   const guard = (ev) => {
     if (!card.isConnected) return root.removeEventListener('click', guard, true);
     if (!ev.target.closest('#del')) return;
     const st = get('invoices', invoiceId)?.stripe || {};
     const why = busy || stillCreating(st) ? 'Wait until Stripe has finished with this invoice.'
-      : st.status === 'open' ? 'Void the Stripe invoice first (Online payment, below), then delete this invoice.' : '';
+      : st.status === 'open' ? 'Void the Stripe invoice first (Online payment, below), then delete this invoice.'
+        : st.status === 'paid' && st.livemode ? 'This invoice was paid through Stripe, so it stays as the record of that payment. To give the money back, refund it in Stripe.' : '';
     if (!why) return;
     ev.stopPropagation();
     toast(why, true);

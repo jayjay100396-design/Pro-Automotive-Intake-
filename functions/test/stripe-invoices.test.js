@@ -64,7 +64,12 @@ function fakeStripe() {
       },
       sendInvoice: async (id) => { log('invoices.sendInvoice', id); return { ...get(id) }; },
       voidInvoice: async (id) => { log('invoices.voidInvoice', id); Object.assign(get(id), { status: 'void' }); return { ...get(id) }; },
-      del: async (id) => { log('invoices.del', id); invoices.delete(id); return { deleted: true }; },
+      del: async (id) => {
+        log('invoices.del', id);
+        if (get(id).status !== 'draft') throw stripeError('StripeInvalidRequestError', 'You can only delete draft invoices.');
+        invoices.delete(id);
+        return { deleted: true };
+      },
     }),
     invoiceItems: {
       create: async (p) => { log('invoiceItems.create', p); get(p.invoice).lines.push(p); return { id: `ii_${++n}` }; },
@@ -149,7 +154,9 @@ describe('Stripe invoices (server)', function () {
     assert.equal(params.collection_method, 'send_invoice');
     assert.equal(params.pending_invoice_items_behavior, 'exclude');
     assert.equal(params.description, 'Thank you for your business.');
-    assert.deepEqual(params.metadata, { companyId: C, invoiceId: 'i1', appNumber: '1003' });
+    const { madeFrom, ...meta } = params.metadata;
+    assert.deepEqual(meta, { companyId: C, invoiceId: 'i1', appNumber: '1003' });
+    assert.match(madeFrom, /^[0-9a-f]{40}$/);
     assert.deepEqual(params.custom_fields.map((f) => f.name), ['Project', 'Site', 'PO / project #']);
     assert.deepEqual(stripe.called('invoiceItems.create').map(([, p]) => p.description),
       ['Storefront glass', 'Install labor (6.5 × $85.00)', 'Sales tax (7% on $1,250.00)']);
@@ -167,6 +174,7 @@ describe('Stripe invoices (server)', function () {
         { desc: 'Storefront glass', qty: 4, price: 312.5, taxable: true },
         { desc: 'Install labor', qty: 6.5, price: 85, taxable: false },
       ],
+      job: { name: 'LCP Bldg 300', siteAddress: '300 Lake Parker Ave', poNumber: 'PO-77' },
     });
     assert.equal((await data(db.doc(`companies/${C}/customers/c1`))).stripeCustomerIds.test, [...stripe.customers.values()][0].id);
   });
@@ -238,6 +246,13 @@ describe('Stripe invoices (server)', function () {
   it('refuses amounts Stripe can\'t collect', async () => {
     await inv().update({ lines: [{ desc: 'Credit', qty: 1, price: 0.25 }] });
     await assert.rejects(create(), /\$0\.50 or more/);
+  });
+
+  it('refuses more lines than Stripe takes on one invoice', async () => {
+    // 250 taxed lines, plus the sales tax line.
+    await inv().update({ lines: Array.from({ length: 250 }, (_, i) => ({ desc: `Pane ${i + 1}`, qty: 1, price: 10 })) });
+    await assert.rejects(create(), { code: 'failed-precondition', message: /up to 250 lines.*This one has 251/ });
+    assert.equal(stripe.called('invoices.create').length, 0);
   });
 
   it('cleans up and records the error when Stripe fails halfway', async () => {
@@ -322,14 +337,47 @@ describe('Stripe invoices (server)', function () {
     assert.notEqual((await data()).stripe.status, 'open');
   });
 
+  // A first try whose answer from Stripe is lost after Stripe finalized the invoice, so it's never saved.
+  const lostTry = async () => {
+    const finalize = stripe.invoices.finalizeInvoice;
+    stripe.invoices.finalizeInvoice = async (...args) => {
+      await finalize(...args);
+      throw stripeError('StripeConnectionError', 'socket hang up');
+    };
+    await assert.rejects(create(), { code: 'unavailable' });
+    stripe.invoices.finalizeInvoice = finalize;
+    const orphan = [...stripe.invoices.values()].at(-1);
+    assert.equal(orphan.status, 'open');
+    return orphan;
+  };
+
   it('picks up a Stripe invoice an earlier try made but never saved', async () => {
-    const cus = await stripe.customers.create({ name: 'x' });
-    await db.doc(`companies/${C}/customers/c1`).update({ stripeCustomerIds: { test: cus.id } });
-    const orphan = await stripe.invoices.create({ customer: cus.id, metadata: { companyId: C, invoiceId: 'i1' } });
-    await stripe.invoices.finalizeInvoice(orphan.id);
+    const orphan = await lostTry();
     const r = await create();
     assert.equal(r.invoiceId, orphan.id);
-    assert.equal(stripe.called('invoices.create').length, 1); // only the orphan
+    assert.equal(stripe.called('invoices.create').length, 1); // only the first try's
+    assert.equal(stripe.called('invoices.voidInvoice').length, 0);
+  });
+
+  it('cancels a Stripe invoice an earlier try made from an older version of the bill', async () => {
+    const orphan = await lostTry();
+    // The glass price is fixed before the next try.
+    await inv().update({ lines: [{ desc: 'Storefront glass', qty: 4, price: 350 }, { desc: 'Install labor', qty: 6.5, price: 85, taxable: false }] });
+    const r = await create();
+    assert.notEqual(r.invoiceId, orphan.id);
+    assert.equal(stripe.invoices.get(orphan.id).status, 'void');
+    assert.equal(r.amountDue, 1400 + 98 + 552.5);
+    assert.equal(r.number, '1003-2'); // numbered like a re-send after a void
+    assert.equal((await data()).stripe.sent.lines[0].price, 350);
+
+    // The same for the job's details that go on the Stripe invoice.
+    await voidStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' });
+    const orphan2 = await lostTry();
+    await db.doc(`companies/${C}/jobs/j1`).update({ poNumber: 'PO-78' });
+    const r2 = await create();
+    assert.equal(stripe.invoices.get(orphan2.id).status, 'void');
+    assert.equal(r2.number, '1003-4');
+    assert.equal((await data()).stripe.sent.job.poNumber, 'PO-78');
   });
 
   it('marks the invoice paid when Stripe says so, and ignores events that aren\'t ours', async () => {

@@ -220,14 +220,20 @@ export function proposalBill(est) {
 }
 
 // ---------- Deposit and payment status ----------
+// A deposit sentence typed into the payment terms before the deposit field existed: one that starts
+// with the percent and names no other, like "A 50% deposit is required before materials can be
+// ordered." or "30% deposit due at signing." Group 2 is the percent. The deposit field takes it over,
+// so the editor takes the sentence out of the terms (termsWithoutDeposit).
+const TYPED_DEPOSIT = /(^|[.;!?]\s+|\n)\s*(?:an?\s+)?(\d{1,3}(?:\.\d+)?)\s*%\s*deposit[^.;!?\n%]*(?:[.;!?]|(?=\n)|$)\s*/i;
+
 // The deposit a proposal asks for: a percent of the accepted price (50% to start) or a dollar
 // amount, never more than the price. Proposals saved before the deposit field existed take the
-// percent from their typed payment terms ("A 50% deposit is required..."), or none if they don't say.
+// percent from their typed deposit sentence, or none if they don't have one.
 export function proposalDeposit(est, option) {
   const opt = option || acceptedOption(est).opt;
   const legacy = est.depositType == null;
   const type = est.depositType === 'amount' ? 'amount' : 'percent';
-  const typed = /(\d{1,3}(?:\.\d+)?)\s*%\s*deposit/i.exec(est.terms || '')?.[1];
+  const typed = TYPED_DEPOSIT.exec(est.terms || '')?.[2];
   const typedValue = Math.max(0, legacy ? num(typed ?? 0) : num(est.depositValue));
   const value = type === 'percent' ? Math.min(typedValue, 100) : typedValue;
   const amount = type === 'amount' ? Math.min(round2(value), opt.price) : round2(opt.price * value / 100);
@@ -248,9 +254,8 @@ export function depositSentence(est) {
   return `A ${qtyText(d.value)}% deposit ${end} (${list}).`;
 }
 
-// The old typed deposit sentence, which the deposit field now prints.
-export const termsWithoutDeposit = (terms) => String(terms || '')
-  .replace(/A\s+\d{1,3}(?:\.\d+)?%\s+deposit is required before materials can be ordered\.?\s*/i, '').trim();
+// The terms without the old typed deposit sentence, which the deposit field now prints.
+export const termsWithoutDeposit = (terms) => String(terms || '').replace(TYPED_DEPOSIT, '$1').trim();
 
 // Payment terms as printed: the deposit sentence, then the other terms. Proposals saved before the
 // deposit field existed print their terms as typed.
