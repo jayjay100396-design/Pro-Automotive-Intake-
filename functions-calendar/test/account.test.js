@@ -97,7 +97,10 @@ describe('Calendar account (with the Firestore emulator)', function () {
     assert.equal(link.syncedAt.toMillis(), NOW.getTime());
 
     const token = await co.token('business');
-    assert.deepEqual(Object.keys(token).sort(), ['appCalendar', 'calendarId', 'calendarName', 'connectedAt', 'email', 'kind', 'refreshToken', 'scopes', 'uid']);
+    assert.deepEqual(Object.keys(token).sort(), [
+      'appCalendar', 'calendarId', 'calendarName', 'connectedAt', 'email', 'emailKey', 'kind', 'refreshToken', 'scopes', 'uid',
+    ]);
+    assert.equal(token.emailKey, 'jason@example.com');
     assert.equal(token.refreshToken, fake.grantsOf('jason@example.com')[0].token);
     assert.equal(token.scopes, BASIC_SCOPES);
     assert.equal(token.calendarId, cal.id);
@@ -164,6 +167,29 @@ describe('Calendar account (with the Firestore emulator)', function () {
     assert.equal((await co.token('business')).refreshToken, shared);
     assert.equal((await co.link('business')).calendarId, calendarId);
     assert.deepEqual(fake.state.revoked, []);
+  });
+
+  it('shares one Google account\'s lasting access between businesses, and gives it back only when the last one lets go', async () => {
+    const other = business(bed, 'caltest-b');
+    await other.seed({ name: 'Reed Glass Repair' });
+    await co.connect('jason', 'business');
+    const shared = (await co.token('business')).refreshToken;
+
+    // Google sends no refresh token the second time Jason agrees, even for another business.
+    fake.addCode({ code: 'second', email: 'jason@example.com', refreshToken: false });
+    assert.equal((await other.connect('jason', 'business', 'second')).ok, true);
+    assert.equal((await other.token('business')).refreshToken, shared);
+    assert.deepEqual(fake.state.revoked, [], 'nothing revoked');
+
+    // Letting go in one keeps the access the other still uses.
+    assert.equal((await other.call('jason', { action: 'disconnect', kind: 'business' })).ok, true);
+    assert.deepEqual(fake.state.revoked, []);
+    assert.deepEqual(await co.write('e1', {}), { business: 'written' });
+    assert.equal((await co.link('business')).status, 'on');
+
+    // The last one gives it back.
+    assert.equal((await co.call('jason', { action: 'disconnect', kind: 'business' })).ok, true);
+    assert.deepEqual(fake.state.revoked.map((x) => x.email), ['jason@example.com']);
   });
 
   it('keeps the scopes the stored access really has, and asks again when it lacks the extra permission', async () => {

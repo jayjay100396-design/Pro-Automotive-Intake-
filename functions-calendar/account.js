@@ -18,8 +18,8 @@ import {
 } from './google.js';
 import { MESSAGES } from './messages.js';
 import {
-  apiFor, cleanupLink, clearCalendar, createAppCalendar, fullSync, linkRef, loadContext, ownedCalendars, removeLink, sameEmail, tokenRef,
-  updateLink, withDefaults,
+  accessesOf, apiFor, cleanupLink, clearCalendar, createAppCalendar, emailKey, fullSync, linkRef, loadContext, ownedCalendars, removeLink,
+  sameEmail, tokenRef, updateLink, withDefaults,
 } from './sync.js';
 
 const ID = /^[\w-]{1,128}$/;
@@ -85,21 +85,20 @@ function toHttpsError(e, logger) {
 
 // The lasting access (a refresh token) for a new connection. Google sends one only the first time a person agrees,
 // so when it doesn't, one stored for the same Google account is reused: this link's own first, then another link's
-// (the owner connecting their own schedule after the business calendar, say). It's refreshed right away, which checks
-// it still works and shows the scopes it covers. With none at all, the access Google just gave is handed back, so
-// that next time Google asks again and sends one. (Nothing else uses this Google account then, so the revoke can't
-// cut another link off.)
+// in this business (the owner connecting their own schedule after the business calendar, say), then one from another
+// business the person is on. It's refreshed right away, which checks it still works and shows the scopes it covers.
+// With none at all, the access Google just gave is handed back, so that next time Google asks again and sends one.
+// (Nothing else uses this Google account then, so the revoke can't cut another link off. If the other businesses
+// can't be checked, it's handed back anyway: otherwise Google would never send one, and connecting couldn't work.)
 async function lastingAccess(deps, grant, linkId, tokens) {
   if (grant.refreshToken) {
     return {
       refreshToken: grant.refreshToken, scopes: grant.scope, accessToken: grant.accessToken, expiresAt: deps.now().getTime() + grant.expiresIn * 1000,
     };
   }
-  const sameAccount = [tokens.get(linkId), ...[...tokens].filter(([id]) => id !== linkId).map(([, t]) => t)]
-    .filter((t) => t?.refreshToken && sameEmail(t.email, grant.email));
   const tried = new Set();
-  for (const t of sameAccount) {
-    if (tried.has(t.refreshToken)) continue;
+  const reuse = async (t) => {
+    if (!t?.refreshToken || !sameEmail(t.email, grant.email) || tried.has(t.refreshToken)) return null;
     tried.add(t.refreshToken);
     try {
       const fresh = await refreshAccessToken({
@@ -108,7 +107,22 @@ async function lastingAccess(deps, grant, linkId, tokens) {
       return { refreshToken: t.refreshToken, scopes: fresh.scope || t.scopes || grant.scope, accessToken: fresh.accessToken, expiresAt: fresh.expiresAt };
     } catch (e) {
       if (e.kind !== 'auth') throw e; // that one's access was removed in Google: try the next
+      return null;
     }
+  };
+  for (const t of [tokens.get(linkId), ...[...tokens].filter(([id]) => id !== linkId).map(([, other]) => other)]) {
+    const access = await reuse(t);
+    if (access) return access;
+  }
+  let elsewhere = [];
+  try {
+    elsewhere = await accessesOf(deps.db, grant.email);
+  } catch (e) {
+    deps.logger.warn('Calendar connect: other businesses couldn\'t be checked for the same Google account', { error: e.message });
+  }
+  for (const { token } of elsewhere) {
+    const access = await reuse(token);
+    if (access) return access;
   }
   await revokeToken({ fetch: deps.fetch, oauthBase: deps.oauthBase, token: grant.accessToken }).catch((e) => {
     deps.logger.warn('Calendar connect: the short-term access wasn\'t revoked', { error: e.message });
@@ -176,7 +190,8 @@ async function connect(deps, who, data) {
 
   const connectedAt = Timestamp.fromDate(deps.now());
   const token = {
-    kind, uid: who.uid, email: grant.email, refreshToken: access.refreshToken, scopes: access.scopes, ...calendar, connectedAt, needsFullSync: true,
+    kind, uid: who.uid, email: grant.email, emailKey: emailKey(grant.email), refreshToken: access.refreshToken, scopes: access.scopes, ...calendar,
+    connectedAt, needsFullSync: true,
   };
   await tokenRef(db, companyId, linkId).set(token);
   await linkRef(db, companyId, linkId).set({

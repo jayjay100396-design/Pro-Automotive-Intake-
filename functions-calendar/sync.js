@@ -6,10 +6,11 @@
 //   companies/{companyId}/calendarLinks/{linkId}   what members see: { kind, uid, holderName, email, calendarId,
 //       calendarName, appCalendar, canPick, status: 'syncing'|'on'|'paused'|'error', error, connectedAt, syncedAt, count }
 //   companies/{companyId}/calendarTokens/{linkId}  the Google access, which no app user can read: { kind, uid, email,
-//       refreshToken, scopes, calendarId, calendarName, appCalendar, connectedAt, needsFullSync? }
+//       emailKey, refreshToken, scopes, calendarId, calendarName, appCalendar, connectedAt, needsFullSync? }
 // linkId is 'business' for the business calendar (the owner's Google account, every event), or a member's uid for
 // their own schedule (the events they're assigned to). needsFullSync is set while a full sync hasn't finished, so
-// the next schedule change finishes it.
+// the next schedule change finishes it. emailKey is the Google account's email in lower case, which finds the same
+// account's access in every business (the collection-group index on it is in firestore.indexes.json).
 //
 // Only events the app made are ever changed or deleted in Google: each carries extendedProperties.private.stellar =
 // '1', and every list of events acted on is filtered by it. A calendar is deleted only if the app made it and nothing
@@ -48,7 +49,8 @@ export function withDefaults(deps) {
 export const tokenRef = (db, companyId, linkId) => db.doc(`companies/${companyId}/calendarTokens/${linkId}`);
 export const linkRef = (db, companyId, linkId) => db.doc(`companies/${companyId}/calendarLinks/${linkId}`);
 const enc = encodeURIComponent;
-export const sameEmail = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+export const emailKey = (email) => String(email ?? '').trim().toLowerCase();
+export const sameEmail = (a, b) => !!a && !!b && emailKey(a) === emailKey(b);
 const isNotFound = (e) => e?.code === 5; // Firestore's NOT_FOUND
 const ignoreNotFound = (e) => { if (!isNotFound(e)) throw e; };
 const isDocId = (id) => typeof id === 'string' && id.length > 0 && id.length <= 1500 && !id.includes('/') && id !== '.' && id !== '..';
@@ -257,15 +259,32 @@ export async function clearCalendar(deps, api, calendarId, { deleteIfEmpty = fal
   return { removed, calendarDeleted };
 }
 
-// Whether another link of the business uses the same Google account.
-export async function emailUsedElsewhere(db, companyId, linkId, email) {
-  const snap = await db.collection(`companies/${companyId}/calendarTokens`).get();
-  return snap.docs.some((d) => d.id !== linkId && sameEmail(d.data().email, email));
+// Every stored access for a Google account, in any business, as { path, token }. Google's grant is per person, not
+// per business, so a person on two businesses' teams has one grant behind both.
+export async function accessesOf(db, email) {
+  const key = emailKey(email);
+  if (!key) return [];
+  const snap = await db.collectionGroup('calendarTokens').where('emailKey', '==', key).get();
+  return snap.docs.map((d) => ({ path: d.ref.path, token: d.data() }));
+}
+
+// Whether another link uses the same Google account, in this business or another one. When the other businesses
+// can't be checked, it says yes, so the access is kept rather than cut off.
+export async function emailUsedElsewhere(deps, companyId, linkId, email) {
+  const snap = await deps.db.collection(`companies/${companyId}/calendarTokens`).get();
+  if (snap.docs.some((d) => d.id !== linkId && sameEmail(d.data().email, email))) return true;
+  const self = tokenRef(deps.db, companyId, linkId).path;
+  try {
+    return (await accessesOf(deps.db, email)).some((a) => a.path !== self);
+  } catch (e) {
+    deps.logger.warn('Calendar cleanup: other businesses couldn\'t be checked for the same Google account', { companyId, linkId, error: e.message });
+    return true;
+  }
 }
 
 // CLEAN UP: takes the app's events off the link's calendar (and deletes the calendar if the app made it and it's
-// empty now), then gives the Google access back, unless another link of the business uses the same Google account:
-// a revoke ends that person's whole grant, which the other link needs. Best effort. Leaves the documents alone.
+// empty now), then gives the Google access back, unless another link uses the same Google account: a revoke ends
+// that person's whole grant, which the other link needs. Best effort. Leaves the documents alone.
 export async function cleanupLink(deps, companyId, linkId, token) {
   const api = apiFor(deps, { companyId, token });
   const result = token.calendarId
@@ -274,7 +293,7 @@ export async function cleanupLink(deps, companyId, linkId, token) {
   let revoked = false;
   if (token.refreshToken) {
     try {
-      if (await emailUsedElsewhere(deps.db, companyId, linkId, token.email)) {
+      if (await emailUsedElsewhere(deps, companyId, linkId, token.email)) {
         deps.logger.info('Calendar cleanup: kept the Google access, another link uses the same account', { companyId, linkId });
       } else {
         revoked = await revokeToken({ fetch: deps.fetch, oauthBase: deps.oauthBase, token: token.refreshToken });
