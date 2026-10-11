@@ -185,7 +185,7 @@ export function mountProposalBilling(root, estimateId, current) {
 // Everything a Stripe invoice shows from the bill, and from its job (i.job: name, site and PO).
 // The server keeps what it sent in stripe.sent.
 const stripeSig = (i) => JSON.stringify([
-  s(i.number), s(i.jobId), n(i.taxPct), s(i.dueDate), s(i.notes ?? state.company?.invoiceNotes),
+  s(i.number), s(i.jobId), s(i.date), n(i.taxPct), s(i.dueDate), s(i.notes ?? state.company?.invoiceNotes),
   (i.lines || []).filter((l) => l.desc || l.price).map((l) => [s(l.desc), n(l.qty), n(l.price), l.taxable !== false]),
   [s(i.job?.name), s(i.job?.siteAddress), s(i.job?.poNumber)],
 ]);
@@ -226,7 +226,7 @@ function stripeHtml(inv, busy) {
   } else if (payable(st)) {
     const now = invoiceTotals(inv).total;
     const changed = Math.round(now * 100) !== Math.round(stripeBilled(st) * 100);
-    // Edited since the Stripe invoice was made: lines, tax, notes, due date, number, job, or the
+    // Edited since the Stripe invoice was made: lines, tax, notes, date, due date, number, job, or the
     // job's name, site or PO.
     const edited = changed || (!!st.sent && stripeSig({ ...inv, job: get('jobs', inv.jobId) }) !== stripeSig(st.sent));
     const part = n(st.paidOnline) > 0 ? ` ${money(st.paidOnline)} is paid so far, ${money(n(st.amountDue) - n(st.paidOnline))} to go.` : '';
