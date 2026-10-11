@@ -2,14 +2,18 @@
   "name": "stellar-glass",
   "private": true,
   "scripts": {
-    "postinstall": "npm --prefix functions-alerts install --no-audit --no-fund",
+    "postinstall": "npm --prefix functions-calendar install --no-audit --no-fund && npm --prefix functions-alerts install --no-audit --no-fund",
     "dev": "firebase emulators:start --only auth,firestore,storage,hosting --project demo-stellar-glass",
+    "dev:calendar": "firebase emulators:start --only auth,firestore,storage,hosting,functions --project demo-stellar-glass",
     "dev:functions": "firebase emulators:start --only auth,firestore,storage,hosting,functions --project demo-stellar-glass",
+    "dev:google": "node functions-calendar/test/fake-google.js",
     "dev:mail": "node functions-alerts/test/smtp-sink.js",
-    "test": "firebase emulators:exec --only firestore,storage --project demo-stellar-glass \"mocha test functions-alerts/test\"",
+    "test": "firebase emulators:exec --only firestore,storage --project demo-stellar-glass \"mocha test functions-calendar/test functions-alerts/test\"",
     "test:calc": "mocha test/calc.test.mjs",
+    "test:takeoff": "mocha test/takeoff.test.mjs",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage",
     "deploy": "firebase deploy --only firestore:rules,firestore:indexes,storage,hosting",
+    "deploy:calendar": "firebase deploy --only firestore:indexes,functions:calendar:calendarAccount,functions:calendar:calendarSync",
     "deploy:alerts": "firebase deploy --only functions:alerts:requestAlert",
     "storage:cors": "gcloud storage buckets update gs://stellar-glass-jobs.firebasestorage.app --cors-file=cors.json"
   },
@@ -17,6 +21,8 @@
     "@firebase/rules-unit-testing": "^5.0.2",
     "firebase": "^12.19.0",
     "firebase-tools": "^13.35.1",
-    "mocha": "^12.0.3"
+    "mocha": "^12.0.3",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38"
   }
 }
