@@ -19,6 +19,38 @@ const phoneLink = (p) => (p ? `<a href="tel:${esc(p.replace(/[^\d+]/g, ''))}">${
 const sorted = () => [...state.data.requests].sort((a, b) => when(b) - when(a));
 export const newRequestCount = () => state.data.requests.filter((r) => r.status === 'new').length;
 
+// ---------- Emails about new requests ----------
+// The server (functions/request-alert.js) emails each new request to requestAlertEmails on the company,
+// or to the company's email until that's saved, and notes how it went on the request as `alert`.
+export const MAX_ALERT_EMAILS = 5;
+export const alertEmails = (c) => (Array.isArray(c?.requestAlertEmails) ? c.requestAlertEmails : [c?.email].filter(Boolean));
+
+const isEmail = (s) => /^[^\s@,;<>"()[\]]+@[^\s@,;<>"()[\]]+\.[a-z]{2,}$/i.test(s);
+// "a@x.com, b@y.com" (commas, semicolons or spaces) into { emails, bad }, without repeats.
+export function parseEmails(text) {
+  const parts = String(text || '').split(/[\s,;]+/).filter(Boolean);
+  const emails = [...new Map(parts.filter(isEmail).map((e) => [e.toLowerCase(), e])).values()];
+  return { emails, bad: parts.filter((p) => !isEmail(p)) };
+}
+
+// How the email about a request went, in a sentence (HTML). Empty for requests from before emails started.
+export function alertNote(r) {
+  const a = r.alert;
+  if (!a) return '';
+  const files = a.attached ? `, with ${a.attached} file${a.attached === 1 ? '' : 's'}` : '';
+  if (a.status === 'sent') return `Emailed to ${esc((a.to || []).join(', '))}${files}.`;
+  if (a.status === 'sending') return 'Sending the email about it…';
+  if (a.status === 'off') return 'Not emailed: nobody is set to get request emails (Settings).';
+  if (a.status === 'held') return 'Not emailed: too many requests came in within an hour.';
+  return `<span class="warn">The email about it didn't go out. ${esc(a.error || '')}</span>`;
+}
+
+// For Settings: how the latest request's email went.
+export function lastAlertNote() {
+  const r = sorted().find((x) => x.alert);
+  return r ? `Latest request, from ${esc(r.name)} on ${fmtWhen(r)}: ${alertNote(r)}` : '';
+}
+
 async function attempt(fn, ok) {
   try { const r = await fn(); if (ok) toast(ok); return r; } catch (e) { console.error(e); toast(e.code === 'permission-denied' ? 'Your role can\'t make that change.' : e.message, true); return null; }
 }
@@ -86,6 +118,7 @@ export function requestView(id) {
         <p>${esc(r.name)}${r.company ? `<br><b>${esc(r.company)}</b>` : ''}</p>
         <p>${contact}</p>
         <p class="muted small">Prefers ${esc(label(REQUEST_CONTACT, r.contactBy).toLowerCase())} · sent ${fmtWhen(r)} from the website</p>
+        ${r.alert ? `<p class="muted small">${alertNote(r)}</p>` : ''}
       </div>
       <div class="card"><h2>Project</h2>
         <p><b>${esc(serviceLabel(r.service))}</b><br>${esc(r.siteAddress || 'No site address given')}<br><span class="muted">${esc(label(REQUEST_TIMELINES, r.timeline || ''))}</span></p>

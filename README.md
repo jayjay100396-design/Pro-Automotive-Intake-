@@ -10,6 +10,7 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 - **Invoices:** simple invoices or one click from a pay app; paid and unpaid tracking.
 - **Files:** photos, plans, contracts, permits and forms on each job, sorted by category and searchable, with an optional copy in each person's Google Drive (`Stellar Glass Jobs / customer / job`).
 - **Quote requests:** a public page at `/quote` (no sign-in) where customers send a request with photos or plans; it lands under Requests, and one click turns it into a customer and a lead job. The **Website** page lets the owner or an admin upload the page's photos and gallery.
+- **Request emails:** each quote request is emailed to Wes (or whoever Settings names) with the customer's details and photos attached; replying answers the customer. See `EMAIL_ALERTS.md`.
 - **Team:** invite links for admin, staff or the accountant (reads everything, handles pay apps and invoices); change roles, remove people, transfer ownership.
 
 ## Layout
@@ -21,7 +22,9 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 | `public/quote.html`, `js/site.js`, `css/site.css` | The public quote request page; `js/requests.js` is the Requests screen in the app and `js/website.js` the Website photos page |
 | `public/js/files.js`, `drive.js` | Job files (Cloud Storage) and the Google Drive copies |
 | `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
-| `test/` | Rules tests (emulator) and money-math tests |
+| `functions/` | Cloud Functions: the quote request emails |
+| `test/`, `functions/test/` | Rules tests (emulator), money-math tests, email tests |
 | `FIREBASE_SETUP.md` | Console steps, deploy and local dev |
+| `EMAIL_ALERTS.md` | Turning on the quote request emails |
 
 `npm run dev` runs it locally against emulators; `npm test` runs the tests; `npm run deploy` publishes.

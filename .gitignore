@@ -1,3 +1,7 @@
 node_modules/
 .firebase/
 *-debug.log
+# Local emulator secrets, and the emails the fake mail server saved (EMAIL_ALERTS.md)
+functions/.secret.local
+functions/.env.local
+functions/test/mail/
