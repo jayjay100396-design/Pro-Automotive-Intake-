@@ -9,7 +9,7 @@
     "test:calc": "mocha test/calc.test.mjs functions/test/lines.test.js",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage",
     "deploy": "firebase deploy --only firestore:rules,firestore:indexes,storage,hosting",
-    "deploy:functions": "firebase deploy --only functions",
+    "deploy:functions": "firebase deploy --only functions:default",
     "storage:cors": "gcloud storage buckets update gs://stellar-glass-jobs.firebasestorage.app --cors-file=cors.json"
   },
   "devDependencies": {
