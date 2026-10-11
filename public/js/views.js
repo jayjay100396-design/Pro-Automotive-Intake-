@@ -8,6 +8,7 @@ import {
 } from './calc.js';
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
 import { fileBrowser, countJobFiles } from './files.js';
+import { DRAFT_KEY } from './takeoff/takeoff.js';
 
 // The schedule's cards on the dashboard and job pages, and the Google Calendar panel in Settings.
 import { scheduleSummary, comingUpHtml, mountJobSchedule } from './schedule.js';
@@ -324,6 +325,20 @@ export function estimates() {
   };
 }
 
+// Openings handed over from a drawing takeoff: its glass and framing lines priced like the
+// template's, then the template's other lines (doors, caulking, labor) to fill in.
+function fromTakeoff(template, jobId) {
+  let draft = null;
+  try { draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || 'null'); } catch { /* private mode */ }
+  if (!draft || draft.jobId !== jobId || !draft.lines?.length) return {};
+  const preset = PRESETS[template] || PRESETS.storefront;
+  const like = (kind) => preset.find((l) => l.kind === kind) || {};
+  // A type without a size comes over priced each, so the template's per-sq-ft price doesn't fit it.
+  const lines = draft.lines.map((l) => ({ ...like(l.kind), ...l, price: like(l.kind).unit === l.unit ? like(l.kind).price ?? 0 : 0, taxable: like(l.kind).taxable ?? true }));
+  const kinds = new Set(draft.lines.map((l) => l.kind));
+  return { lines: [...lines, ...preset.filter((l) => !kinds.has(l.kind))], scope: draft.scope || '' };
+}
+
 export function estimateEdit(id, params) {
   const isNew = id === 'new';
   const job = get('jobs', params.get('job'));
@@ -337,6 +352,7 @@ export function estimateEdit(id, params) {
         options: [{ fromLines: true, name: '', specs: OPTION_SPECS[template] }], acceptedOption: 0, showLines: false,
         preparedName: prep.name || state.user.displayName || '', preparedTitle: prep.title || 'Estimator',
         preparedPhone: prep.phone || state.user.phoneNumber || '', preparedEmail: prep.email || state.user.email || '',
+        ...(params.get('from') === 'takeoff' ? fromTakeoff(template, job?.id) : {}),
       };
     })()
     : get('estimates', id);

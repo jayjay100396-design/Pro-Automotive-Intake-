@@ -8,6 +8,7 @@
     "dev:google": "node functions-calendar/test/fake-google.js",
     "test": "firebase emulators:exec --only firestore,storage --project demo-stellar-glass \"mocha test functions-calendar/test\"",
     "test:calc": "mocha test/calc.test.mjs",
+    "test:takeoff": "mocha test/takeoff.test.mjs",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage",
     "deploy": "firebase deploy --only firestore:rules,firestore:indexes,storage,hosting",
     "deploy:calendar": "firebase deploy --only firestore:indexes,functions:calendar:calendarAccount,functions:calendar:calendarSync",
@@ -17,6 +18,8 @@
     "@firebase/rules-unit-testing": "^5.0.2",
     "firebase": "^12.19.0",
     "firebase-tools": "^13.35.1",
-    "mocha": "^12.0.3"
+    "mocha": "^12.0.3",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38"
   }
 }
