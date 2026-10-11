@@ -40,7 +40,7 @@ const typeOf = (file) => (/^(dwg|dxf)$/.test(extOf(file.name)) ? TYPES_BY_EXT[ex
 // Only links to this business's files in the app's own Cloud Storage bucket, and to Google Drive, are
 // used, so a record can't carry a link that runs a script or shows someone else's page (firestore.rules
 // checks this too).
-const safeUrl = (u) => {
+export const safeUrl = (u) => {
   const base = `${useEmulators ? 'http://127.0.0.1:9199' : 'https://firebasestorage.googleapis.com'}/v0/b/${storage.app.options.storageBucket}/o/companies%2F${state.companyId}%2F`;
   return typeof u === 'string' && u.startsWith(base) ? u : '';
 };
@@ -505,6 +505,8 @@ export function fileBrowser({ jobId = null, startJob = '' } = {}) {
         ${url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener">Open</a>` : ''}
         ${edit ? '<button class="btn small primary">Save changes</button>' : ''}
       </div>
+      ${url && can.edit() && /^(application\/pdf|image\/(jpeg|png|webp))$/.test(f.contentType || '')
+    ? `<div class="row"><a class="btn small" href="#/takeoff/${esc(f.id)}" title="Count window types and sizes, measure, and start a proposal">Takeoff for a proposal</a></div>` : ''}
       <div class="row">
         ${mineLink ? `<a class="btn small" href="${esc(mineLink)}" target="_blank" rel="noopener">${G} Open in Drive</a>` : ''}
         ${connected ? `<button type="button" class="btn small" data-copy>${mineLink ? 'Copy again' : `${G} Copy to Drive`}</button>`

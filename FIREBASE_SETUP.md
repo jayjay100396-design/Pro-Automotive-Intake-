@@ -49,7 +49,7 @@ Each job has a **Files** tab (and there's a **Files** page across all jobs) for 
 Two one-time steps in Google Cloud for the Drive copies:
 
 1. **Turn on the Google Drive API:** <https://console.cloud.google.com/apis/library/drive.googleapis.com?project=stellar-glass-jobs>, click **Enable**. (Google sign-in must also be on, step 2.)
-2. **Let the app read stored files back** (needed to copy files that were uploaded before Drive was connected). Open Cloud Shell at <https://shell.cloud.google.com/?project=stellar-glass-jobs&show=terminal> and paste:
+2. **Let the app read stored files back** (needed to copy files that were uploaded before Drive was connected, and to open a stored PDF drawing for a takeoff). Open Cloud Shell at <https://shell.cloud.google.com/?project=stellar-glass-jobs&show=terminal> and paste:
 
    ```bash
    printf '[{"origin":["https://stellar-glass-jobs.web.app","https://stellar-glass-jobs.firebaseapp.com"],"method":["GET"],"maxAgeSeconds":3600}]' > cors.json && gcloud storage buckets update gs://stellar-glass-jobs.firebasestorage.app --cors-file=cors.json
@@ -67,6 +67,10 @@ Customers can ask for a quote, with photos or plans, at **https://stellar-glass-
 - **No email alert yet:** check Requests in the app. An email or text alert needs a Cloud Function and an email service.
 - **Photos on the page:** the owner or an admin changes them on the **Website** page in the app (under Admin). Replace the top photo and each service photo, and add gallery photos (many at once), with optional captions and an order; visitors can click a gallery photo to see it full size. Big photos are resized to 2400 px on the long side before upload. Until you upload your own, the page shows starter photos in `public/img/site/`, cut from screenshots of the old website, so they're small. The Website page works once website requests are turned on, because that connects the page to your business.
 
+## 5c. Schedule and Google Calendar
+
+The **Schedule** (site measures, installs, tasks and who's on them) works as soon as the app is deployed. Copying it to Google Calendar takes a few one-time steps and two Cloud Functions: see `CALENDAR_SETUP.md`.
+
 ## 6. Try it locally first (optional)
 
 ```bash
@@ -77,7 +81,7 @@ Open <http://127.0.0.1:5000>. On localhost the app uses the emulators automatica
 
 ## How the security rules work
 
-- Every record lives under a company: `companies/{companyId}/jobs/...`, `/estimates`, `/contracts`, `/changeOrders`, `/payApps`, `/invoices`, `/customers`, `/files`. Uploaded files are in Storage at `companies/{companyId}/{category}/{jobId}/{fileId}/{name}`.
+- Every record lives under a company: `companies/{companyId}/jobs/...`, `/estimates`, `/contracts`, `/changeOrders`, `/payApps`, `/invoices`, `/customers`, `/files`, `/events` (the schedule). Uploaded files are in Storage at `companies/{companyId}/{category}/{jobId}/{fileId}/{name}`.
 - A person can see a company's data only if they have a member record at `companies/{companyId}/members/{theirUserId}`. Other companies' data is invisible to them, and signed-out visitors see nothing.
 - Roles: **owner** (Wes) can do everything; **admin** manages records and staff; **staff** (crew) create and edit records but can't delete; **accountant** reads everything and creates and edits invoices, pay apps (G702/G703), billing, documents and forms, and can upload to the `documents/` and `forms/` storage folders (e.g. notarized papers), but can't delete anything or manage members. The owner or an admin invites people from **Settings > Team**: the app makes a single-use link (expires in 7 days) for a chosen role, and the person opens it, signs in any way they like, and taps Join. Only the owner can invite or make admins.
 - Files: owners, admins and staff add files anywhere; the accountant adds them only as Contracts & documents or Permits & forms. Owners and admins can delete any file; staff can delete only files they added; the accountant deletes none. Anyone on the team can copy files to their own Drive.

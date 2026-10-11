@@ -4,3 +4,6 @@ node_modules/
 # Stripe test keys for the local emulator (STRIPE_SETUP.md)
 functions/.secret.local
 functions/.env.local
+# Local settings for the calendar functions' emulator (CALENDAR_SETUP.md)
+functions-calendar/.env.local
+functions-calendar/.secret.local
