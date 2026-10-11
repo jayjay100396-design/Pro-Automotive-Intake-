@@ -4,7 +4,7 @@
 //   - Online payments card in Settings: is Stripe connected, and the Business ID for setup.
 import { state, add, get, where, nextNumber, can, onChange } from './data.js';
 import {
-  invoiceTotals, proposalBill, depositLine, proposalDeposit, proposalPayment, proposalOptions, estimateAmount, money,
+  invoiceTotals, proposalBill, depositLine, proposalDeposit, proposalPayment, proposalOptions, estimateAmount, money, paidOn,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, badge, toast } from './ui.js';
 import { paymentsStatus, sendWithStripe, voidWithStripe, checkWithStripe, paymentsError } from './payments.js';
@@ -36,7 +36,7 @@ const fromProposal = (estimateId) => where('invoices', 'estimateId', estimateId)
 const proposalSig = (e) => {
   const d = proposalDeposit(e);
   return JSON.stringify([
-    s(e.jobId), n(e.markupPct), n(e.minCharge), n(e.taxPct), n(e.acceptedOption), d.type, d.value,
+    s(e.number), s(e.jobId), n(e.markupPct), n(e.minCharge), n(e.taxPct), n(e.acceptedOption), d.type, d.value,
     (e.options || []).map((o) => [s(o.name), !!o.fromLines, o.fromLines ? 0 : n(o.price), s(o.specs)]),
     (e.lines || []).filter((l) => l.desc || l.price)
       .map((l) => [s(l.desc), s(l.unit), n(l.qty), n(l.widthIn), n(l.heightIn), n(l.minSqft), n(l.price), l.taxable !== false]),
@@ -102,7 +102,6 @@ export function mountProposalBilling(root, estimateId, current) {
     if (!e?.jobId) return toast('Pick a job for this proposal and save it first.', true);
     const earlier = fromProposal(estimateId).filter((i) => i.status !== 'void');
     const same = earlier.filter((i) => i.kind === kind);
-    if (same.length && !confirm(`This proposal already has ${kind} invoice ${same.map((i) => i.number).join(', ')}. Make another one?`)) return;
     const base = {
       number: nextNumber('invoices'), jobId: e.jobId, customerId: e.customerId || get('jobs', e.jobId)?.customerId || '',
       estimateId, payAppId: '', date: today(), status: 'unpaid', notes: state.company?.invoiceNotes || '',
@@ -116,12 +115,18 @@ export function mountProposalBilling(root, estimateId, current) {
       inv = { ...base, kind, dueDate: today(), taxPct: 0, lines: [line] };
     } else {
       const bill = proposalBill(e);
-      const credits = earlier.filter((i) => i.kind === 'deposit')
-        .map((d) => ({ desc: `Less deposit, invoice ${d.number}`, qty: 1, price: -invoiceTotals(d).total, taxable: false }));
+      // Deposits and any earlier final invoice come off: what was paid on them (Stripe's amount when
+      // paid through Stripe), or what they bill while unpaid.
+      const credits = earlier.filter((i) => i.kind === 'deposit' || i.kind === 'final').map((d) => ({
+        desc: `Less ${d.kind === 'final' ? 'final invoice' : 'deposit, invoice'} ${d.number}`, qty: 1,
+        price: -(d.status === 'paid' ? paidOn(d) : invoiceTotals(d).total), taxable: false,
+      }));
       inv = { ...base, kind, dueDate: addDays(today(), 30), taxPct: bill.taxPct, lines: [...bill.lines, ...credits] };
     }
     inv.total = invoiceTotals(inv).total;
     if (inv.total <= 0) return toast('There\'s nothing left to bill on this proposal.', true);
+    const more = kind === 'final' ? ` for the ${money(inv.total)} left` : '';
+    if (same.length && !confirm(`This proposal already has ${kind} invoice ${same.map((i) => i.number).join(', ')}. Make another one${more}?`)) return;
     try {
       const r = await add('invoices', inv);
       toast(`${KIND[kind]} invoice ${inv.number} created`);
@@ -296,8 +301,14 @@ export function mountStripeCard(root, invoiceId, current) {
 // still be paid: void that first, so the customer can't also pay it online. False: don't save.
 export async function settleStripeFirst(invoiceId, status) {
   const inv = get('invoices', invoiceId);
-  if (!['paid', 'void'].includes(status) || inv?.status === status) return true;
-  const st = inv?.stripe || {};
+  if (!inv || inv.status === status) return true;
+  const st = inv.stripe || {};
+  // Paid through Stripe: the money came in, so the bill stays paid.
+  if (st.status === 'paid' && status !== 'paid') {
+    toast('This invoice was paid through Stripe, so it stays paid. To give the money back, refund it in Stripe.', true);
+    return false;
+  }
+  if (!['paid', 'void'].includes(status)) return true;
   if (stillCreating(st)) {
     toast('Wait until Stripe has finished with this invoice.', true);
     return false;

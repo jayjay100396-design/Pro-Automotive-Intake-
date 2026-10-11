@@ -135,7 +135,9 @@ describe('money math', () => {
     assert.equal(proposalDeposit({ ...est, depositType: 'percent', depositValue: null }).amount, 0); // field cleared: no deposit
     // Saved before the deposit field: the typed terms say how much.
     assert.deepEqual(proposalDeposit({ ...est, terms: 'A 30% deposit is required before materials can be ordered.' }), { type: 'percent', value: 30, amount: 781.25 });
-    assert.equal(proposalDeposit(est).value, 50);
+    // Typed terms that don't ask for a deposit: none, rather than inventing one.
+    assert.equal(proposalDeposit(est).value, 0);
+    assert.equal(proposalDeposit({ ...est, terms: 'Net 30.' }).amount, 0);
     assert.deepEqual(depositLine({ ...est, depositType: 'amount', depositValue: 1000 }), { desc: 'Deposit on proposal 1007', qty: 1, price: 1000, taxable: false });
   });
 

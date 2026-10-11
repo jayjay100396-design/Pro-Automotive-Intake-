@@ -307,6 +307,21 @@ describe('Stripe invoices (server)', function () {
     assert.match(d.stripe.error, /marked paid/);
   });
 
+  it('cancels the Stripe invoice if the bill is edited while it\'s being made', async () => {
+    const finalize = stripe.invoices.finalizeInvoice;
+    stripe.invoices.finalizeInvoice = async (...args) => {
+      const si = await finalize(...args);
+      // Someone fixes a price meanwhile.
+      await inv().update({ lines: [{ desc: 'Storefront glass', qty: 4, price: 350 }, { desc: 'Install labor', qty: 6.5, price: 85, taxable: false }] });
+      return si;
+    };
+    await assert.rejects(create({ send: true }), { code: 'failed-precondition', message: /changed while its Stripe invoice was being made/ });
+    const [, voided] = stripe.called('invoices.voidInvoice')[0];
+    assert.equal(stripe.invoices.get(voided).status, 'void');
+    assert.equal(stripe.called('invoices.sendInvoice').length, 0);
+    assert.notEqual((await data()).stripe.status, 'open');
+  });
+
   it('picks up a Stripe invoice an earlier try made but never saved', async () => {
     const cus = await stripe.customers.create({ name: 'x' });
     await db.doc(`companies/${C}/customers/c1`).update({ stripeCustomerIds: { test: cus.id } });

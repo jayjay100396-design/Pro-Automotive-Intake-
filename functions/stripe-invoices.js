@@ -258,12 +258,14 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       draftId = null;
     }
 
-    // Save it, unless the bill was deleted, paid or voided meanwhile (say on another device). Then
-    // nothing should be payable, so the Stripe invoice is cancelled.
+    // Save it, unless the bill was deleted, paid, voided or edited meanwhile (say on another device).
+    // Then the Stripe invoice is wrong or shouldn't be payable, so it's cancelled.
     const changed = await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
       if (!snap.exists) return 'deleted';
-      if (['paid', 'void'].includes(snap.data().status)) return `marked ${snap.data().status}`;
+      const cur = snap.data();
+      if (['paid', 'void'].includes(cur.status)) return `marked ${cur.status}`;
+      if (JSON.stringify(sentFrom(cur)) !== JSON.stringify(sentFrom(inv)) || (cur.customerId || null) !== (inv.customerId || null)) return 'changed';
       tx.update(ref, {
         stripe: {
           ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent: sentFrom(inv),

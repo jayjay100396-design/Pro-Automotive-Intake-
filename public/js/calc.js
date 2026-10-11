@@ -222,13 +222,13 @@ export function proposalBill(est) {
 // ---------- Deposit and payment status ----------
 // The deposit a proposal asks for: a percent of the accepted price (50% to start) or a dollar
 // amount, never more than the price. Proposals saved before the deposit field existed take the
-// percent from their typed payment terms ("A 50% deposit is required...").
+// percent from their typed payment terms ("A 50% deposit is required..."), or none if they don't say.
 export function proposalDeposit(est, option) {
   const opt = option || acceptedOption(est).opt;
   const legacy = est.depositType == null;
   const type = est.depositType === 'amount' ? 'amount' : 'percent';
   const typed = /(\d{1,3}(?:\.\d+)?)\s*%\s*deposit/i.exec(est.terms || '')?.[1];
-  const typedValue = Math.max(0, legacy ? num(typed ?? 50) : num(est.depositValue));
+  const typedValue = Math.max(0, legacy ? num(typed ?? 0) : num(est.depositValue));
   const value = type === 'percent' ? Math.min(typedValue, 100) : typedValue;
   const amount = type === 'amount' ? Math.min(round2(value), opt.price) : round2(opt.price * value / 100);
   return { type, value, amount: Math.max(0, amount) };
