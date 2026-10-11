@@ -33,7 +33,7 @@ Nothing at Wes's volume. Gmail sends up to 500 emails a day from a free account 
    npm run deploy:alerts      # the server code that sends the emails
    ```
 
-   The first functions deploy asks for **EMAIL_USER**, the address of the account from step 1, and saves it in `functions-alerts/.env.stellar-glass-jobs`. A deploy that can't ask, like one Claude runs, needs that file first, holding the line `EMAIL_USER=` plus the address. It isn't a secret, so it can be committed. If the first deploy stops with an Eventarc or permission error, wait five minutes and run `npm run deploy:alerts` again: Google is still setting up permissions for the new trigger.
+   The first functions deploy asks for **EMAIL_USER**, the address of the account from step 1, and saves it in `functions-alerts/.env.stellar-glass-jobs`. A deploy that can't ask, like one Claude runs, needs that file first, holding the line `EMAIL_USER=` plus the address. This repo is public, so `.gitignore` keeps that file out of it: keep it in the copy you deploy from, or let the next deploy ask again. If the first deploy stops with an Eventarc or permission error, wait five minutes and run `npm run deploy:alerts` again: Google is still setting up permissions for the new trigger.
 4. **Cleanup policy** (after the first functions deploy): `npx firebase functions:artifacts:setpolicy --project stellar-glass-jobs` deletes old copies of the function's code after a day.
 5. **Try it.** In the app, check the addresses under Settings > Website quote requests and press Save. Then send a request from `/quote` with a photo. The email arrives within seconds (up to two minutes with big photos), and the request in the app says "Emailed to …".
 

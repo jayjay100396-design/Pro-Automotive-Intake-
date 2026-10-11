@@ -17,7 +17,7 @@ const db = getFirestore();
 setGlobalOptions({ region: 'us-central1', maxInstances: 2, memory: '256MiB' });
 
 // The email account the alerts come from. Its address is saved in functions-alerts/.env.<project id> (the first
-// deploy asks for it); its app password is stored in Google Secret Manager.
+// deploy asks for it; kept out of git, since the repo is public); its app password is in Google Secret Manager.
 const EMAIL_USER = defineString('EMAIL_USER', {
   description: 'Email address the quote request alerts are sent from: a Gmail or Google Workspace account with an app password.',
 });

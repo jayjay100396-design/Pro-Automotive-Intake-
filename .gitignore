@@ -5,3 +5,5 @@ node_modules/
 functions-alerts/.secret.local
 functions-alerts/.env.local
 functions-alerts/test/mail/
+# The live project's sending address (EMAIL_USER): this repo is public, so it stays on the computer that deploys
+functions-alerts/.env.stellar-glass-jobs
