@@ -2,7 +2,7 @@
 
 Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estimates, contracts, change orders, AIA G702/G703 pay apps and invoices. Runs on Firebase (Authentication + Firestore + Storage + Hosting), with no build step.
 
-- **Sign-in:** email and password, Google, or phone (SMS code).
+- **Sign-in:** email and password, or Google. Phone sign-in (SMS code) is built in but turned off: `PHONE_SIGN_IN` in `public/js/auth.js`.
 - **Estimates:** storefront and shower templates, glass billed by square foot with a per-lite minimum, markup, minimum charge, tax on taxable lines, printable quote.
 - **Contracts:** created from an accepted estimate, with a schedule of values that feeds the pay apps.
 - **Change orders:** add or deduct scope; approved ones update the contract sum.

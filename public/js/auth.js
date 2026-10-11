@@ -1,4 +1,4 @@
-// Sign-in screen: Email/Password, Google and Phone (SMS code).
+// Sign-in screen: Email/Password and Google. Phone (SMS code) sign-in is built in but off (PHONE_SIGN_IN).
 import { auth } from './firebase.js';
 import {
   signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, updateProfile,
@@ -7,6 +7,10 @@ import {
 import { BRAND, logoHtml, websiteUrl } from './brand.js';
 
 export const signOut = () => fbSignOut(auth);
+
+// The business signs in with email or Google, so the Phone tab is hidden. true brings it back; it also needs Phone
+// turned on in the Firebase console, with the SMS region policy set to the United States only.
+const PHONE_SIGN_IN = false;
 
 const messages = {
   'auth/invalid-credential': 'That email and password don\'t match.',
@@ -42,10 +46,10 @@ export function renderSignIn(root) {
 
       <button class="btn google" id="google"><span class="g">G</span> Continue with Google</button>
 
-      <div class="tabs" role="tablist">
+      ${PHONE_SIGN_IN ? `<div class="tabs" role="tablist">
         <button class="tab active" data-tab="email" role="tab">Email</button>
         <button class="tab" data-tab="phone" role="tab">Phone</button>
-      </div>
+      </div>` : ''}
 
       <form id="email-form" class="stack">
         <label>Email <input type="email" name="email" autocomplete="email" required></label>
