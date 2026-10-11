@@ -145,8 +145,12 @@ describe('money math', () => {
     assert.equal(proposalTerms(est), 'A 50% deposit ($1,302.09) is required before materials can be ordered.\nBalance due on completion.');
     assert.equal(depositSentence({ ...est, depositType: 'amount', depositValue: 1500 }), 'A $1,500.00 deposit is required before materials can be ordered.');
     assert.equal(proposalTerms({ ...est, depositValue: 0 }), 'Balance due on completion.');
+    // A dollar deposit over the price prints as the deposit invoice bills it: the price.
+    assert.equal(depositSentence({ ...est, depositType: 'amount', depositValue: 9999 }), 'A $2,604.18 deposit is required before materials can be ordered.');
     const two = { ...est, options: [{ fromLines: true }, { name: 'Akela', price: 4200 }] };
     assert.equal(depositSentence(two), 'A 50% deposit is required before materials can be ordered (Price 1: $1,302.09; Price 2 (Akela): $2,100.00).');
+    assert.equal(depositSentence({ ...two, depositType: 'amount', depositValue: 1500 }), 'A $1,500.00 deposit is required before materials can be ordered.');
+    assert.equal(depositSentence({ ...two, depositType: 'amount', depositValue: 3000 }), 'A deposit is required before materials can be ordered (Price 1: $2,604.18; Price 2 (Akela): $3,000.00).');
     // Saved before the deposit field: printed as typed, and the editor takes the old sentence out.
     const old = { ...est, depositType: undefined, depositValue: undefined, terms: 'A 50% deposit is required before materials can be ordered.\nNet 30.' };
     assert.equal(proposalTerms(old), old.terms);

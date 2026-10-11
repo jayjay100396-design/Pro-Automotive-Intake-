@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { initializeApp, deleteApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import {
-  requireBiller, companyAllowed, stripeStatus, createStripeInvoice, voidStripeInvoice, syncStripeInvoice, handleStripeEvent,
+  requireBiller, companyAllowed, stripeStatus, createStripeInvoice, voidStripeInvoice, syncStripeInvoice, handleStripeEvent, applyStripeInvoice,
 } from '../stripe-invoices.js';
 
 const stripeError = (type, message, extra = {}) => Object.assign(new Error(message), { type, ...extra });
@@ -57,7 +57,7 @@ function fakeStripe() {
         log('invoices.finalizeInvoice', id, p);
         const si = get(id);
         Object.assign(si, {
-          status: 'open', number: si.number || `AUTO-${++n}`, amount_due: total(si),
+          status: 'open', number: si.number || `AUTO-${++n}`, amount_due: total(si), customer_email: customers.get(si.customer)?.email ?? null,
           hosted_invoice_url: `https://invoice.stripe.test/${id}`, invoice_pdf: `https://invoice.stripe.test/${id}.pdf`,
         });
         return { ...si };
@@ -193,21 +193,20 @@ describe('Stripe invoices (server)', function () {
     assert.equal(params.description, 'Proposal 1005: $2,604.18\nPaid so far: $1,000.00\nThis invoice: $1,604.18\nLeft after this invoice: $0.00');
   });
 
-  it('emails an open invoice again to the customer\'s current address, and only to that customer', async () => {
+  it('emails an open invoice again only to the customer and address it was made for', async () => {
     await create({ send: true });
+    // The email changed: the Stripe invoice keeps the old address, so it needs a new invoice.
     await db.doc(`companies/${C}/customers/c1`).update({ email: 'ap@lakelandbuilders.example' });
-    const again = await create({ send: true });
-    const updates = stripe.called('customers.update');
-    assert.equal(updates.at(-1)[2].email, 'ap@lakelandbuilders.example');
-    assert.ok(stripe.calls.indexOf(updates.at(-1)) < stripe.calls.indexOf(stripe.called('invoices.sendInvoice')[1]));
-    assert.equal(again.sentTo, 'ap@lakelandbuilders.example');
+    await assert.rejects(create({ send: true }), /addressed to pat@example\.com\. Void it and send a new one so it goes to ap@lakelandbuilders\.example/);
+    assert.equal(stripe.called('customers.update').at(-1)[2].email, 'ap@lakelandbuilders.example'); // current for the next one
+    assert.equal(stripe.called('invoices.sendInvoice').length, 1);
 
-    // Moved to another customer's job: the open Stripe invoice is addressed to the old customer.
+    // Moved to another customer's job: the open Stripe invoice is for the old customer.
     await db.doc(`companies/${C}/customers/c2`).set({ name: 'Sam Ortiz', email: 'sam@example.com' });
     await inv().update({ customerId: 'c2' });
     await assert.rejects(create({ send: true }), /different customer/);
-    assert.equal(stripe.called('invoices.sendInvoice').length, 2);
-    assert.equal((await data()).stripe.sentTo, 'ap@lakelandbuilders.example');
+    assert.equal(stripe.called('invoices.sendInvoice').length, 1);
+    assert.equal((await data()).stripe.sentTo, 'pat@example.com');
   });
 
   it('reuses the open Stripe invoice instead of making a second one', async () => {
@@ -291,6 +290,23 @@ describe('Stripe invoices (server)', function () {
     assert.equal(stripe.invoices.get(voided).status, 'void');
   });
 
+  it('cancels the Stripe invoice if the bill is marked paid while it\'s being made', async () => {
+    const finalize = stripe.invoices.finalizeInvoice;
+    stripe.invoices.finalizeInvoice = async (...args) => {
+      const si = await finalize(...args);
+      await inv().update({ status: 'paid' }); // marked paid on another device meanwhile
+      return si;
+    };
+    await assert.rejects(create({ send: true }), { code: 'failed-precondition', message: /marked paid while its Stripe invoice was being made/ });
+    const [, voided] = stripe.called('invoices.voidInvoice')[0];
+    assert.equal(stripe.invoices.get(voided).status, 'void');
+    assert.equal(stripe.called('invoices.sendInvoice').length, 0);
+    const d = await data();
+    assert.equal(d.status, 'paid');
+    assert.notEqual(d.stripe.status, 'open');
+    assert.match(d.stripe.error, /marked paid/);
+  });
+
   it('picks up a Stripe invoice an earlier try made but never saved', async () => {
     const cus = await stripe.customers.create({ name: 'x' });
     await db.doc(`companies/${C}/customers/c1`).update({ stripeCustomerIds: { test: cus.id } });
@@ -317,6 +333,19 @@ describe('Stripe invoices (server)', function () {
     // An event about an older Stripe invoice for this bill changes nothing.
     const old = await stripe.invoices.create({ customer: 'cus_x', metadata: { companyId: C, invoiceId: 'i1' } });
     assert.equal(await handleStripeEvent({ db, stripe, event: { type: 'invoice.voided', data: { object: { ...old } } }, allowed: C }), 'ignored');
+  });
+
+  it('doesn\'t let an older read of the Stripe invoice undo its payment', async () => {
+    const { invoiceId } = await create();
+    const stale = await stripe.invoices.retrieve(invoiceId); // a check that read it just before the payment
+    stripe.pay(invoiceId);
+    const event = { type: 'invoice.paid', data: { object: { id: invoiceId, metadata: { companyId: C, invoiceId: 'i1' } } } };
+    assert.equal(await handleStripeEvent({ db, stripe, event, allowed: C }), 'updated');
+    assert.equal(await applyStripeInvoice(db, stale), false);
+    const d = await data();
+    assert.equal(d.status, 'paid');
+    assert.equal(d.stripe.status, 'paid');
+    assert.equal(d.stripe.amountPaid, 1890);
   });
 
   it('records a payment found while voiding or checking', async () => {

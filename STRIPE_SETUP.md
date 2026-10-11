@@ -71,8 +71,8 @@ Steps 1 to 3 need Wes. Then he can add Jason on the Team page (<https://dashboar
 ### C. Try it, then go live
 
 10. In the app, **Settings > Online payments** should say **Connected to Stripe (test mode: nothing is really charged)**.
-11. Open a proposal, choose **Final invoice** in the Billing card, then on the invoice choose **Email it with Stripe** with your own email on the customer (in test mode Stripe only emails people on your Stripe team, so use the email you sign in to Stripe with). Open Stripe's email, press Pay, and use test card `4242 4242 4242 4242` with any future date and any CVC. The invoice turns **Paid** in the app within a few seconds.
-12. **Go live:** activate the Stripe account (Settings > Business: business details, EIN and the bank account for payouts). In live mode, repeat steps 5 and 6, run step 8 again with the live key (`rk_live_`) and the live signing secret, then run `npm run deploy:functions` again. Customers and invoices made in test mode stay in test mode.
+11. Open a proposal, choose **Final invoice** in the Billing card, then on the invoice choose **Get a payment link** and **Open payment page**. Press Pay and use test card `4242 4242 4242 4242` with any future date and any CVC. The invoice turns **Paid** in the app within a few seconds. Stripe doesn't send invoice emails in test mode, so **Email it with Stripe** only marks the invoice as sent there; emails start in live mode.
+12. **Go live:** activate the Stripe account (Settings > Business: business details, EIN and the bank account for payouts). In live mode, repeat steps 5 and 6, run step 8 again with the live key (`rk_live_`) and the live signing secret, then run `npm run deploy:functions` again. Customers and invoices made in test mode stay in test mode. To see Stripe's email, email one live invoice to a customer in the app that has your own email address, then void it.
 
 ## If something's wrong
 

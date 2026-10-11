@@ -176,7 +176,9 @@ function stripeHtml(inv, busy) {
     const edited = changed || (!!st.sent && stripeSig(inv) !== stripeSig(st.sent));
     const part = n(st.amountPaid) > 0 ? ` ${money(st.amountPaid)} is paid so far, ${money(n(st.amountDue) - n(st.amountPaid))} to go.` : '';
     body = `<p>Stripe invoice ${esc(st.number || '')}${test} is waiting for payment: <b>${money(st.amountDue)}</b>.${part}
-      ${st.sentTo ? `Stripe emailed it to ${esc(st.sentTo)}${st.sentAt ? ` on ${when(st.sentAt)}` : ''}.` : 'It hasn\'t been emailed; send the link yourself, or email it from here.'}</p>
+      ${!st.sentTo ? 'It hasn\'t been emailed; send the link yourself, or email it from here.'
+    : st.livemode ? `Stripe emailed it to ${esc(st.sentTo)}${st.sentAt ? ` on ${when(st.sentAt)}` : ''}.`
+      : `Marked as emailed to ${esc(st.sentTo)}, but Stripe doesn't send emails in test mode.`}</p>
       ${changed ? `<p class="warn small">This invoice now comes to ${money(now)}. Void the Stripe invoice and send a new one so the customer sees the new amount.</p>`
     : edited ? '<p class="warn small">This invoice changed after the Stripe invoice was made. Void the Stripe invoice and send a new one so the customer sees the changes.</p>' : ''}
       <div class="row">
@@ -236,7 +238,7 @@ export function mountStripeCard(root, invoiceId, current) {
     try {
       const r = await fn();
       if (r?.warning) toast(r.warning, true);
-      else if (ok) toast(ok);
+      else if (ok) toast(typeof ok === 'function' ? ok(r) : ok);
     } catch (e) {
       console.error(e);
       toast(paymentsError(e), true);
@@ -255,7 +257,9 @@ export function mountStripeCard(root, invoiceId, current) {
       if (unsaved()) return toast('Save the invoice first, then send it with Stripe.', true);
       const email = customerOf(inv)?.email;
       if (kind === 'email' && !confirm(`Have Stripe email invoice ${inv.number} for ${money(invoiceTotals(inv).total)} to ${email}?`)) return;
-      act(() => sendWithStripe(invoiceId, kind === 'email'), kind === 'email' ? `Stripe emailed it to ${email}` : 'Payment link ready');
+      // In test mode Stripe marks the invoice sent but doesn't email anyone.
+      const sent = (r) => (r?.livemode ? `Stripe emailed it to ${r.sentTo || email}` : 'Test mode: Stripe doesn\'t send emails, so use Open payment page to try it.');
+      act(() => sendWithStripe(invoiceId, kind === 'email'), kind === 'email' ? sent : 'Payment link ready');
     } else if (kind === 'copy') {
       copy(inv.stripe.hostedUrl);
     } else if (kind === 'sync') {
@@ -289,12 +293,19 @@ export function mountStripeCard(root, invoiceId, current) {
 }
 
 // Saving a bill as paid or void here (Mark paid, or the Status field) while its Stripe invoice can
-// still be paid: void that too, so the customer can't also pay it online. False: don't save.
+// still be paid: void that first, so the customer can't also pay it online. False: don't save.
 export async function settleStripeFirst(invoiceId, status) {
   const inv = get('invoices', invoiceId);
-  if (!['paid', 'void'].includes(status) || inv?.status === status || inv?.stripe?.status !== 'open') return true;
-  if (status === 'paid' && !confirm('Also void the Stripe invoice, so the customer can\'t pay it online too?')) return true;
-  if (status === 'void' && !confirm('Voiding this invoice voids its Stripe invoice too, so the payment link stops working. Go ahead?')) return false;
+  if (!['paid', 'void'].includes(status) || inv?.status === status) return true;
+  const st = inv?.stripe || {};
+  if (stillCreating(st)) {
+    toast('Wait until Stripe has finished with this invoice.', true);
+    return false;
+  }
+  if (st.status !== 'open') return true;
+  if (!confirm(status === 'paid'
+    ? 'Marking this invoice paid voids its Stripe invoice, so the customer can\'t pay it online too. Go ahead?'
+    : 'Voiding this invoice voids its Stripe invoice too, so the payment link stops working. Go ahead?')) return false;
   try {
     await voidWithStripe(invoiceId);
     toast('Stripe invoice voided');

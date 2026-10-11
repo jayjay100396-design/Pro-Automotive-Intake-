@@ -70,6 +70,8 @@ const fromStripe = (si) => ({
 
 const prefixed = (fields) => Object.fromEntries(Object.entries(fields).map(([k, v]) => [`stripe.${k}`, v]));
 
+const sameEmail = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+
 // What a Stripe invoice is made from. The app compares it with the bill (billing.js stripeSig).
 const sentFrom = (inv) => ({
   number: inv.number ?? null, jobId: inv.jobId ?? null, taxPct: inv.taxPct ?? null, dueDate: inv.dueDate ?? null,
@@ -171,18 +173,23 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     if (send) {
       const { cust, customerId } = await billTo(db, companyId, inv);
       if (!cust?.email) throw new HttpsError('failed-precondition', 'Add an email address for this customer first (Customers page).');
-      // Stripe emails the address on its customer, so bring that up to date first. A bill that now
-      // goes to a different customer needs a new Stripe invoice.
+      // A Stripe invoice keeps the customer's email from when it was made, and Stripe emails that
+      // address. If the bill now goes to someone else, or the email changed, it needs a new one.
+      let si;
       try {
         const customer = await ensureCustomer({ db, stripe, livemode, companyId, customerId, cust });
-        const si = await stripe.invoices.retrieve(prev.invoiceId);
+        si = await stripe.invoices.retrieve(prev.invoiceId);
         if ((si.customer?.id ?? si.customer) !== customer) {
           throw new HttpsError('failed-precondition', 'This invoice now goes to a different customer. Void the Stripe invoice, then send it again.');
         }
       } catch (e) {
         throw friendlyError(e);
       }
-      warning = await sendEmail(stripe, ref, prev.invoiceId, cust.email);
+      if (!sameEmail(si.customer_email, cust.email)) {
+        const to = si.customer_email ? `is addressed to ${si.customer_email}` : 'was made without an email address';
+        throw new HttpsError('failed-precondition', `This Stripe invoice ${to}. Void it and send a new one so it goes to ${String(cust.email).trim()}.`);
+      }
+      warning = await sendEmail(stripe, ref, prev.invoiceId, si.customer_email);
     }
     return { ...summary((await ref.get()).data().stripe), warning };
   }
@@ -251,27 +258,35 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       draftId = null;
     }
 
-    await ref.update({
-      stripe: {
-        ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent: sentFrom(inv),
-        sentTo: null, sentAt: null, error: null, claimedAt: null,
-      },
+    // Save it, unless the bill was deleted, paid or voided meanwhile (say on another device). Then
+    // nothing should be payable, so the Stripe invoice is cancelled.
+    const changed = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return 'deleted';
+      if (['paid', 'void'].includes(snap.data().status)) return `marked ${snap.data().status}`;
+      tx.update(ref, {
+        stripe: {
+          ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent: sentFrom(inv),
+          sentTo: null, sentAt: null, error: null, claimedAt: null,
+        },
+      });
+      return null;
     });
+    if (changed) {
+      await stripe.invoices.voidInvoice(finalized.id).catch(() => {});
+      throw new HttpsError(changed === 'deleted' ? 'not-found' : 'failed-precondition',
+        `This invoice was ${changed} while its Stripe invoice was being made, so the Stripe invoice was cancelled.`);
+    }
   } catch (e) {
     // A half-made draft is never sent; remove it so it doesn't clutter Stripe.
     if (draftId) await stripe.invoices.del(draftId).catch(() => {});
-    // The app invoice was deleted meanwhile, so nothing could record a payment: cancel the Stripe one.
-    if (finalized && !(await ref.get().then((d) => d.exists, () => true))) {
-      await stripe.invoices.voidInvoice(finalized.id).catch(() => {});
-      throw new HttpsError('not-found', 'That invoice was deleted, so its Stripe invoice was cancelled.');
-    }
     const err = friendlyError(e);
     if (err.code === 'internal') console.error('Stripe invoice failed', e);
     const restored = { ...prev, status: prev.status === 'creating' ? null : (prev.status ?? null), claimedAt: null, error: err.message, errorAt: new Date() };
     await ref.update({ stripe: restored }).catch(() => {});
     throw err;
   }
-  const warning = send ? await sendEmail(stripe, ref, finalized.id, cust.email) : null;
+  const warning = send ? await sendEmail(stripe, ref, finalized.id, finalized.customer_email || cust.email) : null;
   return { ...summary((await ref.get()).data().stripe), warning };
 }
 
@@ -331,6 +346,10 @@ export async function applyStripeInvoice(db, si) {
     if (!snap.exists) return false;
     const inv = snap.data();
     if (inv.stripe?.invoiceId !== si.id) return false;
+    // Stripe never moves an invoice out of paid or void, so anything else is an older read
+    // (say a check that crossed with the payment).
+    const was = inv.stripe.status;
+    if ((was === 'paid' || was === 'void') && si.status !== was) return false;
     const update = { ...prefixed(fromStripe(si)), 'stripe.amountPaid': (si.amount_paid ?? 0) / 100, 'stripe.updatedAt': new Date() };
     if (si.status === 'paid') {
       const paidMs = (si.status_transitions?.paid_at || Math.floor(Date.now() / 1000)) * 1000;

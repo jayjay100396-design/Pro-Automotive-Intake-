@@ -234,15 +234,18 @@ export function proposalDeposit(est, option) {
   return { type, value, amount: Math.max(0, amount) };
 }
 
-// The deposit sentence printed on the proposal ('' for no deposit).
+// The deposit sentence printed on the proposal ('' for no deposit). A dollar deposit prints as the
+// deposit invoice will bill it: never more than the price.
 export function depositSentence(est) {
   const d = proposalDeposit(est);
   if (!d.value) return '';
   const end = 'is required before materials can be ordered';
-  if (d.type === 'amount') return `A ${money(d.value)} deposit ${end}.`;
   const opts = proposalOptions(est);
+  const each = opts.map((o) => proposalDeposit(est, o).amount);
+  const list = opts.map((o, i) => `${optionLabel(o)}: ${money(each[i])}`).join('; ');
+  if (d.type === 'amount') return each.every((a) => a === each[0]) ? `A ${money(each[0])} deposit ${end}.` : `A deposit ${end} (${list}).`;
   if (opts.length === 1) return `A ${qtyText(d.value)}% deposit (${money(d.amount)}) ${end}.`;
-  return `A ${qtyText(d.value)}% deposit ${end} (${opts.map((o) => `${optionLabel(o)}: ${money(proposalDeposit(est, o).amount)}`).join('; ')}).`;
+  return `A ${qtyText(d.value)}% deposit ${end} (${list}).`;
 }
 
 // The old typed deposit sentence, which the deposit field now prints.
