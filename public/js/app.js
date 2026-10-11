@@ -7,6 +7,7 @@ import * as V from './views.js';
 import * as P from './print.js';
 import * as R from './requests.js';
 import { websitePage } from './website.js';
+import { takeoffPage } from './takeoff/page.js';
 import { esc, toast } from './ui.js';
 import { BRAND, logoHtml } from './brand.js';
 
@@ -21,6 +22,7 @@ const routes = [
   [/^jobs$/, () => V.jobs()],
   [/^jobs\/([^/]+)$/, (m, q) => V.jobEdit(m[1], q)],
   [/^files$/, (m, q) => V.filesPage(q)],
+  [/^takeoff\/([^/]+)$/, (m, q) => takeoffPage(m[1], q)],
   [/^estimates$/, () => V.estimates()],
   [/^estimates\/([^/]+)\/print$/, (m) => P.estimateDoc(m[1])],
   [/^estimates\/([^/]+)$/, (m, q) => V.estimateEdit(m[1], q)],
@@ -160,6 +162,7 @@ function route() {
   const el = document.getElementById('view');
   el.innerHTML = view.html;
   el.classList.toggle('print-view', !!view.title);
+  el.classList.toggle('wide-view', !!view.wide);
   view.mount?.(el);
   document.title = `${view.title || NAV.find(([h]) => path.split('/')[0] === h)?.[1] || 'Stellar Glass'} · Stellar Glass`;
   const section = path.split('/')[0];
