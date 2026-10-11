@@ -10,6 +10,10 @@ import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toas
 import { fileBrowser, countJobFiles } from './files.js';
 import { DRAFT_KEY } from './takeoff/takeoff.js';
 
+// The schedule's cards on the dashboard and job pages, and the Google Calendar panel in Settings.
+import { scheduleSummary, comingUpHtml, mountJobSchedule } from './schedule.js';
+import { mountCalendarPanel } from './gcal.js';
+
 const go = (hash) => { location.hash = hash; };
 const D = () => state.data;
 
@@ -42,6 +46,7 @@ const TILE_ICONS = {
   jobs: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
   invoices: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   payapps: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>',
+  schedule: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
 };
 const tileIcon = (cls, k) => `<span class="t-icon ${cls}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TILE_ICONS[k]}</svg></span>`;
 
@@ -69,6 +74,7 @@ export function dashboard() {
     ['payapps', 'Pay app', `${pending.length} awaiting payment`],
     ['invoices', 'Invoice', `${unpaid.length} unpaid`],
   ];
+  const sched = scheduleSummary();
   const recentJobs = [...D().jobs].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)).slice(0, 6);
 
   return {
@@ -77,6 +83,7 @@ export function dashboard() {
     ${header(`${esc(state.company?.name || 'Stellar Glass')}`, can.edit() ? `<a class="btn primary" href="#/jobs/new">New job</a> <a class="btn" href="#/estimates/new">New estimate</a>` : '')}
     <div class="tiles">
       <a class="tile" href="#/requests">${tileIcon('i-green', 'requests')}<span class="t-label">New requests</span><span class="t-value">${newRequests.length}</span><span class="t-sub">from the website quote page</span></a>
+      <a class="tile" href="#/schedule">${tileIcon('i-teal', 'schedule')}<span class="t-label">On today</span><span class="t-value">${sched.today}</span><span class="t-sub ${sched.overdue ? 'warn' : ''}">${sched.overdue ? `${sched.overdue} overdue task${sched.overdue === 1 ? '' : 's'}` : 'on the schedule'}</span></a>
       <a class="tile" href="#/estimates">${tileIcon('i-cyan', 'estimates')}<span class="t-label">Open estimates</span><span class="t-value">${est.length}</span><span class="t-sub">${money(estValue)} quoted</span></a>
       <a class="tile" href="#/jobs">${tileIcon('i-blue', 'jobs')}<span class="t-label">Active jobs</span><span class="t-value">${active.length}</span><span class="t-sub">${D().jobs.length} in all</span></a>
       <a class="tile" href="#/invoices">${tileIcon('i-amber', 'invoices')}<span class="t-label">Invoices owed</span><span class="t-value">${money(owed)}</span><span class="t-sub ${overdue.length ? 'warn' : ''}">${unpaid.length} unpaid${overdue.length ? `, ${overdue.length} overdue` : ''}</span></a>
@@ -85,6 +92,7 @@ export function dashboard() {
     <nav class="flow" aria-label="Job workflow">
       ${flow.map(([href, name, note], i) => `${i ? '<span class="flow-arrow" aria-hidden="true">→</span>' : ''}<a href="#/${href}"><span class="step-num">${i + 1}</span><span><strong>${name}</strong><small>${note}</small></span></a>`).join('')}
     </nav>
+    ${comingUpHtml()}
     <div class="card"><h2>Recent jobs</h2>
       ${recentJobs.length ? `<table class="list"><thead><tr><th>Job</th><th>Customer</th><th>Type</th><th>Status</th></tr></thead><tbody>
       ${recentJobs.map((j) => `<tr data-href="#/jobs/${esc(j.id)}"><td>${esc(j.name)}</td><td>${esc(customerName(j.customerId))}</td><td>${esc(JOB_TYPES.find((t) => t[0] === j.type)?.[1] || '')}</td><td>${badge(j.status)}</td></tr>`).join('')}
@@ -172,6 +180,7 @@ export function jobEdit(id, params) {
   }
   const related = (c) => (isNew ? [] : where(c, 'jobId', id).sort(sortNum));
   const ests = related('estimates'); const cons = related('contracts'); const pays = related('payApps'); const invs = related('invoices');
+  let offSchedule = null;
   const custOpts = options([['', 'Choose a customer…'], ['__new', '+ Add a new customer'], ...D().customers.map((c) => [c.id, c.name + (c.company ? ` (${c.company})` : '')])], j.customerId);
 
   return {
@@ -194,6 +203,7 @@ export function jobEdit(id, params) {
     </form>
     ${isNew ? '' : `
     <div class="cols">
+      <div class="card" id="job-schedule"></div>
       <div class="card"><div class="row between"><h2>Estimates</h2>${can.edit() ? `<a class="btn small" href="#/estimates/new?job=${esc(id)}">New estimate</a>` : ''}</div>
         ${ests.length ? `<ul class="links">${ests.map((e) => `<li><a href="#/estimates/${esc(e.id)}">Proposal ${esc(e.number)}</a> ${badge(e.status)} <span class="num">${money(estimateAmount(e))}</span></li>`).join('')}</ul>` : '<p class="muted">None yet.</p>'}</div>
       <div class="card"><h2>Contracts and change orders</h2>
@@ -204,6 +214,7 @@ export function jobEdit(id, params) {
         ${invs.length ? `<ul class="links">${invs.map((i) => `<li><a href="#/invoices/${esc(i.id)}">Invoice ${esc(i.number)}</a> ${badge(i.status)} <span class="num">${money(invoiceTotals(i).total)}</span></li>`).join('')}</ul>` : '<p class="muted">None yet.</p>'}</div>
     </div>`}`,
     mount(root) {
+      if (!isNew) offSchedule = mountJobSchedule(root.querySelector('#job-schedule'), id);
       if (!isNew) countJobFiles(id).then((n) => { const c = root.querySelector('[data-file-count]'); if (c && n) c.textContent = `(${n})`; }).catch(() => {});
       const cust = root.querySelector('#cust');
       cust.addEventListener('change', () => root.querySelector('#newcust').classList.toggle('hidden', cust.value !== '__new'));
@@ -225,6 +236,7 @@ export function jobEdit(id, params) {
         if (confirmDelete('job') && await attempt(() => remove('jobs', id), 'Job deleted') !== null) go('#/jobs');
       });
     },
+    unmount: () => offSchedule?.(),
   };
 }
 
@@ -966,7 +978,9 @@ export function settings() {
   const c = state.company;
   const u = state.user;
   const ro = can.manage() ? '' : 'disabled';
+  let offCalendar = null;
   return {
+    unmount: () => offCalendar?.(),
     html: `${header('Settings')}
     <form id="f" class="card grid2">
       <h2 class="span2">Company (printed on estimates, contracts, pay apps and invoices)</h2>
@@ -991,6 +1005,7 @@ export function settings() {
     <div class="card"><h2>Your account</h2>
       <p>${esc(u.displayName || '')} ${esc(u.email || u.phoneNumber || '')}<br><span class="muted small">Role: ${esc(state.role)} · signed in with ${esc(u.providerData.map((p) => ({ 'google.com': 'Google', password: 'email and password', phone: 'phone' }[p.providerId] || p.providerId)).join(', '))}</span></p>
     </div>
+    <div class="card gcal-card"><h2>Google Calendar</h2><div id="gcal"><p class="muted small">Checking…</p></div></div>
     <div class="card"><h2>Team</h2>
       <p class="muted small">Roles: <b>owner</b> does everything; <b>admin</b> does everything except company settings and ownership; <b>staff</b> create and edit jobs and paperwork but can't delete; <b>accountant</b> sees everything and handles pay apps and invoices.</p>
       <div id="team"><p class="muted small">Loading team…</p></div>
@@ -1013,6 +1028,7 @@ export function settings() {
       });
       mountTeam(root);
       mountSite(root.querySelector('#site'));
+      offCalendar = mountCalendarPanel(root.querySelector('#gcal'));
       const box = root.querySelector('#transfer');
       if (!box) return;
       listMembers().then((members) => {
@@ -1026,7 +1042,7 @@ export function settings() {
         box.querySelector('#tf')?.addEventListener('submit', async (e) => {
           e.preventDefault();
           const m = others.find((x) => x.uid === e.target.to.value);
-          if (!m || !confirm(`Make ${label(m)} the owner of ${state.company?.name || 'this business'}? You'll become an admin and can't undo this yourself; only the new owner can hand it back.`)) return;
+          if (!m || !confirm(`Make ${label(m)} the owner of ${state.company?.name || 'this business'}? You'll become an admin and can't undo this yourself; only the new owner can hand it back. If the schedule goes to your Google Calendar, that stops until they connect their own.`)) return;
           if (await attempt(() => transferOwnership(m.uid), 'Ownership transferred') !== null) location.hash = '#/';
         });
       }).catch((e) => { box.innerHTML = `<p class="muted small">Couldn't load the team: ${esc(e.message)}</p>`; });
