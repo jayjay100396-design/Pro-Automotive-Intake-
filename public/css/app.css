@@ -499,6 +499,8 @@ ul.links li .ev-when.warn { color: var(--warn); }
   .m-dots { display: flex; }
   /* The whole day is the link to that day's list. */
   .m-num::after { content: ''; position: absolute; inset: 0; }
+}
+
 /* Takeoff: the sheet on the left, what was found and the openings on the right */
 main.wide-view { max-width: none; }
 .takeoff { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 1.25rem; align-items: start; }
