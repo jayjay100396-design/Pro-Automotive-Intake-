@@ -9,6 +9,7 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 - **Pay apps:** G703 continuation sheet (previous, this period, stored, %, balance, retainage) and G702 summary, printable with a notary block.
 - **Invoices:** simple invoices or one click from a pay app; paid and unpaid tracking.
 - **Files:** photos, plans, contracts, permits and forms on each job, sorted by category and searchable, with an optional copy in each person's Google Drive (`Stellar Glass Jobs / customer / job`).
+- **Takeoffs:** from a PDF drawing set or photo in a job's files: reads the window type tags, each type's size from its type elevation and how many there are (an opening shown on two elevations counts once), or the mark and quantity boxes on shop drawings, and sizes typed into Bluebeam or Acrobat markups. Measure by clicking (the scale comes from the sheet, or set it on a known length), then **Create proposal** starts an estimate with the openings. Runs in the browser with pdf.js, no fees.
 - **Quote requests:** a public page at `/quote` (no sign-in) where customers send a request with photos or plans; it lands under Requests, and one click turns it into a customer and a lead job. The **Website** page lets the owner or an admin upload the page's photos and gallery.
 - **Team:** invite links for admin, staff or the accountant (reads everything, handles pay apps and invoices); change roles, remove people, transfer ownership.
 
@@ -20,8 +21,9 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 | `public/js/calc.js` | Estimate, invoice and G702/G703 math (unit tested) |
 | `public/quote.html`, `js/site.js`, `css/site.css` | The public quote request page; `js/requests.js` is the Requests screen in the app and `js/website.js` the Website photos page |
 | `public/js/files.js`, `drive.js` | Job files (Cloud Storage) and the Google Drive copies |
+| `public/js/takeoff/` | Drawing takeoffs: `reader.js` reads a PDF page (text, lines, tags, views, grid lines), `takeoff.js` turns pages into types, sizes and counts, `markups.js` reads markups, `measure.js` the measuring math, `page.js` the screen (unit tested with made-up drawings) |
 | `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
-| `test/` | Rules tests (emulator) and money-math tests |
+| `test/` | Rules tests (emulator), money-math tests and takeoff tests (`npm run test:takeoff`) |
 | `FIREBASE_SETUP.md` | Console steps, deploy and local dev |
 
 `npm run dev` runs it locally against emulators; `npm test` runs the tests; `npm run deploy` publishes.

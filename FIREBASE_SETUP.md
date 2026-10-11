@@ -49,7 +49,7 @@ Each job has a **Files** tab (and there's a **Files** page across all jobs) for 
 Two one-time steps in Google Cloud for the Drive copies:
 
 1. **Turn on the Google Drive API:** <https://console.cloud.google.com/apis/library/drive.googleapis.com?project=stellar-glass-jobs>, click **Enable**. (Google sign-in must also be on, step 2.)
-2. **Let the app read stored files back** (needed to copy files that were uploaded before Drive was connected). Open Cloud Shell at <https://shell.cloud.google.com/?project=stellar-glass-jobs&show=terminal> and paste:
+2. **Let the app read stored files back** (needed to copy files that were uploaded before Drive was connected, and to open a stored PDF drawing for a takeoff). Open Cloud Shell at <https://shell.cloud.google.com/?project=stellar-glass-jobs&show=terminal> and paste:
 
    ```bash
    printf '[{"origin":["https://stellar-glass-jobs.web.app","https://stellar-glass-jobs.firebaseapp.com"],"method":["GET"],"maxAgeSeconds":3600}]' > cors.json && gcloud storage buckets update gs://stellar-glass-jobs.firebasestorage.app --cors-file=cors.json
