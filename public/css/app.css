@@ -383,3 +383,8 @@ a.file-tile { text-decoration: none; }
 .site-photo.starter { opacity: .75; }
 .site-gallery:has(.starter) { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
 .upload-list { margin: .5rem 0 0; padding-left: 1.1rem; font-size: .85rem; color: var(--muted); }
+
+/* Phones zoom into any text box under 16px when it's tapped; keep them at 16px there. */
+@media (pointer: coarse) {
+  input, select, textarea, table.lines input.n { font-size: 16px; }
+}
