@@ -31,6 +31,8 @@ Start in Stripe's **test mode** (Stripe calls it a sandbox). Nothing real is cha
 
 ### A. Stripe (in the browser, signed in to Wes's Stripe account)
 
+Steps 1 to 3 need Wes. Then he can add Jason on the Team page (<https://dashboard.stripe.com/settings/team>, **Add member**, role **Developer**), so Jason can do steps 4 to 6 himself and the key never has to be sent to anyone. A Developer can make keys and webhooks but can't change the bank account or add people.
+
 1. **Create the account** at <https://dashboard.stripe.com/register> with Wes's business email. It should be Stellar Glass LLC's own account, because payouts go to its bank. Test mode works before the business details are filled in.
 2. **Branding:** Settings > Business > Branding. Upload the logo and set the colors to navy `#123764` and blue `#0071bc`. These show on Stripe's invoice emails, invoice PDFs and payment page.
 3. **Payment methods:** Settings > Payments > Payment methods. Keep **Cards** on and turn on **ACH Direct Debit** (bank), which is much cheaper on large invoices.
@@ -62,7 +64,7 @@ Start in Stripe's **test mode** (Stripe calls it a sandbox). Nothing real is cha
    npm run deploy:functions     # the Stripe server code
    ```
 
-   The first functions deploy asks for **STRIPE_COMPANY_ID**: the Business ID shown in the app under **Settings > Online payments**. The deploy saves it in `functions/.env.stellar-glass-jobs`. (A deploy that can't ask, like one Claude runs, needs that file first, holding the line `STRIPE_COMPANY_ID=` plus the ID. It isn't a secret, so it can be committed.) Only that business can use the Stripe account, so a stranger who signs up for their own business in the app can't bill through Wes's Stripe.
+   The first functions deploy asks for **STRIPE_COMPANY_ID**: the Business ID shown in the app under **Settings > Online payments** once `npm run deploy` has run. Wes must have signed in and set up the business first, so the ID exists. The deploy saves it in `functions/.env.stellar-glass-jobs`. (A deploy that can't ask, like one Claude runs, needs that file first, holding the line `STRIPE_COMPANY_ID=` plus the ID. It isn't a secret, so it can be committed.) Only that business can use the Stripe account, so a stranger who signs up for their own business in the app can't bill through Wes's Stripe.
 
 ### C. Try it, then go live
 
