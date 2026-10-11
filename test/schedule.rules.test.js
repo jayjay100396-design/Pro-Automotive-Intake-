@@ -31,6 +31,7 @@ async function seed() {
     await setDoc(doc(f, 'companies/stellar/events/install'), { ...base, type: 'install', title: 'Install', start: '2026-10-20T07:30', end: '2026-10-20T15:00', assignees: ['crew'], createdBy: 'crew' });
     await setDoc(doc(f, 'companies/stellar/events/cpaTask'), { ...base, type: 'task', title: 'Send pay app', start: '2026-10-25T09:00', end: '2026-10-25T09:30', assignees: ['cpa'], createdBy: 'wes', repeat: 'monthly' });
     await setDoc(doc(f, 'companies/stellar/events/ownTask'), { ...base, type: 'task', title: 'Notarize lien waiver', start: '2026-10-21T09:00', end: '2026-10-21T09:30', assignees: [], createdBy: 'cpa' });
+    await setDoc(doc(f, 'companies/stellar/events/cpaOnce'), { ...base, type: 'task', title: 'File the W-9', start: '2026-10-22T09:00', end: '2026-10-22T09:30', assignees: ['cpa'], createdBy: 'wes', repeat: '' });
     await setDoc(doc(f, 'companies/stellar/calendarLinks/business'), { kind: 'business', uid: 'wes', email: 'wes@example.com', status: 'on' });
     await setDoc(doc(f, 'companies/stellar/calendarTokens/business'), { kind: 'business', uid: 'wes', refreshToken: 'secret' });
     await setDoc(doc(f, 'companies/other'), { name: 'Other Co', ownerUid: 'bob' });
@@ -83,6 +84,11 @@ describe('Schedule rules', function () {
       { repeatUntil: 'someday' },
       { assignees: Array.from({ length: 21 }, (_, i) => `u${i}`) },
       { reminders: [1, 2, 3, 4, 5, 6] },
+      { reminders: ['"><img src=x onerror=alert(1)>'] },
+      { reminders: [60, '30'] },
+      { reminders: [-5] },
+      { reminders: [40321] },
+      { reminders: [1.5] },
       { notes: 'x'.repeat(4001) },
       { location: 'x'.repeat(301) },
       { done: 'yes' },
@@ -122,6 +128,10 @@ describe('Schedule rules', function () {
     await assertSucceeds(updateDoc(doc(f, 'companies/stellar/events/cpaTask'), stamp({ done: true, doneAt: serverTimestamp() })));
     await assertFails(updateDoc(doc(f, 'companies/stellar/events/cpaTask'), stamp({ title: 'Changed' })));
     await assertFails(updateDoc(doc(f, 'companies/stellar/events/cpaTask'), stamp({ assignees: [] })));
+    await assertFails(updateDoc(doc(f, 'companies/stellar/events/cpaTask'), stamp({ start: '2026-10-01T09:00', end: '2026-10-01T09:30' })), 'only forward');
+    // One that doesn't repeat: ticked off, but its date stays.
+    await assertSucceeds(updateDoc(doc(f, 'companies/stellar/events/cpaOnce'), stamp({ done: true, doneAt: serverTimestamp(), updatedBy: 'cpa' })));
+    await assertFails(updateDoc(doc(f, 'companies/stellar/events/cpaOnce'), stamp({ start: '2026-12-22T09:00', end: '2026-12-22T09:30' })));
     // Not theirs and not a task they're on.
     await assertFails(updateDoc(doc(f, 'companies/stellar/events/install'), stamp({ done: true })));
     for (const id of ['ownTask', 'cpaTask', 'install']) await assertFails(deleteDoc(doc(f, `companies/stellar/events/${id}`)));

@@ -145,6 +145,9 @@ describe('Calendar mapping', () => {
     assert.deepEqual(Object.keys(g.extendedProperties.private).sort(), ['stellar', 'stellarEvent', 'stellarV']);
     assert.equal(g.extendedProperties.private.stellar, '1');
     assert.equal(g.extendedProperties.private.stellarEvent, 'ev1');
+    const tagged = build({}, business, { companyId: 'co1' });
+    assert.equal(tagged.extendedProperties.private.stellarCompany, 'co1', 'the business, so cleanups never touch another business\'s copies');
+    assert.equal(tagged.extendedProperties.private.stellarV, build({}, business).extendedProperties.private.stellarV, 'the tag isn\'t part of the fingerprint');
   });
 
   it('colors events by type and keeps tasks from looking busy', () => {

@@ -13,8 +13,9 @@
 // account's access in every business (the collection-group index on it is in firestore.indexes.json).
 //
 // Only events the app made are ever changed or deleted in Google: each carries extendedProperties.private.stellar =
-// '1', and every list of events acted on is filtered by it. A calendar is deleted only if the app made it and nothing
-// at all is left in it.
+// '1' and stellarCompany = the business's id, and every list of events acted on is filtered by both, so two
+// businesses that use one calendar never touch each other's events. A calendar is deleted only if the app made it and
+// nothing at all is left in it.
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { DEFAULT_BASES, GoogleError, createCalendarApi, createSession, hasPickScopes, revokeToken } from './google.js';
@@ -121,6 +122,7 @@ const bodyFor = (deps, ctx, token, eventId, event, records) => buildGoogleEvent(
   eventId,
   event,
   link: token,
+  companyId: ctx.companyId,
   company: ctx.company,
   members: ctx.members,
   customer: records.customers.get(event.customerId) || null,
@@ -168,11 +170,17 @@ async function listAll(api, path, query) {
   return items;
 }
 
-// The app's events in a calendar (only ones carrying stellar=1), ending after timeMin when given: [{ id, extendedProperties }].
-export async function listAppEvents(api, calendarId, { timeMin } = {}) {
+// One business's app events in a calendar (only ones carrying stellar=1 and its id), ending after timeMin when given:
+// [{ id, extendedProperties }].
+export async function listAppEvents(api, calendarId, { companyId, timeMin } = {}) {
+  if (!companyId) throw new Error('Listing the app\'s events needs the business.');
   try {
     return await listAll(api, `/calendars/${enc(calendarId)}/events`, {
-      privateExtendedProperty: 'stellar=1', timeMin, showDeleted: 'false', maxResults: 2500, fields: 'items(id,extendedProperties),nextPageToken',
+      privateExtendedProperty: ['stellar=1', `stellarCompany=${companyId}`],
+      timeMin,
+      showDeleted: 'false',
+      maxResults: 2500,
+      fields: 'items(id,extendedProperties),nextPageToken',
     });
   } catch (e) {
     if (e.kind === 'notFound') throw calendarGone(calendarId);
@@ -225,15 +233,30 @@ export async function createAppCalendar(api, { kind, short, timeZone, appUrl }) 
 // The calendars the Google account owns (needs the PICK scopes).
 export const ownedCalendars = (api) => listAll(api, '/users/me/calendarList', { minAccessRole: 'owner', maxResults: 250 });
 
-// Takes every one of the app's events off a calendar, old ones too. With deleteIfEmpty (calendars the app made), the
-// calendar is deleted too if nothing at all is left in it: an event someone added themselves keeps it. Best effort:
-// problems are logged and it carries on. Returns { removed, calendarDeleted }.
-export async function clearCalendar(deps, api, calendarId, { deleteIfEmpty = false } = {}) {
+// Whether anything at all is left in a calendar. Google can answer with an empty page that still has more after it,
+// so it reads on until it finds an event or there are no more pages; with too many pages to read, it says yes.
+async function hasAnyEvent(api, calendarId) {
+  let pageToken;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const res = await api.request('GET', `/calendars/${enc(calendarId)}/events`, {
+      query: { maxResults: 250, showDeleted: 'false', fields: 'items(id),nextPageToken', pageToken },
+    });
+    if (res?.items?.length) return true;
+    pageToken = res?.nextPageToken;
+    if (!pageToken) return false;
+  }
+  return true;
+}
+
+// Takes every one of the business's app events off a calendar, old ones too. With deleteIfEmpty (calendars the app
+// made), the calendar is deleted too if nothing at all is left in it: an event someone added themselves, or another
+// business's, keeps it. Best effort: problems are logged and it carries on. Returns { removed, calendarDeleted }.
+export async function clearCalendar(deps, api, calendarId, { companyId, deleteIfEmpty = false } = {}) {
   const log = deps.logger;
   let removed = 0;
   let items;
   try {
-    items = await listAppEvents(api, calendarId);
+    items = await listAppEvents(api, calendarId, { companyId });
   } catch (e) {
     if (e.kind !== 'calendarGone') log.warn('Calendar cleanup: couldn\'t list the app\'s events', { calendarId, error: e.message });
     return { removed, calendarDeleted: false };
@@ -247,8 +270,7 @@ export async function clearCalendar(deps, api, calendarId, { deleteIfEmpty = fal
   let calendarDeleted = false;
   if (deleteIfEmpty) {
     try {
-      const left = await api.request('GET', `/calendars/${enc(calendarId)}/events`, { query: { maxResults: 1, showDeleted: 'false', fields: 'items(id)' } });
-      if (!left?.items?.length) {
+      if (!await hasAnyEvent(api, calendarId)) {
         await api.request('DELETE', `/calendars/${enc(calendarId)}`);
         calendarDeleted = true;
       }
@@ -288,7 +310,7 @@ export async function emailUsedElsewhere(deps, companyId, linkId, email) {
 export async function cleanupLink(deps, companyId, linkId, token) {
   const api = apiFor(deps, { companyId, token });
   const result = token.calendarId
-    ? await clearCalendar(deps, api, token.calendarId, { deleteIfEmpty: token.appCalendar === true })
+    ? await clearCalendar(deps, api, token.calendarId, { companyId, deleteIfEmpty: token.appCalendar === true })
     : { removed: 0, calendarDeleted: false };
   let revoked = false;
   if (token.refreshToken) {
@@ -354,7 +376,7 @@ export async function reconcileLink(deps, ctx, linkId, token, api = apiFor(deps,
     if (!body) logger.warn('Calendar sync: skipped an event whose dates can\'t be read', { companyId: ctx.companyId, eventId });
     desired.set(googleEventId(eventId), body);
   }
-  const existing = await listAppEvents(api, token.calendarId, { timeMin: `${addDays(windowStart, -1)}T00:00:00Z` });
+  const existing = await listAppEvents(api, token.calendarId, { companyId: ctx.companyId, timeMin: `${addDays(windowStart, -1)}T00:00:00Z` });
   const stale = await staleEvents(db, ctx.companyId, token, existing.filter((g) => !desired.has(g.id)));
   const versions = new Map(existing.map((g) => [g.id, g.extendedProperties?.private?.stellarV]));
   const writes = [...desired.values()].filter((body) => body && versions.get(body.id) !== body.extendedProperties.private.stellarV);

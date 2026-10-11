@@ -11,6 +11,7 @@ export const MESSAGES = {
   ownerOnly: 'Only the business owner can change the business calendar.',
   businessOnly: 'Only the business calendar can use one of your own Google calendars.',
   othersCalendar: 'Only the owner or an admin can disconnect someone else\'s calendar.',
+  adminsCalendar: 'Only the business owner can disconnect the owner\'s or an admin\'s calendar.',
   businessDisconnect: 'Only the business owner, or the person who connected it, can disconnect the business calendar.',
   noCode: 'Google didn\'t send a sign-in code. Press Connect to try again.',
   codeRejected: 'Google didn\'t accept the sign-in. Press Connect to try again.',

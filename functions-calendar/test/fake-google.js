@@ -44,6 +44,7 @@ function emptyState() {
     failures: [], // answers to give instead: { method, path, status, reason, times }
     idp: { status: 200, enabled: true, withSecret: true }, // Firebase Auth's Google provider settings
     pageSize: 1000, // the most items one page of a list holds (lower it to test paging)
+    emptyFirstPages: 0, // how many event lists start with an empty page that has more after it (Google may do that)
     seq: 0,
   };
 }
@@ -168,11 +169,14 @@ function eventAccess(state, who, calendarId) {
   return { error: noScope() };
 }
 
+// Like Google, a `fields` list that leaves out nextPageToken gets none back.
+const withNext = (query, next) => (next && (!query.get('fields') || query.get('fields').includes('nextPageToken')) ? { nextPageToken: next } : {});
+
 function pageOf(state, items, query, mapItem = (x) => x) {
   const max = Math.min(Number(query.get('maxResults')) || 250, 2500, state.pageSize);
   const offset = Number(query.get('pageToken')) || 0;
   const next = offset + max < items.length ? String(offset + max) : undefined;
-  return { items: items.slice(offset, offset + max).map(mapItem), ...(next ? { nextPageToken: next } : {}) };
+  return { items: items.slice(offset, offset + max).map(mapItem), ...withNext(query, next) };
 }
 
 // When an event ends, for timeMin (see the note at the top).
@@ -237,6 +241,10 @@ function pickFields(fields) {
 }
 
 function listEvents(state, cal, query) {
+  if (state.emptyFirstPages > 0 && !query.get('pageToken')) {
+    state.emptyFirstPages -= 1;
+    return [200, { kind: 'calendar#events', items: [], ...withNext(query, '0') }];
+  }
   let items = [...eventsOf(state, cal.id).values()];
   if (query.get('showDeleted') !== 'true') items = items.filter((e) => e.status !== 'cancelled');
   for (const p of query.getAll('privateExtendedProperty')) {
@@ -397,7 +405,9 @@ export async function startFakeGoogle({ port = 0, host = '127.0.0.1', log = fals
         return;
       }
       const [status, json] = answer;
-      state.calls.push({ method: req.method, path: url.pathname, query: Object.fromEntries(query), status });
+      // A parameter given more than once is recorded as a list.
+      const asked = Object.fromEntries([...new Set(query.keys())].map((k) => [k, query.getAll(k).length > 1 ? query.getAll(k) : query.get(k)]));
+      state.calls.push({ method: req.method, path: url.pathname, query: asked, status });
       if (log) console.log(`${new Date().toISOString().slice(11, 19)} ${req.method} ${url.pathname} ${status}${note(url.pathname, body, status, json)}`);
       res.writeHead(status, json === null ? {} : { 'content-type': 'application/json; charset=utf-8' });
       res.end(json === null ? undefined : JSON.stringify(json));

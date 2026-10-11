@@ -218,7 +218,8 @@ export function mountCalendarPanel(box, { compact = false } = {}) {
 
   // Connecting needs Google's popup ready; the other buttons only need the function.
   const button = (attrs, text, cls = '', google = false) => `<button type="button" class="btn small ${cls}" ${attrs} ${busy || (google && ready !== 'yes') ? 'disabled' : ''}>${esc(text)}</button>`;
-  const connectButton = (kind, text, cls = 'primary', scope = 'basic') => button(`data-connect="${kind}" data-scope="${scope}"`, text, cls, true);
+  // then: 'choose' opens the list of the owner's calendars once connected.
+  const connectButton = (kind, text, cls = 'primary', scope = 'basic', then = '') => button(`data-connect="${kind}" data-scope="${scope}"${then ? ` data-then="${then}"` : ''}`, text, cls, true);
   const notReady = () => (ready === 'yes' || ready === 'no' || ready === 'asking' ? ''
     : `<p class="small warn">${esc(ready === 'missing' ? calendarError({ code: 'not-found' }) : ready)}</p>`);
   const busyLine = () => (busy ? `<p class="small gc-busy" role="status">${esc(busy)}</p>` : '');
@@ -283,7 +284,7 @@ export function mountCalendarPanel(box, { compact = false } = {}) {
       ${owner() ? pickerHtml(b) : ''}
       ${busyLine()}
       ${owner() && !picker && !askPick ? `<div class="row">
-        ${b.status === 'error' ? connectButton('business', 'Connect again') : ''}
+        ${b.status === 'error' ? connectButton('business', 'Connect again', 'primary', b.appCalendar === false ? 'pick' : 'basic') : ''}
         ${button('data-resync="business"', 'Sync now')}
         ${button('data-change', 'Use a different calendar')}
         ${button('data-disconnect="business"', 'Disconnect', 'danger')}
@@ -292,8 +293,9 @@ export function mountCalendarPanel(box, { compact = false } = {}) {
 
   function pickerHtml(b) {
     if (askPick) {
-      return `<div class="gc-picker"><p class="small">To show your calendars, Google asks you to let the app see your list of calendars and manage events on calendars you own. The app still only ever changes the events it adds.</p>
-        <div class="row">${connectButton('business', 'Continue to Google', 'primary', 'pick')}${button('data-cancel', 'Cancel')}</div></div>`;
+      const back = b.status === 'error' && b.appCalendar === false; // connecting again to one of their own calendars
+      return `<div class="gc-picker"><p class="small">${back ? 'The schedule goes on one of your own calendars, so' : 'To show your calendars,'} Google asks you to let the app see your list of calendars and manage events on calendars you own. The app still only ever changes the events it adds.</p>
+        <div class="row">${connectButton('business', 'Continue to Google', 'primary', 'pick', back ? '' : 'choose')}${button('data-cancel', 'Cancel')}</div></div>`;
     }
     if (!picker) return '';
     const current = picker.calendars.find((c) => c.current);
@@ -320,6 +322,11 @@ export function mountCalendarPanel(box, { compact = false } = {}) {
       <div class="row">${p.status === 'error' ? connectButton('personal', 'Connect again') : ''}${button('data-resync="personal"', 'Sync now')}${button('data-disconnect="personal"', 'Disconnect', 'danger')}</div>`;
   }
 
+  // Like removing someone from the team: the owner can disconnect anyone, an admin only staff and the accountant (and
+  // people no longer on the team).
+  const mayDisconnect = (l) => owner() || (members.length > 0 && l.uid !== state.company?.ownerUid
+    && !['owner', 'admin'].includes(members.find((m) => m.uid === l.uid)?.role));
+
   function teamHtml() {
     if (!can.remove()) return '';
     const others = links.filter((l) => l.kind === 'personal' && l.uid !== me());
@@ -327,7 +334,7 @@ export function mountCalendarPanel(box, { compact = false } = {}) {
     const without = members.filter((m) => m.uid !== me() && m.uid !== holderUid && !links.some((l) => l.kind === 'personal' && l.uid === m.uid));
     return `<h3>The team's calendars</h3>
       ${others.length ? `<table class="list"><tbody>${others.map((l) => `<tr><td>${esc(l.holderName || memberName(l.uid) || 'Former team member')}<br><span class="muted small">${esc(l.email)}</span></td><td class="small">${statusLine(l)}</td>
-        <td class="actions-cell">${button(`data-disconnect="personal" data-uid="${esc(l.uid)}"`, 'Disconnect', 'danger')}</td></tr>`).join('')}</tbody></table>` : ''}
+        <td class="actions-cell">${mayDisconnect(l) ? button(`data-disconnect="personal" data-uid="${esc(l.uid)}"`, 'Disconnect', 'danger') : ''}</td></tr>`).join('')}</tbody></table>` : ''}
       <p class="hint">${without.length ? `Not connected yet: ${esc(listWords(without.map((m) => m.name || m.email || 'a team member')))}. ` : ''}Each person connects their own here or on the Schedule page, so their jobs and reminders reach their phone.</p>`;
   }
 
@@ -350,7 +357,9 @@ export function mountCalendarPanel(box, { compact = false } = {}) {
     draw();
     try { await fn(); } catch (e) {
       console.error(e);
-      if (messageOf(e) === 'needs-permission') { picker = null; askPick = true; } else toast(calendarError(e), true);
+      if (messageOf(e) !== 'needs-permission') toast(calendarError(e), true);
+      else if (compact) toast('Google Calendar needs one more permission. Open Settings to finish connecting.', true);
+      else { picker = null; askPick = true; }
     } finally {
       busy = '';
       draw();
@@ -378,8 +387,9 @@ export function mountCalendarPanel(box, { compact = false } = {}) {
       }
       await work(kind === 'business' ? 'Connecting, and copying the schedule to Google Calendar…' : 'Connecting, and copying your events to Google Calendar…', async () => {
         const r = await run('connect', { kind, code });
+        askPick = false;
         toast(`Connected. ${plural(r.count, 'event')} on “${r.calendarName}”.`);
-        if (scope === 'pick') await openPicker();
+        if (b.dataset.then === 'choose') await openPicker();
       });
     } else if (b.hasAttribute('data-change')) {
       if (!biz()?.canPick) { askPick = true; draw(); return; }

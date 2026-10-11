@@ -214,11 +214,11 @@ describe('Calendar sync (with the Firestore emulator)', function () {
     // gone (one in the window, one long before it), and an event of Jason's own.
     fake.addEvent(cal, buildGoogleEvent({
       eventId: 'edge', event: appEvent({ allDay: true, start: '2026-09-10', end: '2026-09-10' }), link: { kind: 'business', uid: 'jason' },
-      company: { name: 'Stellar Glass LLC', timeZone: 'America/New_York' }, members: new Map(Object.entries(TEAM)), appUrl: APP,
+      companyId: co.companyId, company: { name: 'Stellar Glass LLC', timeZone: 'America/New_York' }, members: new Map(Object.entries(TEAM)), appUrl: APP,
     }));
     const ghost = (eventId, date) => ({
       id: googleEventId(eventId), summary: 'Gone', start: { date }, end: { date: addDays(date, 1) },
-      extendedProperties: { private: { stellar: '1', stellarEvent: eventId, stellarV: 'old' } },
+      extendedProperties: { private: { stellar: '1', stellarEvent: eventId, stellarV: 'old', stellarCompany: co.companyId } },
     });
     fake.addEvent(cal, ghost('ghost', '2026-10-01'));
     fake.addEvent(cal, ghost('ancient', '2026-06-01'));
@@ -234,7 +234,7 @@ describe('Calendar sync (with the Firestore emulator)', function () {
     assert.ok(co.inGoogle(cal, 'edge'), 'still wanted in the app: left alone');
     assert.ok(fake.event(cal, 'dentist01'));
     const list = fake.calls({ method: 'GET', path: '/events' }).at(-1).query;
-    assert.deepEqual([list.privateExtendedProperty, list.timeMin, list.showDeleted, list.maxResults], ['stellar=1', '2026-09-10T00:00:00Z', 'false', '2500']);
+    assert.deepEqual([list.privateExtendedProperty, list.timeMin, list.showDeleted, list.maxResults], [['stellar=1', `stellarCompany=${co.companyId}`], '2026-09-10T00:00:00Z', 'false', '2500']);
 
     // Nothing changed: nothing written.
     const again = fake.state.calls.length;
@@ -280,6 +280,40 @@ describe('Calendar sync (with the Firestore emulator)', function () {
     assert.equal(after.status, 'error');
     assert.equal(after.error, 'The chosen calendar was deleted in Google. Choose another.');
     assert.equal(fake.calendarsOf('jason@example.com').length, calendars, 'no calendar made');
+  });
+
+  it('keeps the app\'s calendar while anything is left in it, even when Google\'s first page comes back empty', async () => {
+    await co.connect('jason', 'business');
+    const cal = await calendarOf('business');
+    await co.write('e1', {});
+    fake.addEvent(cal, dentist()); // Jason put an event of his own in the app's calendar
+    fake.state.emptyFirstPages = 2; // both lists Google answers next start with an empty page that has more after it
+    assert.deepEqual(await co.call('jason', { action: 'disconnect', kind: 'business' }), { ok: true, removed: 1 });
+    assert.equal(fake.calendar(cal).deleted, false, 'Jason\'s own event keeps the calendar');
+    assert.ok(fake.event(cal, 'dentist01'));
+    assert.deepEqual(co.appEventsIn(cal), []);
+  });
+
+  it('lets two businesses use one calendar without touching each other\'s events', async () => {
+    // Jason owns two businesses and puts both schedules on his main calendar.
+    const other = business(bed, 'caltest-b');
+    await other.seed({ name: 'Reed Glass Repair' });
+    const main = 'jason@example.com';
+    for (const b of [co, other]) {
+      await b.connect('jason', 'business', 'emulator:jason@example.com:pick');
+      await b.call('jason', { action: 'choose', kind: 'business', calendarId: main });
+    }
+    await co.write('a1', {});
+    await other.write('b1', at('2026-10-15'));
+    assert.deepEqual(co.appEventsIn(main), ['a1', 'b1']);
+
+    assert.deepEqual(await co.call('jason', { action: 'resync', kind: 'business' }), { ok: true, count: 1 });
+    assert.deepEqual(await other.call('jason', { action: 'resync', kind: 'business' }), { ok: true, count: 1 });
+    assert.deepEqual(co.appEventsIn(main), ['a1', 'b1'], 'a full sync leaves the other business\'s events alone');
+
+    assert.deepEqual(await other.call('jason', { action: 'disconnect', kind: 'business' }), { ok: true, removed: 1 });
+    assert.deepEqual(co.appEventsIn(main), ['a1'], 'disconnecting one takes off only its own');
+    assert.deepEqual(await co.edit('a1', { title: 'Install doors' }), { business: 'written' });
   });
 
   it('skips changes more than an hour old, and businesses without a calendar', async () => {

@@ -88,8 +88,8 @@ function toHttpsError(e, logger) {
 // in this business (the owner connecting their own schedule after the business calendar, say), then one from another
 // business the person is on. It's refreshed right away, which checks it still works and shows the scopes it covers.
 // With none at all, the access Google just gave is handed back, so that next time Google asks again and sends one.
-// (Nothing else uses this Google account then, so the revoke can't cut another link off. If the other businesses
-// can't be checked, it's handed back anyway: otherwise Google would never send one, and connecting couldn't work.)
+// (Nothing else uses this Google account then, so the revoke can't cut another link off. When the other businesses
+// can't be checked, nothing is handed back and the person is asked to try again.)
 async function lastingAccess(deps, grant, linkId, tokens) {
   if (grant.refreshToken) {
     return {
@@ -114,11 +114,12 @@ async function lastingAccess(deps, grant, linkId, tokens) {
     const access = await reuse(t);
     if (access) return access;
   }
-  let elsewhere = [];
+  let elsewhere;
   try {
     elsewhere = await accessesOf(deps.db, grant.email);
   } catch (e) {
-    deps.logger.warn('Calendar connect: other businesses couldn\'t be checked for the same Google account', { error: e.message });
+    deps.logger.error('Calendar connect: other businesses couldn\'t be checked for the same Google account (is the calendarTokens.emailKey index deployed?)', { error: e.message });
+    throw new HttpsError('unavailable', MESSAGES.unavailable);
   }
   for (const { token } of elsewhere) {
     const access = await reuse(token);
@@ -172,6 +173,10 @@ async function connect(deps, who, data) {
   const sameAccount = !!old && sameEmail(old.email, grant.email);
   const access = await lastingAccess(deps, grant, linkId, tokens);
   const canPick = hasPickScopes(access.scopes);
+  // The same account coming back to one of its own calendars (after its access was removed, say) keeps that calendar,
+  // which needs the extra permission: without it, a new calendar would be made and the app's copies on the old one
+  // left behind for good. 'needs-permission' tells the app to ask for it.
+  if (sameAccount && old.calendarId && old.appCalendar !== true && !canPick) throw new HttpsError('failed-precondition', MESSAGES.needsPermission);
 
   // Another Google account takes the link over (a new owner, or the holder switched accounts): the app's events come
   // off the old account's calendar first. Best effort, so an old access that no longer works doesn't stop this.
@@ -266,7 +271,7 @@ async function choose(deps, who, data) {
   const ctx = await loadContext(db, companyId);
   if (next) {
     // The app's events come off the current calendar first, and it's deleted if the app made it and it's empty now.
-    await clearCalendar(deps, api, token.calendarId, { deleteIfEmpty: token.appCalendar === true });
+    await clearCalendar(deps, api, token.calendarId, { companyId, deleteIfEmpty: token.appCalendar === true });
     if (next === 'new') {
       const cal = await createAppCalendar(api, { kind: 'business', short: ctx.company.short, timeZone: ctx.company.timeZone, appUrl: deps.appUrl });
       next = { calendarId: cal.id, calendarName: cal.summary, appCalendar: true };
@@ -299,8 +304,9 @@ async function resync(deps, who, data) {
   return { ok: true, count: count ?? 0 };
 }
 
-// Business: the owner, or whoever connected it (the previous owner, say). Personal: your own, or anyone's for the
-// owner and admins (someone leaving the team, say).
+// Business: the owner, or whoever connected it (the previous owner, say). Personal: your own; anyone's for the owner;
+// for an admin, staff's and the accountant's, and those of people no longer on the team. That's who each can remove
+// from the team (firestore.rules), and a disconnect can end the person's Google access.
 async function disconnect(deps, who, data) {
   const kind = kindOf(data.kind);
   const { db } = deps;
@@ -308,8 +314,12 @@ async function disconnect(deps, who, data) {
   let linkId = 'business';
   if (kind === 'personal') {
     linkId = personalLinkId(data.uid === undefined || data.uid === null || data.uid === '' ? who.uid : data.uid);
-    if (linkId !== who.uid && !who.isOwner && who.role !== 'owner' && who.role !== 'admin') {
-      throw new HttpsError('permission-denied', MESSAGES.othersCalendar);
+    if (linkId !== who.uid && !who.isOwner) {
+      if (who.role !== 'admin') throw new HttpsError('permission-denied', MESSAGES.othersCalendar);
+      const [target, company] = await Promise.all([db.doc(`companies/${companyId}/members/${linkId}`).get(), db.doc(`companies/${companyId}`).get()]);
+      if (company.data()?.ownerUid === linkId || ['owner', 'admin'].includes(target.data()?.role)) {
+        throw new HttpsError('permission-denied', MESSAGES.adminsCalendar);
+      }
     }
   }
   const [tokenSnap, linkSnap] = await Promise.all([tokenRef(db, companyId, linkId).get(), linkRef(db, companyId, linkId).get()]);

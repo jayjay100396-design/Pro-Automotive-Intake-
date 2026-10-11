@@ -191,10 +191,14 @@ export const versionOf = (body) => createHash('sha1').update(JSON.stringify(cano
 // The Google Calendar event for an app event on one link's calendar. Returns null when the event's dates can't be
 // read (the app checks them, so that would be an old or broken record), and the caller leaves it alone.
 //   link     { kind: 'business' | 'personal', uid }
+//   companyId  the business, tagged on the event (stellarCompany), so a cleanup never touches another business's
+//              copies in a calendar both use
 //   company  { name, timeZone }
 //   members  Map of uid -> member ({ name, email })
 //   customer, job  the records the event points to, or null
-export function buildGoogleEvent({ eventId, event, link, company = {}, members = new Map(), customer = null, job = null, appUrl }) {
+export function buildGoogleEvent({
+  eventId, event, link, companyId = '', company = {}, members = new Map(), customer = null, job = null, appUrl,
+}) {
   const tz = isTimeZone(event.tz) ? event.tz : (isTimeZone(company.timeZone) ? company.timeZone : DEFAULT_TIME_ZONE);
   const times = timesFor(event, tz);
   if (!times) return null;
@@ -229,5 +233,6 @@ export function buildGoogleEvent({ eventId, event, link, company = {}, members =
     status: 'confirmed', // also brings back an event that was deleted earlier
     source: { title: short, url },
   };
-  return { ...body, extendedProperties: { private: { stellar: '1', stellarEvent: eventId, stellarV: versionOf(body) } } };
+  const tags = { stellar: '1', stellarEvent: eventId, stellarV: versionOf(body), ...(companyId ? { stellarCompany: companyId } : {}) };
+  return { ...body, extendedProperties: { private: tags } };
 }

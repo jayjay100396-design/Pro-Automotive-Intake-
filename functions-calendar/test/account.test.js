@@ -6,6 +6,7 @@ import { BASIC_SCOPE, PICK_SCOPE } from '../google.js';
 import { googleEventId } from '../mapping.js';
 import { MESSAGES } from '../messages.js';
 import { BASIC_SCOPES, PICK_SCOPES, CLIENT_ID } from './fake-google.js';
+import { handleAccountCall } from '../account.js';
 import { APP, NOW, startTestbed, business, httpsError } from './helpers.js';
 
 const at = (day, from = '08:00', to = '09:00') => ({ start: `${day}T${from}`, end: `${day}T${to}` });
@@ -192,6 +193,45 @@ describe('Calendar account (with the Firestore emulator)', function () {
     assert.deepEqual(fake.state.revoked.map((x) => x.email), ['jason@example.com']);
   });
 
+  it('doesn\'t give Google access back when other businesses can\'t be checked', async () => {
+    // As if the calendarTokens.emailKey index were missing: every collection-group query fails.
+    const noIndex = new Proxy(bed.db, {
+      get(target, key) {
+        if (key === 'collectionGroup') return () => { throw Object.assign(new Error('9 FAILED_PRECONDITION: The query requires an index.'), { code: 9 }); };
+        const value = target[key];
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const call = (data) => handleAccountCall({ ...bed.deps(), db: noIndex, auth: { uid: 'jason' }, data: { companyId: co.companyId, ...data } });
+    fake.addCode({ code: 'short', email: 'jason@example.com', refreshToken: false });
+    await assert.rejects(call({ action: 'connect', kind: 'business', code: 'short' }), httpsError('unavailable', MESSAGES.unavailable));
+    assert.deepEqual(fake.state.revoked, [], 'nothing handed back');
+
+    await co.connect('jason', 'business');
+    assert.equal((await call({ action: 'disconnect', kind: 'business' })).ok, true);
+    assert.equal(await co.link('business'), undefined);
+    assert.deepEqual(fake.state.revoked, [], 'kept, since another business might use it');
+  });
+
+  it('asks for the extra permission to keep one of the owner\'s own calendars when connecting again', async () => {
+    const main = 'jason@example.com';
+    await co.connect('jason', 'business', 'emulator:jason@example.com:pick');
+    await co.call('jason', { action: 'choose', kind: 'business', calendarId: main });
+    await co.write('e1', {});
+    fake.revokeAccount('jason@example.com'); // Jason removed the app's access in his Google account
+    const calendars = fake.calendarsOf('jason@example.com').length;
+
+    await assert.rejects(co.connect('jason', 'business'), httpsError('failed-precondition', 'needs-permission'));
+    assert.equal(fake.calendarsOf('jason@example.com').length, calendars, 'no new calendar');
+    assert.equal((await co.link('business')).calendarId, main);
+
+    assert.equal((await co.connect('jason', 'business', 'emulator:jason@example.com:pick')).ok, true);
+    const link = await co.link('business');
+    assert.deepEqual([link.calendarId, link.appCalendar, link.status], [main, false, 'on']);
+    assert.equal(fake.calendarsOf('jason@example.com').length, calendars);
+    assert.deepEqual(co.appEventsIn(main), ['e1']);
+  });
+
   it('keeps the scopes the stored access really has, and asks again when it lacks the extra permission', async () => {
     await co.handOver('wes');
     await co.connect('wes', 'personal');
@@ -302,6 +342,16 @@ describe('Calendar account (with the Firestore emulator)', function () {
     await co.connect('maria', 'personal');
     await co.connect('pat', 'personal');
     await assert.rejects(co.call('pat', { action: 'disconnect', kind: 'personal', uid: 'maria' }), httpsError('permission-denied', MESSAGES.othersCalendar));
+    // An admin can't disconnect the owner or another admin, just as they can't remove them from the team.
+    await bed.db.doc(`companies/${co.companyId}/members/ann`).set({ role: 'admin', name: 'Ann Admin', email: 'ann@example.com' });
+    await co.connect('jason', 'personal');
+    await co.call('ann', { action: 'connect', kind: 'personal', code: 'emulator:ann@example.com' });
+    await assert.rejects(co.call('wes', { action: 'disconnect', kind: 'personal', uid: 'jason' }), httpsError('permission-denied', MESSAGES.adminsCalendar));
+    await assert.rejects(co.call('wes', { action: 'disconnect', kind: 'personal', uid: 'ann' }), httpsError('permission-denied', MESSAGES.adminsCalendar));
+    assert.ok(await co.link('jason'));
+    assert.ok(await co.link('ann'));
+    assert.equal((await co.call('jason', { action: 'disconnect', kind: 'personal', uid: 'ann' })).ok, true, 'the owner can');
+    assert.equal(await co.link('ann'), undefined);
     assert.deepEqual(await co.call('wes', { action: 'disconnect', kind: 'personal', uid: 'maria' }), { ok: true, removed: 0 });
     assert.deepEqual(await co.call('jason', { action: 'disconnect', kind: 'personal', uid: 'pat' }), { ok: true, removed: 0 });
     assert.equal(await co.link('maria'), undefined);

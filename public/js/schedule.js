@@ -556,7 +556,7 @@ export function eventEdit(id, params) {
       ${edit ? `<div class="row"><button class="btn primary">${isNew ? 'Add to schedule' : 'Save'}</button>${isNew ? '' : '<a class="btn" href="#/schedule">Done</a>'}</div>` : `<p class="muted small">${isAccountant() ? 'The accountant can add and change tasks and meetings of their own.' : 'Your role can see the schedule but not change this.'}</p>`}
       ${!isNew && data.createdByName ? `<p class="hint">Added by ${esc(data.createdByName)}.</p>` : ''}
     </form>`;
-    renderReminders(data.allDay, data.reminders || []);
+    renderReminders(data.allDay, W.cleanReminders(data.reminders));
     renderSync();
   }
 
@@ -580,7 +580,7 @@ export function eventEdit(id, params) {
     if (!box) return;
     const choices = allDay ? ALL_DAY : TIMED;
     const extra = chosen.filter((m) => !choices.some(([c]) => c === m)).map((m) => [m, W.reminderLabel(m, allDay)]);
-    box.innerHTML = [...choices, ...extra].map(([m, l]) => `<label class="pick-opt"><input type="checkbox" name="reminders" value="${m}" ${chosen.includes(m) ? 'checked' : ''}> ${esc(l)}</label>`).join('');
+    box.innerHTML = [...choices, ...extra].map(([m, l]) => `<label class="pick-opt"><input type="checkbox" name="reminders" value="${esc(m)}" ${chosen.includes(m) ? 'checked' : ''}> ${esc(l)}</label>`).join('');
   }
 
   // Where it goes on Google Calendar, from the connections people have made (gcal.js).
