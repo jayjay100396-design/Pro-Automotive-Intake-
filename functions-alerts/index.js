@@ -26,6 +26,14 @@ const EMAIL_USER = defineString('EMAIL_USER', {
 });
 const EMAIL_PASSWORD = defineSecret('EMAIL_PASSWORD');
 
+// The account supplier emails come from (Parts orders > Send from the app). Suppliers see its address, so it's best
+// as Wes's own. It's kept apart from the alerts' account because the alerts go to Wes, and Gmail can file an email an
+// account sends to itself under Sent instead of the inbox. Saved and stored the same way as the alerts' account.
+const SUPPLIER_EMAIL_USER = defineString('SUPPLIER_EMAIL_USER', {
+  description: 'Email address supplier emails (Parts orders) are sent from, which suppliers see: ideally Wes\'s own, with an app password.',
+});
+const SUPPLIER_EMAIL_PASSWORD = defineSecret('SUPPLIER_EMAIL_PASSWORD');
+
 const emulated = process.env.FUNCTIONS_EMULATOR === 'true';
 
 // The app's address, for the link in the email: the project's Firebase Hosting site unless APP_URL says otherwise.
@@ -33,14 +41,17 @@ const appUrl = () => process.env.APP_URL || (emulated ? 'http://127.0.0.1:5000' 
 
 // Made on first use, when the secret can be read. Gmail's mail server unless SMTP_HOST and SMTP_PORT in
 // functions-alerts/.env.<project id> name another (the emulator uses a fake one: test/smtp-sink.js).
-let send;
-const mailer = () => send || (send = createMailer({
+const makeMailer = (user, password) => createMailer({
   host: process.env.SMTP_HOST || undefined,
   port: Number(process.env.SMTP_PORT) || undefined,
-  user: EMAIL_USER.value(),
+  user: user.value(),
   // Google shows app passwords in groups of four letters; the spaces aren't part of it.
-  pass: EMAIL_PASSWORD.value().replace(/\s+/g, ''),
-}));
+  pass: password.value().replace(/\s+/g, ''),
+});
+let alertSend;
+let supplierSend;
+const alertMailer = () => alertSend || (alertSend = makeMailer(EMAIL_USER, EMAIL_PASSWORD));
+const supplierMailer = () => supplierSend || (supplierSend = makeMailer(SUPPLIER_EMAIL_USER, SUPPLIER_EMAIL_PASSWORD));
 
 export const requestAlert = onDocumentCreated({
   document: 'companies/{companyId}/requests/{requestId}',
@@ -62,7 +73,7 @@ export const requestAlert = onDocumentCreated({
     companyId,
     requestId,
     appUrl: appUrl(),
-    send: (message) => mailer()(message),
+    send: (message) => alertMailer()(message),
   });
   logger.info('Quote request alert', { companyId, requestId, ...result });
 });
@@ -70,7 +81,7 @@ export const requestAlert = onDocumentCreated({
 // Called by the app (public/js/parts.js) with { companyId, requestId, what, sendId }. Only signed-in members of that
 // business with an editing role get anything sent, and only to the supplier's saved addresses (parts-request.js).
 export const sendPartsEmail = onCall({
-  secrets: [EMAIL_PASSWORD],
+  secrets: [SUPPLIER_EMAIL_PASSWORD],
   // Room for attachments: up to 15 MB of the job's files go along.
   timeoutSeconds: 120,
   memory: '512MiB',
@@ -79,7 +90,7 @@ export const sendPartsEmail = onCall({
     const result = await handlePartsEmail({
       db,
       bucket: getStorage().bucket(),
-      send: (message) => mailer()(message),
+      send: (message) => supplierMailer()(message),
       uid: request.auth?.uid,
       token: request.auth?.token,
       data: request.data,

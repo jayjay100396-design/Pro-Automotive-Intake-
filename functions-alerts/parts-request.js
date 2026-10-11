@@ -1,5 +1,5 @@
 // Emails a parts request to its supplier when someone presses "Send from the app" (public/js/parts.js), through the
-// same email account as the quote request alerts (EMAIL_ALERTS.md). The email is built from the request as it's
+// supplier email account (SUPPLIER_EMAIL_USER, EMAIL_ALERTS.md). The email is built from the request as it's
 // saved, by parts-email.js: the same code the app uses for its preview, so what Wes sees is what goes out.
 //
 // Who can send: the business's owners, admins and staff. Who it goes to: the supplier's saved addresses (Suppliers,
@@ -35,7 +35,7 @@ const isId = (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 // The problem in words for the app.
 export function problemText(e) {
   if (e instanceof SendError) return e.message;
-  if (e?.code === 'EAUTH') return 'The email account the app sends from refused the login. It needs a new app password (EMAIL_ALERTS.md, steps 1 and 2). Use Open in Gmail for now.';
+  if (e?.code === 'EAUTH') return 'The email account supplier emails come from refused the login. It needs a new app password (EMAIL_ALERTS.md, Parts requests to suppliers). Use Open in Gmail for now.';
   if (isPermanent(e)) return `The email server refused it: ${oneLine(e.response || e.message).slice(0, 200)}`;
   return 'Couldn\'t reach the email server. Try again in a minute, or use Open in Gmail.';
 }
