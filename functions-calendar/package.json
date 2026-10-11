@@ -1,0 +1,14 @@
+{
+  "name": "stellar-glass-calendar",
+  "description": "Server code for the Stellar Glass app: one-way sync of the schedule to Google Calendar.",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.6.0",
+    "firebase-functions": "^6.6.0"
+  }
+}

@@ -11,6 +11,7 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 - **Files:** photos, plans, contracts, permits and forms on each job, sorted by category and searchable, with an optional copy in each person's Google Drive (`Stellar Glass Jobs / customer / job`).
 - **Quote requests:** a public page at `/quote` (no sign-in) where customers send a request with photos or plans; it lands under Requests, and one click turns it into a customer and a lead job. The **Website** page lets the owner or an admin upload the page's photos and gallery.
 - **Team:** invite links for admin, staff or the accountant (reads everything, handles pay apps and invoices); change roles, remove people, transfer ownership.
+- **Schedule:** site measures, installs, meetings, deliveries, tasks with due dates, and time off, with who's on each one and reminders; agenda, month and team-week views. It's copied one way to Google Calendar: the owner picks the business calendar, and each person can get the events they're on in their own. See `CALENDAR_SETUP.md`.
 
 ## Layout
 
@@ -20,6 +21,8 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 | `public/js/calc.js` | Estimate, invoice and G702/G703 math (unit tested) |
 | `public/quote.html`, `js/site.js`, `css/site.css` | The public quote request page; `js/requests.js` is the Requests screen in the app and `js/website.js` the Website photos page |
 | `public/js/files.js`, `drive.js` | Job files (Cloud Storage) and the Google Drive copies |
+| `public/js/schedule.js`, `when.js`, `gcal.js` | The Schedule, its dates and repeats (unit tested), and the Google Calendar panel |
+| `functions-calendar/` | Cloud Functions: copying the schedule to Google Calendar (codebase `calendar`); setup in `CALENDAR_SETUP.md` |
 | `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
 | `test/` | Rules tests (emulator) and money-math tests |
 | `FIREBASE_SETUP.md` | Console steps, deploy and local dev |
