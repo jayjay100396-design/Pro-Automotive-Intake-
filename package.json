@@ -10,7 +10,8 @@
     "test:calc": "mocha test/calc.test.mjs",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage",
     "deploy": "firebase deploy --only firestore:rules,firestore:indexes,storage,hosting",
-    "deploy:alerts": "firebase deploy --only functions:alerts:requestAlert",
+    "deploy:alerts": "firebase deploy --only functions:alerts:requestAlert,functions:alerts:sendPartsEmail",
+    "sync:email": "cp public/js/parts-email.js functions-alerts/parts-email.js",
     "storage:cors": "gcloud storage buckets update gs://stellar-glass-jobs.firebasestorage.app --cors-file=cors.json"
   },
   "devDependencies": {

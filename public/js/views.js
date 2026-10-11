@@ -9,6 +9,7 @@ import {
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
 import { fileBrowser, countJobFiles } from './files.js';
 import { alertEmails, parseEmails, lastAlertNote, MAX_ALERT_EMAILS } from './requests.js';
+import { jobParts, openPartsCount, latePartsCount, dueSoonCount } from './parts.js';
 
 const go = (hash) => { location.hash = hash; };
 const D = () => state.data;
@@ -42,6 +43,7 @@ const TILE_ICONS = {
   jobs: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
   invoices: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   payapps: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>',
+  parts: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.29 7 12 12 20.71 7"/><line x1="12" y1="22" x2="12" y2="12"/>',
 };
 const tileIcon = (cls, k) => `<span class="t-icon ${cls}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TILE_ICONS[k]}</svg></span>`;
 
@@ -69,6 +71,7 @@ export function dashboard() {
     ['payapps', 'Pay app', `${pending.length} awaiting payment`],
     ['invoices', 'Invoice', `${unpaid.length} unpaid`],
   ];
+  const partsLate = latePartsCount();
   const recentJobs = [...D().jobs].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)).slice(0, 6);
 
   return {
@@ -81,6 +84,7 @@ export function dashboard() {
       <a class="tile" href="#/jobs">${tileIcon('i-blue', 'jobs')}<span class="t-label">Active jobs</span><span class="t-value">${active.length}</span><span class="t-sub">${D().jobs.length} in all</span></a>
       <a class="tile" href="#/invoices">${tileIcon('i-amber', 'invoices')}<span class="t-label">Invoices owed</span><span class="t-value">${money(owed)}</span><span class="t-sub ${overdue.length ? 'warn' : ''}">${unpaid.length} unpaid${overdue.length ? `, ${overdue.length} overdue` : ''}</span></a>
       <a class="tile" href="#/payapps">${tileIcon('i-purple', 'payapps')}<span class="t-label">Pay apps pending</span><span class="t-value">${money(pendingDue)}</span><span class="t-sub">${pending.length} submitted or approved</span></a>
+      <a class="tile" href="#/parts${partsLate ? '?show=late' : ''}">${tileIcon('i-cyan', 'parts')}<span class="t-label">Parts on order</span><span class="t-value">${openPartsCount()}</span><span class="t-sub ${partsLate ? 'warn' : ''}">${partsLate ? `${partsLate} late` : `${dueSoonCount()} due this week`}</span></a>
     </div>
     <nav class="flow" aria-label="Job workflow">
       ${flow.map(([href, name, note], i) => `${i ? '<span class="flow-arrow" aria-hidden="true">→</span>' : ''}<a href="#/${href}"><span class="step-num">${i + 1}</span><span><strong>${name}</strong><small>${note}</small></span></a>`).join('')}
@@ -153,10 +157,14 @@ export function jobs() {
   };
 }
 
-// The job's tabs: details and paperwork, and its files.
-const jobTabs = (id, tab) => `<nav class="tabs" aria-label="Job sections">
-  <a href="#/jobs/${esc(id)}" class="${tab === 'files' ? '' : 'on'}">Details</a>
-  <a href="#/jobs/${esc(id)}?tab=files" class="${tab === 'files' ? 'on' : ''}">Files <span data-file-count></span></a></nav>`;
+// The job's tabs: details and paperwork, its files, and parts from suppliers.
+const jobTabs = (id, tab) => {
+  const parts = where('partsRequests', 'jobId', id).filter((r) => !['received', 'cancelled'].includes(r.status)).length;
+  return `<nav class="tabs" aria-label="Job sections">
+  <a href="#/jobs/${esc(id)}" class="${['files', 'parts'].includes(tab) ? '' : 'on'}">Details</a>
+  <a href="#/jobs/${esc(id)}?tab=files" class="${tab === 'files' ? 'on' : ''}">Files <span data-file-count></span></a>
+  <a href="#/jobs/${esc(id)}?tab=parts" class="${tab === 'parts' ? 'on' : ''}">Parts${parts ? ` (${parts})` : ''}</a></nav>`;
+};
 
 export function jobEdit(id, params) {
   const isNew = id === 'new';
@@ -169,6 +177,9 @@ export function jobEdit(id, params) {
       mount: files.mount,
       unmount: files.unmount,
     };
+  }
+  if (!isNew && params.get('tab') === 'parts') {
+    return { live: true, html: `${header(esc(j.name), `<span class="muted">${esc(customerName(j.customerId))}</span>`)}${jobTabs(id, 'parts')}${jobParts(id)}` };
   }
   const related = (c) => (isNew ? [] : where(c, 'jobId', id).sort(sortNum));
   const ests = related('estimates'); const cons = related('contracts'); const pays = related('payApps'); const invs = related('invoices');
@@ -339,6 +350,7 @@ export function estimateEdit(id, params) {
   return {
     html: `${header(isNew ? 'New proposal' : `Proposal ${esc(e.number)}`, `
       ${!isNew ? `<a class="btn" href="#/estimates/${esc(id)}/print">Print proposal / PDF</a>` : ''}
+      ${!isNew && can.edit() && e.jobId ? `<a class="btn" href="#/parts/new?job=${esc(e.jobId)}&estimate=${esc(id)}">Request parts</a>` : ''}
       ${!isNew && can.edit() && !hasContract ? '<button class="btn" id="tocontract">Convert to contract</button>' : ''}
       ${hasContract ? `<a class="btn" href="#/contracts/${esc(where('contracts', 'estimateId', id)[0].id)}">View contract</a>` : ''}
       ${!isNew && can.remove() ? '<button class="btn danger" id="del">Delete</button>' : ''}`)}

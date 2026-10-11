@@ -1,7 +1,9 @@
-// Cloud Functions for the Stellar Glass app: quote request emails. Setup steps are in EMAIL_ALERTS.md.
+// Cloud Functions for the Stellar Glass app: emails. Setup steps are in EMAIL_ALERTS.md.
 // Its own codebase ("alerts" in firebase.json), so it deploys on its own: npm run deploy:alerts.
-//   requestAlert   emails the team each quote request from the website (who gets it: Settings > Website quote requests)
+//   requestAlert     emails the team each quote request from the website (who gets it: Settings > Website quote requests)
+//   sendPartsEmail   emails a parts request to its supplier when someone presses Send from the app (Parts orders)
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import { defineSecret, defineString } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
@@ -9,6 +11,7 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { handleNewRequest, createMailer } from './request-alert.js';
+import { handlePartsEmail, SendError } from './parts-request.js';
 
 initializeApp();
 const db = getFirestore();
@@ -62,4 +65,33 @@ export const requestAlert = onDocumentCreated({
     send: (message) => mailer()(message),
   });
   logger.info('Quote request alert', { companyId, requestId, ...result });
+});
+
+// Called by the app (public/js/parts.js) with { companyId, requestId, what, sendId }. Only signed-in members of that
+// business with an editing role get anything sent, and only to the supplier's saved addresses (parts-request.js).
+export const sendPartsEmail = onCall({
+  secrets: [EMAIL_PASSWORD],
+  // Room for attachments: up to 15 MB of the job's files go along.
+  timeoutSeconds: 120,
+  memory: '512MiB',
+}, async (request) => {
+  try {
+    const result = await handlePartsEmail({
+      db,
+      bucket: getStorage().bucket(),
+      send: (message) => mailer()(message),
+      uid: request.auth?.uid,
+      token: request.auth?.token,
+      data: request.data,
+    });
+    logger.info('Parts request email', { companyId: request.data?.companyId, requestId: request.data?.requestId, what: request.data?.what, status: result.status });
+    return result;
+  } catch (e) {
+    if (e instanceof SendError) {
+      if (e.cause) logger.warn('Parts request email failed', { requestId: request.data?.requestId, error: e.cause.message });
+      throw new HttpsError(e.code, e.message);
+    }
+    logger.error('Parts request email', e);
+    throw new HttpsError('internal', 'The email didn\'t go out. Try again, or use Open in Gmail.');
+  }
 });
