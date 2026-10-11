@@ -79,13 +79,23 @@ export function requestList() {
 }
 
 // ---------- One request ----------
+// The customer's photos and plans to show, and every file in the request's folder (to clean up).
 async function loadAttachments(r) {
   const folder = await listAll(sref(storage, `companies/${state.companyId}/requests/${r.id}`));
-  const items = folder.items.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-  return Promise.all(items.map(async (it) => {
+  // The customer's files are numbered from 0, one per number, below the count their request gave.
+  // Anything else in the folder didn't come from the form, so it's left out.
+  const seen = new Set();
+  const items = folder.items.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).filter((it) => {
+    const n = Number(it.name.split('-')[0]);
+    if (!(n < (r.files || 0)) || seen.has(n)) return false;
+    seen.add(n);
+    return true;
+  });
+  const shown = await Promise.all(items.map(async (it) => {
     const [meta, url] = await Promise.all([getMetadata(it), getDownloadURL(it)]);
     return { path: it.fullPath, name: it.name.replace(/^\d+-/, ''), contentType: meta.contentType || '', size: meta.size || 0, url };
   }));
+  return { shown, paths: folder.items.map((it) => it.fullPath) };
 }
 
 const attachmentTile = (a) => `<a class="file-tile" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.name)}">
@@ -143,9 +153,11 @@ export function requestView(id) {
     </div>`,
     mount(root) {
       let atts = [];
+      let paths = [];
       const box = root.querySelector('#atts');
-      const ready = r.files ? loadAttachments(r).then((list) => {
+      const ready = r.files ? loadAttachments(r).then(({ shown: list, paths: all }) => {
         atts = list;
+        paths = all;
         box.innerHTML = list.length ? `<div class="file-grid">${list.map(attachmentTile).join('')}</div>`
           : '<p class="muted small">The customer picked files, but they didn\'t finish uploading.</p>';
       }).catch((e) => { console.error(e); box.innerHTML = `<p class="muted small">Couldn't load the files: ${esc(e.message)}</p>`; }) : Promise.resolve();
@@ -159,20 +171,32 @@ export function requestView(id) {
       });
 
       root.querySelector('#convert')?.addEventListener('click', async (e) => {
-        e.target.disabled = true;
+        const btn = e.currentTarget;
+        btn.disabled = true;
         await ready;
+        // Someone may have deleted it, or made it a job, since this page opened. (A request whose job
+        // was deleted afterwards can be made into a job again.)
+        const now = get('requests', id);
+        if (!now) { toast('This request was deleted.', true); location.hash = '#/requests'; return; }
+        if (now.jobId && (now.jobId !== r.jobId || get('jobs', now.jobId))) {
+          toast('This request is already a job.', true);
+          window.dispatchEvent(new HashChangeEvent('hashchange'));
+          return;
+        }
         const choice = root.querySelector('#cust').value;
-        const jobId = await attempt(() => convert(r, choice === '__new' ? null : choice, atts));
-        if (jobId) { toast('Customer and job created'); location.hash = `#/jobs/${jobId}`; } else e.target.disabled = false;
+        const jobId = await attempt(() => convert(now, choice === '__new' ? null : choice, atts));
+        if (jobId) { toast('Customer and job created'); location.hash = `#/jobs/${jobId}`; } else btn.disabled = false;
       });
 
       root.querySelector('#del')?.addEventListener('click', async () => {
         if (!confirm(`Delete the request from ${r.name}? This can't be undone.${r.jobId ? ' The job and its files stay.' : ''}`)) return;
         await ready;
         const ok = await attempt(async () => {
+          // Read it again, since it may have become a job since this page opened.
+          const now = get('requests', id);
           await remove('requests', id);
           // Its photos belong to the job once it's converted, so keep them then.
-          if (!r.jobId) await Promise.all(atts.map((a) => deleteObject(sref(storage, a.path)).catch((err) => console.warn(err))));
+          if (now && !now.jobId) await Promise.all(paths.map((p) => deleteObject(sref(storage, p)).catch((err) => console.warn(err))));
           return true;
         }, 'Request deleted');
         if (ok) location.hash = '#/requests';

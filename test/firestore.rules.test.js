@@ -174,13 +174,42 @@ describe('Firestore rules', function () {
   });
 
   it('handles job file records by role', async () => {
-    const file = (by, category = 'photos') => ({ jobId: 'j1', category, name: 'a.jpg', path: 'p', createdBy: by });
+    const url = 'https://firebasestorage.googleapis.com/v0/b/stellar-glass-jobs.firebasestorage.app/o/companies%2Fstellar%2Fphotos%2Fj1%2Fx%2Fa.jpg?alt=media&token=t';
+    const file = (by, category = 'photos', over = {}) => ({
+      jobId: 'j1', category, name: 'a.jpg', path: `companies/stellar/${category}/j1/x/a.jpg`, url, thumbPath: '', thumbUrl: '', createdBy: by, ...over,
+    });
     // Staff add files and can delete only their own; admins delete any.
     await assertSucceeds(setDoc(doc(db('crew'), 'companies/stellar/files/f1'), file('crew')));
     await assertSucceeds(setDoc(doc(db('wes'), 'companies/stellar/files/f2'), file('wes')));
     await assertFails(deleteDoc(doc(db('crew'), 'companies/stellar/files/f2')));
     await assertSucceeds(deleteDoc(doc(db('crew'), 'companies/stellar/files/f1')));
     await assertSucceeds(deleteDoc(doc(db('admin1'), 'companies/stellar/files/f2')));
+    // A record only ever points at a file in this business's storage, through a storage link.
+    const crew = db('crew');
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/x1'), file('crew', 'photos', { url: 'javascript:alert(1)' })));
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/x2'), file('crew', 'photos', { thumbUrl: 'https://evil.example/a.jpg' })));
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/x3'), file('crew', 'photos', { path: 'companies/other/photos/a.jpg' })));
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/x4'), file('crew', 'gifs')));
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/x5'), file('wes')));
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/x6'), file('crew', 'photos', { url: url.replace('stellar-glass-jobs.firebasestorage.app', 'someone-else.appspot.com') })));
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/x7'), file('crew', 'photos', { url: url.replace('companies%2Fstellar%2F', 'companies%2Fother%2F') })));
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/x8'), file('crew', 'photos', { drive: { wes: { id: 'd', link: 'https://docs.google.com/x' } } })));
+    await assertSucceeds(setDoc(doc(crew, 'companies/stellar/files/x9'),
+      file('crew', 'photos', { url: 'http://127.0.0.1:9199/v0/b/demo-stellar-glass.appspot.com/o/companies%2Fstellar%2Fphotos%2Fa.jpg?alt=media&token=t' })));
+    // Staff rename and re-sort anyone's files, but where a file is stored, its links and who added it stay put.
+    await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'companies/stellar/files/o1'), file('wes')));
+    await assertSucceeds(updateDoc(doc(crew, 'companies/stellar/files/o1'), { name: 'Front door.jpg', category: 'other', note: 'Before' }));
+    await assertFails(updateDoc(doc(crew, 'companies/stellar/files/o1'), { category: 'gifs' }));
+    await assertFails(updateDoc(doc(crew, 'companies/stellar/files/o1'), { url: 'javascript:alert(1)' }));
+    await assertFails(updateDoc(doc(crew, 'companies/stellar/files/o1'), { thumbUrl: url }));
+    await assertFails(updateDoc(doc(crew, 'companies/stellar/files/o1'), { path: 'companies/stellar/photos/j1/y/b.jpg' }));
+    await assertFails(updateDoc(doc(crew, 'companies/stellar/files/o1'), { createdBy: 'crew' }));
+    await assertFails(updateDoc(doc(crew, 'companies/stellar/files/o1'), { 'drive.wes': { id: 'd0' } }));
+    await assertFails(deleteDoc(doc(crew, 'companies/stellar/files/o1')));
+    // Photos from a website quote request: staff who made the job can't remove them; admins can.
+    await assertSucceeds(setDoc(doc(crew, 'companies/stellar/files/r1'), file('crew', 'photos', { path: 'companies/stellar/requests/q1/0-a.jpg' })));
+    await assertFails(deleteDoc(doc(crew, 'companies/stellar/files/r1')));
+    await assertSucceeds(deleteDoc(doc(db('admin1'), 'companies/stellar/files/r1')));
     // The accountant adds contracts, documents, permits and forms, as themself, and fixes up their own.
     const f = db('cpa');
     await assertSucceeds(setDoc(doc(f, 'companies/stellar/files/c1'), file('cpa', 'forms')));

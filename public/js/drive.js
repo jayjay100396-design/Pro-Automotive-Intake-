@@ -31,6 +31,11 @@ export function disconnectDrive() {
   folders.clear();
 }
 
+// Looks folders up afresh next time, in case they were renamed, moved or trashed in Drive itself.
+export function forgetFolders() {
+  folders.clear();
+}
+
 // Asks Google for access to Drive in a popup, so it has to run from a click.
 export async function connectDrive() {
   const user = auth.currentUser;
@@ -44,7 +49,9 @@ export async function connectDrive() {
       cred = GoogleAuthProvider.credentialFromResult(await reauthenticateWithPopup(user, provider));
       email = google.email;
     } else {
-      // Signed in by email or phone: this also lets them sign in with that Google account from now on.
+      // Signed in by email or phone: this also lets them sign in with that Google account from now on,
+      // so always let them choose the account rather than taking whichever one the browser is in.
+      provider.setCustomParameters({ prompt: 'select_account' });
       const r = await linkWithPopup(user, provider);
       cred = GoogleAuthProvider.credentialFromResult(r);
       email = r.user.providerData.find((p) => p.providerId === 'google.com')?.email;
@@ -92,16 +99,27 @@ async function findByKey(key, extra = '') {
 
 // Folders are found by a key rather than by name, so renaming a job or customer in the app
 // renames its Drive folder, and moving a job to another customer moves the folder.
+// With `keep`, a folder that's already there stays as it is (for a deleted job or customer).
+// The lookup itself is remembered, so copies running at the same time share it instead of
+// each making its own folder.
 const folders = new Map();
-async function folder(key, name, parentId) {
-  const cacheKey = `${key}|${name}|${parentId || ''}`;
-  if (folders.has(cacheKey)) return folders.get(cacheKey);
+function folder(key, name, parentId, { keep = false } = {}) {
+  const cacheKey = `${key}|${name}|${parentId || ''}|${keep}`;
+  if (!folders.has(cacheKey)) {
+    const found = findOrMakeFolder(key, name, parentId, keep);
+    folders.set(cacheKey, found);
+    found.catch(() => { if (folders.get(cacheKey) === found) folders.delete(cacheKey); });
+  }
+  return folders.get(cacheKey);
+}
+
+async function findOrMakeFolder(key, name, parentId, keep) {
   let f = await findByKey(key, ` and mimeType='${FOLDER}'`);
   if (!f) {
     f = await (await call(`${API}?fields=id,name,parents`, {
       method: 'POST', ...json({ name, mimeType: FOLDER, ...(parentId ? { parents: [parentId] } : {}), appProperties: { stellarKey: key } }),
     })).json();
-  } else if (f.name !== name || (parentId && !f.parents?.includes(parentId))) {
+  } else if (!keep && (f.name !== name || (parentId && !f.parents?.includes(parentId)))) {
     const params = new URLSearchParams({ fields: 'id,name,parents' });
     if (parentId && !f.parents?.includes(parentId)) {
       params.set('addParents', parentId);
@@ -109,25 +127,35 @@ async function folder(key, name, parentId) {
     }
     f = await (await call(`${API}/${f.id}?${params}`, { method: 'PATCH', ...json({ name }) })).json();
   }
-  folders.set(cacheKey, f.id);
   return f.id;
 }
 
 const clean = (s, fallback) => String(s || '').replace(/\s+/g, ' ').trim() || fallback;
 
 // The Drive folder for a job, or for one category inside it. Creates whatever is missing.
-export async function jobFolder({ companyId, companyName, job, customer, category }) {
+// `customerId` is the job's customer even when that customer has been deleted (then `customer` is empty);
+// a deleted job is marked `deleted`. Either one keeps the folder it already has, under its old name.
+export async function jobFolder({ companyId, companyName, job, customer, customerId, category }) {
   const root = await folder(`${companyId}:root`, `${clean(companyName, 'Stellar Glass').replace(/,?\s+(LLC|L\.L\.C\.|Inc\.?|Corp\.?|Co\.?)$/i, '')} Jobs`);
-  const cust = await folder(`${companyId}:customer:${customer?.id || 'none'}`,
-    customer ? clean(customer.name + (customer.company ? ` (${customer.company})` : ''), 'Customer') : 'No customer', root);
-  const jobId = await folder(`${companyId}:job:${job.id}`, clean(job.name, 'Untitled job'), cust);
+  const custKey = customer?.id || customerId || 'none';
+  const cust = await folder(`${companyId}:customer:${custKey}`,
+    customer ? clean(customer.name + (customer.company ? ` (${customer.company})` : ''), 'Customer') : custKey === 'none' ? 'No customer' : 'Deleted customer',
+    root, { keep: !customer && custKey !== 'none' });
+  const jobId = await folder(`${companyId}:job:${job.id}`, clean(job.name, 'Untitled job'), cust, { keep: !!job.deleted });
   return category ? folder(`${companyId}:job:${job.id}:${category.key}`, category.label, jobId) : jobId;
 }
 
 export const folderLink = (id) => `https://drive.google.com/drive/folders/${id}`;
 
 // Uploads a file into a folder, unless a copy with this key is already there.
-export async function saveFile(key, getBlob, { name, mimeType, folderId, description }) {
+// The same file asked for twice at once (an automatic copy and "Copy all") goes up once.
+const saving = new Map();
+export function saveFile(key, getBlob, details) {
+  if (!saving.has(key)) saving.set(key, upload(key, getBlob, details).finally(() => saving.delete(key)));
+  return saving.get(key);
+}
+
+async function upload(key, getBlob, { name, mimeType, folderId, description }) {
   const existing = await findByKey(key);
   if (existing) return existing;
   const blob = await getBlob();
