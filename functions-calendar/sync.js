@@ -171,11 +171,13 @@ async function listAll(api, path, query) {
 }
 
 // One business's app events in a calendar (only ones carrying stellar=1 and its id), ending after timeMin when given:
-// [{ id, extendedProperties }].
+// [{ id, extendedProperties }]. The tags are checked here as well as in the query, because Google's docs disagree on
+// whether two privateExtendedProperty filters must both match or either one, and these lists feed deletions.
 export async function listAppEvents(api, calendarId, { companyId, timeMin } = {}) {
   if (!companyId) throw new Error('Listing the app\'s events needs the business.');
+  let items;
   try {
-    return await listAll(api, `/calendars/${enc(calendarId)}/events`, {
+    items = await listAll(api, `/calendars/${enc(calendarId)}/events`, {
       privateExtendedProperty: ['stellar=1', `stellarCompany=${companyId}`],
       timeMin,
       showDeleted: 'false',
@@ -186,6 +188,10 @@ export async function listAppEvents(api, calendarId, { companyId, timeMin } = {}
     if (e.kind === 'notFound') throw calendarGone(calendarId);
     throw e;
   }
+  return items.filter((g) => {
+    const tags = g.extendedProperties?.private;
+    return tags?.stellar === '1' && tags?.stellarCompany === companyId;
+  });
 }
 
 // UPSERT: writes the whole event. An id Google doesn't know is created; one that exists already (a deleted event

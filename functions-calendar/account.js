@@ -68,6 +68,10 @@ async function businessToken(deps, who) {
 function toHttpsError(e, logger) {
   if (e instanceof HttpsError) return e;
   if (e instanceof GoogleError) {
+    // People see a short message; the log keeps what Google said, to tell the causes apart.
+    if (['auth', 'calendarGone', 'transient', 'scope', 'forbidden', 'client'].includes(e.kind)) {
+      logger.warn('Calendar account: Google said no', { kind: e.kind, status: e.status, reason: e.reason, error: e.message });
+    }
     switch (e.kind) {
       case 'auth': return new HttpsError('failed-precondition', MESSAGES.accessRemoved);
       case 'calendarGone': return new HttpsError('failed-precondition', MESSAGES.calendarDeleted);
@@ -161,7 +165,10 @@ async function connect(deps, who, data) {
   try {
     grant = await exchangeCode({ fetch: deps.fetch, oauthBase: deps.oauthBase, client: await deps.oauthClient(), code });
   } catch (e) {
-    if (e.kind === 'refused') throw new HttpsError('invalid-argument', MESSAGES.codeRejected);
+    if (e.kind === 'refused') {
+      deps.logger.warn('Calendar connect: Google refused the sign-in code', { status: e.status, reason: e.reason, error: e.message });
+      throw new HttpsError('invalid-argument', MESSAGES.codeRejected);
+    }
     throw e;
   }
   // Google's sign-in screen has a box for calendar access, which people can untick.
@@ -169,9 +176,39 @@ async function connect(deps, who, data) {
   if (!grant.email) throw new HttpsError('invalid-argument', MESSAGES.noEmail);
 
   const tokens = new Map((await db.collection(`companies/${companyId}/calendarTokens`).get()).docs.map((d) => [d.id, d.data()]));
-  const old = tokens.get(linkId) || null;
-  const sameAccount = !!old && sameEmail(old.email, grant.email);
   const access = await lastingAccess(deps, grant, linkId, tokens);
+  const progress = { saved: false };
+  try {
+    return await connectWith(deps, who, { kind, linkId, grant, access, old: tokens.get(linkId) || null, progress });
+  } catch (e) {
+    if (!progress.saved) await handBackUnsaved(deps, grant, access, tokens);
+    throw e;
+  }
+}
+
+// Google sends the lasting access (a refresh token) only the first time a person agrees. When connecting fails before
+// it's saved and nothing else holds one for this Google account, it's handed back, so that the next Connect gets a new
+// one instead of "Press Connect once more". Kept when another link uses the account (the next try reuses that one) or
+// when that can't be checked.
+async function handBackUnsaved(deps, grant, access, tokens) {
+  if (!grant.refreshToken || access.refreshToken !== grant.refreshToken) return;
+  const holds = (t) => !!t?.refreshToken && sameEmail(t.email, grant.email);
+  if ([...tokens.values()].some(holds)) return;
+  try {
+    if ((await accessesOf(deps.db, grant.email)).some(({ token }) => holds(token))) return;
+  } catch (e) {
+    deps.logger.warn('Calendar connect: kept the new access, as other businesses couldn\'t be checked', { error: e.message });
+    return;
+  }
+  await revokeToken({ fetch: deps.fetch, oauthBase: deps.oauthBase, token: grant.refreshToken }).catch((e) => {
+    deps.logger.warn('Calendar connect: the unsaved access wasn\'t handed back', { error: e.message });
+  });
+}
+
+async function connectWith(deps, who, { kind, linkId, grant, access, old, progress }) {
+  const { db } = deps;
+  const { companyId } = who;
+  const sameAccount = !!old && sameEmail(old.email, grant.email);
   const canPick = hasPickScopes(access.scopes);
   // The same account coming back to one of its own calendars (after its access was removed, say) keeps that calendar,
   // which needs the extra permission: without it, a new calendar would be made and the app's copies on the old one
@@ -199,6 +236,7 @@ async function connect(deps, who, data) {
     connectedAt, needsFullSync: true,
   };
   await tokenRef(db, companyId, linkId).set(token);
+  progress.saved = true;
   await linkRef(db, companyId, linkId).set({
     kind, uid: who.uid, holderName: oneLine(who.member.name) || grant.email, email: grant.email, ...calendar, canPick,
     status: 'syncing', error: '', connectedAt, syncedAt: null, count: 0,
@@ -269,18 +307,37 @@ async function choose(deps, who, data) {
   }
 
   const ctx = await loadContext(db, companyId);
-  if (next) {
-    // The app's events come off the current calendar first, and it's deleted if the app made it and it's empty now.
-    await clearCalendar(deps, api, token.calendarId, { companyId, deleteIfEmpty: token.appCalendar === true });
-    if (next === 'new') {
-      const cal = await createAppCalendar(api, { kind: 'business', short: ctx.company.short, timeZone: ctx.company.timeZone, appUrl: deps.appUrl });
-      next = { calendarId: cal.id, calendarName: cal.summary, appCalendar: true };
-    }
-    await tokenRef(db, companyId, 'business').update({ ...next, needsFullSync: true });
-    await updateLink(db, companyId, 'business', { ...next, status: 'syncing', error: '' });
-    Object.assign(token, next, { needsFullSync: true });
+  if (!next) {
+    const count = await fullSync(deps, ctx, 'business', token, api);
+    return { ok: true, calendarName: token.calendarName, count: count ?? 0 };
   }
-  const count = await fullSync(deps, ctx, 'business', token, api);
+  if (next === 'new') {
+    const cal = await createAppCalendar(api, { kind: 'business', short: ctx.company.short, timeZone: ctx.company.timeZone, appUrl: deps.appUrl });
+    next = { calendarId: cal.id, calendarName: cal.summary, appCalendar: true };
+  }
+  // The schedule is copied to the new calendar first. The app's events come off the old one (deleted if the app made
+  // it and it's empty now) only once that worked, so a calendar Google won't let the app write to leaves everything
+  // where it was.
+  const was = { calendarId: token.calendarId, calendarName: token.calendarName || '', appCalendar: token.appCalendar === true };
+  const point = async (cal, status) => {
+    await tokenRef(db, companyId, 'business').update({ ...cal, needsFullSync: true });
+    await updateLink(db, companyId, 'business', { ...cal, status, error: '' });
+    Object.assign(token, cal, { needsFullSync: true });
+  };
+  await point(next, 'syncing');
+  let count;
+  try {
+    count = await fullSync(deps, ctx, 'business', token, api);
+  } catch (e) {
+    deps.logger.warn('Calendar choose: the new calendar didn\'t take the schedule, so it stays on the old one', { error: e.message });
+    await clearCalendar(deps, api, next.calendarId, { companyId, deleteIfEmpty: next.appCalendar === true });
+    await point(was, 'syncing');
+    // Back on the old calendar, which still has the schedule; a full sync catches up on changes made meanwhile.
+    await fullSync(deps, ctx, 'business', token, api).catch(() => {}); // a problem there shows on the link
+    if (e instanceof GoogleError && ['scope', 'forbidden'].includes(e.kind)) throw new HttpsError('failed-precondition', MESSAGES.cantUseCalendar);
+    throw e;
+  }
+  await clearCalendar(deps, api, was.calendarId, { companyId, deleteIfEmpty: was.appCalendar });
   return { ok: true, calendarName: token.calendarName, count: count ?? 0 };
 }
 
