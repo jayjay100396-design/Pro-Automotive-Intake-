@@ -13,6 +13,7 @@ import {
   paymentsCard, mountPaymentsCard, paidFields, frozen, lockNote,
 } from './billing.js';
 import { fileBrowser, countJobFiles } from './files.js';
+import { alertEmails, parseEmails, lastAlertNote, MAX_ALERT_EMAILS } from './requests.js';
 import { DRAFT_KEY } from './takeoff/takeoff.js';
 
 // The schedule's cards on the dashboard and job pages, and the Google Calendar panel in Settings.
@@ -1083,6 +1084,12 @@ export function settings() {
     <div class="card"><h2>Website quote requests</h2>
       <p class="small">Customers can ask for a quote at <a href="${esc(siteLink())}" target="_blank" rel="noopener">${esc(siteLink())}</a>, with photos or plans. Link to it from your website or send it to customers. What they send shows up under <a href="#/requests">Requests</a>. Change the page's photos on the <a href="#/website">Website</a> page.</p>
       <div id="site" class="row"><span class="muted small">Checking…</span></div>
+      <form id="alerts" class="row top-gap">
+        <label class="grow">Email each new request to <input name="emails" inputmode="email" autocomplete="off" value="${esc(alertEmails(c).join(', '))}" placeholder="Nobody (no emails)" ${ro}></label>
+        ${can.manage() ? '<label>&nbsp;<button class="btn primary">Save</button></label>' : ''}
+      </form>
+      <p class="hint">The email has the customer's details and photos, and replying to it answers the customer. Separate up to ${MAX_ALERT_EMAILS} addresses with commas, or leave it blank for no emails.${can.manage() ? '' : ' Only the owner can change this.'}</p>
+      ${lastAlertNote() ? `<p class="small muted">${lastAlertNote()}</p>` : ''}
     </div>
     <div class="card"><h2>Your account</h2>
       <p>${esc(u.displayName || '')} ${esc(u.email || u.phoneNumber || '')}<br><span class="muted small">Role: ${esc(state.role)} · signed in with ${esc(u.providerData.map((p) => ({ 'google.com': 'Google', password: 'email and password', phone: 'phone' }[p.providerId] || p.providerId)).join(', '))}</span></p>
@@ -1108,6 +1115,14 @@ export function settings() {
       root.querySelector('#f').addEventListener('submit', async (e) => {
         e.preventDefault();
         await attempt(() => updateCompany(formData(e.target)), 'Company saved');
+      });
+      root.querySelector('#alerts').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const { emails, bad } = parseEmails(e.target.emails.value);
+        if (bad.length) { toast(`${bad[0]} isn't an email address.`, true); return; }
+        if (emails.length > MAX_ALERT_EMAILS) { toast(`That's more than ${MAX_ALERT_EMAILS} addresses.`, true); return; }
+        const ok = emails.length ? `New requests will be emailed to ${emails.join(', ')}` : 'New requests won\'t be emailed';
+        if (await attempt(() => updateCompany({ requestAlertEmails: emails }), ok) !== null) e.target.emails.value = emails.join(', ');
       });
       mountTeam(root);
       mountPaymentsSettings(root);
