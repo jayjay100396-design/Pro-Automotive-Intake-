@@ -266,8 +266,9 @@ const GIVE_BACK = 'To give money back, open the invoice in Stripe and issue a cr
 // used on it (less a balance they owed that it added) and what credit notes took off before payment.
 const stripeBilled = (st) => n(st.amountDue) + n(st.balanceApplied) + n(st.preCredited);
 
-// What a deposit or final invoice from a proposal is figured from, for each of the proposal's earlier invoices.
-const priorSig = (i) => (i ? JSON.stringify([s(i.status), s(i.kind), billedOn(i), invoiceTotals(i).total, payable(i.stripe), stripeBilled(i.stripe || {})]) : 'gone');
+// What a deposit or final invoice from a proposal is figured from, for each of the proposal's earlier invoices
+// (its number too, which a final invoice's credit lines name).
+const priorSig = (i) => (i ? JSON.stringify([s(i.status), s(i.kind), s(i.number), billedOn(i), invoiceTotals(i).total, payable(i.stripe), stripeBilled(i.stripe || {})]) : 'gone');
 
 // Paid through Stripe for real, or out for payment on a live Stripe invoice: the bill stays as it is
 // (firestore.rules), so its form is locked. A test-mode one isn't real money.
