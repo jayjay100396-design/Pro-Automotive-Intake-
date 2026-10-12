@@ -10,6 +10,9 @@ rules_version = '2';
 //   companies/{companyId}/requests/{requestId} quote requests sent from the public page (quote.html)
 //   companies/{companyId}/suppliers/{id}       who the business buys from (Suppliers)
 //   companies/{companyId}/partsRequests/{id}   quote requests and orders to suppliers, and where they stand
+//   companies/{companyId}/events/{eventId}     the schedule: appointments, installs, tasks, time off
+//   companies/{companyId}/calendarLinks/{id}   Google Calendar connections (only the server writes them)
+//   companies/{companyId}/calendarTokens/{id}  their Google access (server only, nobody else reads it)
 //   sites/{siteId}                             which business the public page sends requests to
 //   sites/{siteId}/photos/{photoId}            photos the business put on the public page
 //   users/{uid}                                a signed-in user's own profile
@@ -57,9 +60,9 @@ service cloud.firestore {
         || (isBillingCollection(collection) && hasRole(companyId, ['accountant']));
     }
 
-    // Business records. members, invites, requests, files, suppliers and partsRequests have their own rules below.
+    // Business records. members, invites, requests, files, suppliers, partsRequests and the schedule have their own rules below.
     function isRecord(collection) {
-      return !(collection in ['members', 'invites', 'requests', 'files', 'suppliers', 'partsRequests']);
+      return !(collection in ['members', 'invites', 'requests', 'files', 'suppliers', 'partsRequests', 'events', 'calendarLinks', 'calendarTokens']);
     }
 
     function invitePath(companyId, inviteId) {
@@ -114,6 +117,83 @@ service cloud.firestore {
     function keepsFileOrigin() {
       return !request.resource.data.diff(resource.data).affectedKeys()
         .hasAny(['path', 'url', 'thumbPath', 'thumbUrl', 'createdBy', 'createdAt', 'drive']);
+    }
+
+    // ---------- Schedule ----------
+    //
+    // companies/{companyId}/events/{eventId}: one site measure, install, meeting, delivery, task, time off or other
+    // event (public/js/schedule.js; dates, repeats and reminders in public/js/when.js).
+    //   type, title (1-200), allDay, start and end ('YYYY-MM-DD' all day, the end being the last day; otherwise
+    //   'YYYY-MM-DDTHH:MM' in the business's time zone, tz), repeat (''|weekly|monthly|yearly), repeatUntil,
+    //   jobId, customerId, location, assignees (up to 20 member uids), reminders (up to 5, minutes before),
+    //   notes, done, doneAt, lastDone, canceled, ref ({ path: an app link like '#/parts/x', label }),
+    //   createdBy, createdByName, createdAt, updatedBy, updatedAt.
+    // The calendarSync Cloud Function copies events to Google Calendar (functions-calendar/), with its own access.
+    // Owners, admins and staff schedule anything. The accountant adds tasks and meetings of their own, and ticks off
+    // tasks they're on. Owners and admins delete any event, staff the ones they added, and the accountant none.
+
+    function isDay(v) {
+      return v is string && v.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+    }
+
+    function isDayTime(v) {
+      return v is string && v.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}');
+    }
+
+    // Up to 5 reminders, each a whole number of minutes before the start, up to four weeks.
+    function isReminders(r) {
+      return r is list && r.size() <= 5
+        && (r.size() < 1 || isReminder(r[0])) && (r.size() < 2 || isReminder(r[1]))
+        && (r.size() < 3 || isReminder(r[2])) && (r.size() < 4 || isReminder(r[3]))
+        && (r.size() < 5 || isReminder(r[4]));
+    }
+
+    function isReminder(m) {
+      return m is int && m >= 0 && m <= 40320;
+    }
+
+    // Shown as a link in the app, so only a link to one of the app's own pages.
+    function isEventRef(r) {
+      return r is map && r.keys().hasOnly(['path', 'label'])
+        && r.path is string && r.path.matches('#/[A-Za-z0-9/_?=&.-]{1,198}')
+        && isText(r.get('label', ''), 0, 120);
+    }
+
+    function isValidEvent(d) {
+      return d.keys().hasOnly(['type', 'title', 'allDay', 'start', 'end', 'tz', 'repeat', 'repeatUntil', 'jobId',
+          'customerId', 'location', 'assignees', 'reminders', 'notes', 'done', 'doneAt', 'lastDone', 'canceled', 'ref',
+          'createdBy', 'createdByName', 'createdAt', 'updatedBy', 'updatedAt'])
+        && d.keys().hasAll(['type', 'title', 'allDay', 'start', 'end', 'tz', 'createdBy', 'createdAt'])
+        && d.type in ['measure', 'install', 'meeting', 'delivery', 'task', 'timeoff', 'other']
+        && isText(d.title, 1, 200)
+        && d.allDay is bool
+        && ((d.allDay && isDay(d.start) && isDay(d.end) && d.end >= d.start)
+          || (!d.allDay && isDayTime(d.start) && isDayTime(d.end) && d.end > d.start))
+        && isText(d.tz, 1, 64)
+        && d.get('repeat', '') in ['', 'weekly', 'monthly', 'yearly']
+        && (d.get('repeatUntil', '') == '' || isDay(d.repeatUntil))
+        && isText(d.get('jobId', ''), 0, 64)
+        && isText(d.get('customerId', ''), 0, 64)
+        && isText(d.get('location', ''), 0, 300)
+        && d.get('assignees', []) is list && d.get('assignees', []).size() <= 20
+        && isReminders(d.get('reminders', []))
+        && isText(d.get('notes', ''), 0, 4000)
+        && d.get('done', false) is bool
+        && (d.get('doneAt', null) == null || d.doneAt is timestamp)
+        && (d.get('lastDone', '') == '' || isDay(d.lastDone))
+        && d.get('canceled', false) is bool
+        && (!('ref' in d) || isEventRef(d.ref))
+        && isText(d.get('createdByName', ''), 0, 100)
+        && isText(d.get('updatedBy', ''), 0, 128);
+    }
+
+    // What the accountant may change on a task they're on but didn't add: ticking it off, which moves a repeating
+    // task on to a later date. The dates of a task that doesn't repeat stay as they are.
+    function isTickOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['done', 'doneAt', 'lastDone', 'start', 'end', 'updatedBy', 'updatedAt'])
+        && ((request.resource.data.start == resource.data.start && request.resource.data.end == resource.data.end)
+          || (resource.data.get('repeat', '') != '' && request.resource.data.start > resource.data.start));
     }
 
     // A user's own profile. Nobody else can read or write it.
@@ -418,6 +498,41 @@ service cloud.firestore {
           && isValidPartsRequest(request.resource.data)
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['appEmail', 'createdBy', 'createdAt']);
         allow delete: if canManage(companyId);
+      }
+
+      // The schedule (see the note with the schedule checks above).
+      match /events/{eventId} {
+        allow read: if isMember(companyId);
+        allow create: if isValidEvent(request.resource.data)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && (canEdit(companyId)
+            || (hasRole(companyId, ['accountant']) && request.resource.data.type in ['task', 'meeting']));
+        allow update: if isValidEvent(request.resource.data)
+          && unchanged('createdBy') && unchanged('createdAt')
+          && request.resource.data.get('updatedAt', null) == request.time
+          && (canEdit(companyId)
+            || (hasRole(companyId, ['accountant'])
+              && resource.data.createdBy == request.auth.uid
+              && resource.data.type in ['task', 'meeting']
+              && request.resource.data.type in ['task', 'meeting'])
+            || (hasRole(companyId, ['accountant'])
+              && resource.data.type == 'task'
+              && request.auth.uid in resource.data.get('assignees', [])
+              && isTickOnly()));
+        allow delete: if canManage(companyId)
+          || (canEdit(companyId) && resource.data.createdBy == request.auth.uid);
+      }
+
+      // Google Calendar connections: each one's state, for the app to show. Only the Cloud Function writes them.
+      match /calendarLinks/{linkId} {
+        allow read: if isMember(companyId);
+        allow write: if false;
+      }
+
+      // Their Google access. Only the Cloud Function, with its own access, ever reads or writes these.
+      match /calendarTokens/{linkId} {
+        allow read, write: if false;
       }
 
       match /{collection}/{docId} {

@@ -8,6 +8,18 @@
   },
   "functions": [
     {
+      "source": "functions-calendar",
+      "codebase": "calendar",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "*-debug.log",
+        "firebase-debug.*.log",
+        "*.local",
+        "test"
+      ]
+    },
+    {
       "source": "functions-alerts",
       "codebase": "alerts",
       "ignore": [

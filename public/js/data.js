@@ -4,6 +4,8 @@ import { SITE_ID } from './brand.js';
 import {
   doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection, onSnapshot, writeBatch, serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import { query, where as fwhere } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import { addDays, nowIn } from './when.js';
 
 export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices', 'requests', 'suppliers', 'partsRequests'];
 
@@ -13,7 +15,8 @@ export const state = {
   companyId: null,
   company: null,
   role: null,
-  data: Object.fromEntries(COLLECTIONS.map((c) => [c, []])),
+  // Schedule events are in data.events too, but only recent and coming ones (see watchEvents).
+  data: { ...Object.fromEntries(COLLECTIONS.map((c) => [c, []])), events: [] },
 };
 
 const listeners = new Set();
@@ -62,6 +65,34 @@ function watchCompany() {
       emit();
     }, (err) => console.error(c, err)));
   }
+  watchEvents(id);
+}
+
+// How far back the schedule keeps events loaded. Older ones load when someone pages back to them (schedule.js).
+export const EVENT_DAYS_BACK = 92;
+
+// Schedule events: everything from three months ago on, plus every open task (however overdue) and every
+// repeating event (a weekly meeting may have started years ago). The whole history could get long.
+function watchEvents(id) {
+  const events = collection(db, 'companies', id, 'events');
+  const parts = {};
+  // The same event can be in more than one list for a moment while they catch up; keep its newest copy.
+  const newest = (e) => e.updatedAt?.toMillis?.() || e.createdAt?.toMillis?.() || 0;
+  const merge = () => {
+    const all = new Map();
+    for (const list of Object.values(parts)) {
+      for (const e of list) if (!all.has(e.id) || newest(e) >= newest(all.get(e.id))) all.set(e.id, e);
+    }
+    state.data.events = [...all.values()];
+    emit();
+  };
+  const watch = (key, q) => unsubs.push(onSnapshot(q, (snap) => {
+    parts[key] = snap.docs.map((d) => ({ id: d.id, ...d.data({ serverTimestamps: 'estimate' }) }));
+    merge();
+  }, (err) => console.error('events', key, err)));
+  watch('recent', query(events, fwhere('start', '>=', addDays(nowIn().date, -EVENT_DAYS_BACK))));
+  watch('open', query(events, fwhere('type', '==', 'task'), fwhere('done', '==', false)));
+  watch('repeat', query(events, fwhere('repeat', 'in', ['weekly', 'monthly', 'yearly'])));
 }
 
 export function stopWatching() {
@@ -69,6 +100,7 @@ export function stopWatching() {
   unsubs = [];
   state.companyId = null; state.company = null; state.role = null;
   for (const c of COLLECTIONS) state.data[c] = [];
+  state.data.events = [];
 }
 
 const col = (c) => collection(db, 'companies', state.companyId, c);

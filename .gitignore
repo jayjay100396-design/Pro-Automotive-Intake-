@@ -1,6 +1,9 @@
 node_modules/
 .firebase/
 *-debug.log
+# Local settings for the calendar functions' emulator (CALENDAR_SETUP.md)
+functions-calendar/.env.local
+functions-calendar/.secret.local
 # Local emulator secrets, and the emails the fake mail server saved (EMAIL_ALERTS.md)
 functions-alerts/.secret.local
 functions-alerts/.env.local

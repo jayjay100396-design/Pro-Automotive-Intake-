@@ -7,8 +7,10 @@ import * as V from './views.js';
 import * as P from './print.js';
 import * as R from './requests.js';
 import * as PT from './parts.js';
-import * as S from './suppliers.js';
+import * as SP from './suppliers.js';
+import * as S from './schedule.js';
 import { websitePage } from './website.js';
+import { takeoffPage } from './takeoff/page.js';
 import { esc, toast } from './ui.js';
 import { BRAND, logoHtml } from './brand.js';
 
@@ -16,6 +18,8 @@ const root = document.getElementById('app');
 
 const routes = [
   [/^$/, () => V.dashboard()],
+  [/^schedule$/, (m, q) => S.schedulePage(q)],
+  [/^schedule\/([^/]+)$/, (m, q) => S.eventEdit(m[1], q)],
   [/^requests$/, () => R.requestList()],
   [/^requests\/([^/]+)$/, (m) => R.requestView(m[1])],
   [/^customers$/, () => V.customers()],
@@ -23,6 +27,7 @@ const routes = [
   [/^jobs$/, () => V.jobs()],
   [/^jobs\/([^/]+)$/, (m, q) => V.jobEdit(m[1], q)],
   [/^files$/, (m, q) => V.filesPage(q)],
+  [/^takeoff\/([^/]+)$/, (m, q) => takeoffPage(m[1], q)],
   [/^estimates$/, () => V.estimates()],
   [/^estimates\/([^/]+)\/print$/, (m) => P.estimateDoc(m[1])],
   [/^estimates\/([^/]+)$/, (m, q) => V.estimateEdit(m[1], q)],
@@ -38,17 +43,18 @@ const routes = [
   [/^invoices\/([^/]+)$/, (m, q) => V.invoiceEdit(m[1], q)],
   [/^parts$/, (m, q) => PT.partsList(q)],
   [/^parts\/([^/]+)$/, (m, q) => PT.partsEdit(m[1], q)],
-  [/^suppliers$/, () => S.supplierList()],
-  [/^suppliers\/([^/]+)$/, (m, q) => S.supplierEdit(m[1], q)],
+  [/^suppliers$/, () => SP.supplierList()],
+  [/^suppliers\/([^/]+)$/, (m, q) => SP.supplierEdit(m[1], q)],
   [/^website$/, () => websitePage()],
   [/^settings$/, () => V.settings()],
 ];
 
-const NAV = [['', 'Dashboard'], ['requests', 'Requests'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates'], ['contracts', 'Contracts'], ['payapps', 'Pay apps'], ['invoices', 'Invoices'], ['parts', 'Parts orders'], ['suppliers', 'Suppliers'], ['website', 'Website'], ['settings', 'Settings']];
+const NAV = [['', 'Dashboard'], ['schedule', 'Schedule'], ['requests', 'Requests'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates'], ['contracts', 'Contracts'], ['payapps', 'Pay apps'], ['invoices', 'Invoices'], ['parts', 'Parts orders'], ['suppliers', 'Suppliers'], ['website', 'Website'], ['settings', 'Settings']];
 
 // Sidebar groups: [label, [[section, link text, icon]]]. Icons are 24px stroke paths.
 const ICONS = {
   '': '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+  schedule: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/>',
   requests: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   jobs: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
   files: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
@@ -63,7 +69,7 @@ const ICONS = {
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
 };
 const GROUPS = [
-  ['Management', [['', 'Dashboard'], ['requests', 'Requests'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates']]],
+  ['Management', [['', 'Dashboard'], ['schedule', 'Schedule'], ['requests', 'Requests'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates']]],
   ['Billing & contracts', [['contracts', 'Contracts'], ['payapps', 'Pay apps (G702)'], ['invoices', 'Invoices']]],
   ['Suppliers & parts', [['parts', 'Parts orders'], ['suppliers', 'Suppliers']]],
   ['Admin', [['website', 'Website'], ['settings', 'Settings']]],
@@ -71,6 +77,7 @@ const GROUPS = [
 // One line under each list page's title.
 const SUBTITLES = {
   '': 'Open bids, active jobs and money owed at a glance.',
+  schedule: 'Site measures, installs, deliveries, tasks and who is on each one.',
   requests: 'Quote requests from the website, ready to turn into jobs.',
   jobs: 'Storefront and shower jobs, from lead to closeout.',
   files: 'Photos, plans and paperwork for every job.',
@@ -152,6 +159,8 @@ function updateCounts() {
     el.textContent = text ?? String(n);
     el.className = `nav-count ${cls}${n ? '' : ' hidden'}`;
   };
+  const sched = S.scheduleCount();
+  set('schedule', sched.n, sched.text, sched.cls);
   set('requests', R.newRequestCount(), null, 'accent');
   set('jobs', d.jobs.filter((j) => !['complete', 'closed'].includes(j.status)).length);
   set('estimates', d.estimates.filter((e) => ['draft', 'sent'].includes(e.status)).length, null, 'accent');
@@ -173,6 +182,7 @@ function route() {
   const el = document.getElementById('view');
   el.innerHTML = view.html;
   el.classList.toggle('print-view', !!view.title);
+  el.classList.toggle('wide-view', !!view.wide);
   view.mount?.(el);
   document.title = `${view.title || NAV.find(([h]) => path.split('/')[0] === h)?.[1] || 'Stellar Glass'} · Stellar Glass`;
   const section = path.split('/')[0];
