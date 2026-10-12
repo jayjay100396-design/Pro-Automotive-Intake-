@@ -45,6 +45,7 @@ function emptyState() {
     idp: { status: 200, enabled: true, withSecret: true }, // Firebase Auth's Google provider settings
     pageSize: 1000, // the most items one page of a list holds (lower it to test paging)
     emptyFirstPages: 0, // how many event lists start with an empty page that has more after it (Google may do that)
+    extendedFilters: 'and', // 'or': a repeated privateExtendedProperty matches any one of them (one of Google's docs says so)
     seq: 0,
   };
 }
@@ -247,10 +248,11 @@ function listEvents(state, cal, query) {
   }
   let items = [...eventsOf(state, cal.id).values()];
   if (query.get('showDeleted') !== 'true') items = items.filter((e) => e.status !== 'cancelled');
-  for (const p of query.getAll('privateExtendedProperty')) {
+  const wanted = query.getAll('privateExtendedProperty').map((p) => {
     const [key, ...rest] = p.split('=');
-    items = items.filter((e) => e.extendedProperties?.private?.[key] === rest.join('='));
-  }
+    return (e) => e.extendedProperties?.private?.[key] === rest.join('=');
+  });
+  if (wanted.length) items = items.filter((e) => (state.extendedFilters === 'or' ? wanted.some((w) => w(e)) : wanted.every((w) => w(e))));
   if (query.get('timeMin')) {
     const min = Date.parse(query.get('timeMin'));
     items = items.filter((e) => endMs(e) > min);

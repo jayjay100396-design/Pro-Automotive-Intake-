@@ -11,11 +11,12 @@ export const MESSAGES = {
   ownerOnly: 'Only the business owner can change the business calendar.',
   businessOnly: 'Only the business calendar can use one of your own Google calendars.',
   othersCalendar: 'Only the owner or an admin can disconnect someone else\'s calendar.',
+  cantUseCalendar: 'Google didn\'t let the app add events to that calendar, so the schedule stays where it was. Pick a calendar you made yourself.',
   adminsCalendar: 'Only the business owner can disconnect the owner\'s or an admin\'s calendar.',
   businessDisconnect: 'Only the business owner, or the person who connected it, can disconnect the business calendar.',
   noCode: 'Google didn\'t send a sign-in code. Press Connect to try again.',
   codeRejected: 'Google didn\'t accept the sign-in. Press Connect to try again.',
-  calendarNotAllowed: 'Google Calendar access wasn\'t allowed. Try again and leave the calendar box ticked.',
+  calendarNotAllowed: 'Google Calendar access wasn\'t allowed. Press Connect again and tick the Google Calendar box on Google\'s screen.',
   noEmail: 'Google didn\'t share the account\'s email address. Press Connect to try again.',
   noLastingAccess: 'Google didn\'t give lasting access. Press Connect once more.',
   // Not a sentence: the app checks for it and asks for the extra permission to see the owner's calendars.

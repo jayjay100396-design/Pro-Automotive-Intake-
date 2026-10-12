@@ -213,6 +213,46 @@ describe('Calendar account (with the Firestore emulator)', function () {
     assert.deepEqual(fake.state.revoked, [], 'kept, since another business might use it');
   });
 
+  it('hands back new lasting access that wasn\'t saved, unless another link uses the same Google account', async () => {
+    const noIndex = new Proxy(bed.db, {
+      get(target, key) {
+        if (key === 'collectionGroup') return () => { throw Object.assign(new Error('9 FAILED_PRECONDITION: The query requires an index.'), { code: 9 }); };
+        const value = target[key];
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const makeCalendar = /\/calendars$/;
+    // Making the calendar fails after Google gave a refresh token: it goes back, so the next Connect gets a new one.
+    fake.fail({ method: 'POST', path: makeCalendar, status: 500 });
+    await assert.rejects(co.connect('jason', 'business'), httpsError('unavailable', MESSAGES.unavailable));
+    assert.deepEqual(fake.state.revoked.map((x) => x.email), ['jason@example.com']);
+    assert.ok(fake.grantsOf('jason@example.com').every((g) => g.revoked));
+    assert.equal(await co.token('business'), undefined);
+    assert.equal(await co.link('business'), undefined);
+    assert.equal((await co.connect('jason', 'business')).ok, true, 'the next try works');
+
+    // Kept when another link holds the same account's access: handing it back would end that link's access too.
+    fake.state.revoked.length = 0;
+    fake.fail({ method: 'POST', path: makeCalendar, status: 500 });
+    await assert.rejects(co.connect('jason', 'personal'), httpsError('unavailable'));
+    assert.deepEqual(fake.state.revoked, []);
+    assert.deepEqual(await co.write('e1', {}), { business: 'written' });
+
+    // Another business holds it.
+    const other = business(bed, 'caltest-b');
+    await other.seed({ name: 'Reed Glass Repair' });
+    fake.fail({ method: 'POST', path: makeCalendar, status: 500 });
+    await assert.rejects(other.connect('jason', 'business'), httpsError('unavailable'));
+    assert.deepEqual(fake.state.revoked, []);
+
+    // And kept when other businesses can't be checked.
+    await co.call('jason', { action: 'disconnect', kind: 'business' });
+    fake.state.revoked.length = 0;
+    fake.fail({ method: 'POST', path: makeCalendar, status: 500 });
+    await assert.rejects(handleAccountCall({ ...bed.deps(), db: noIndex, auth: { uid: 'jason' }, data: { companyId: co.companyId, action: 'connect', kind: 'business', code: 'emulator:jason@example.com' } }), httpsError('unavailable'));
+    assert.deepEqual(fake.state.revoked, []);
+  });
+
   it('asks for the extra permission to keep one of the owner\'s own calendars when connecting again', async () => {
     const main = 'jason@example.com';
     await co.connect('jason', 'business', 'emulator:jason@example.com:pick');
@@ -313,6 +353,64 @@ describe('Calendar account (with the Firestore emulator)', function () {
     // Asking for a new one again changes nothing.
     await co.call('jason', { action: 'choose', kind: 'business', calendarId: 'new' });
     assert.equal((await co.link('business')).calendarId, fresh);
+  });
+
+  it('keeps the schedule where it was when the calendar picked won\'t take it', async () => {
+    const work = fake.addCalendar({ owner: 'jason@example.com', summary: 'Work' });
+    await co.put('e1', {});
+    await co.put('e2', at('2026-10-15'));
+    await co.connect('jason', 'business', 'emulator:jason@example.com:pick');
+    const first = (await co.link('business')).calendarId;
+    const refuse = (calendarId) => fake.fail({ method: 'PUT', path: `${calendarId.split('@')[0]}`, status: 403, reason: 'forbidden', message: 'Forbidden', times: 50 });
+
+    refuse(work.id);
+    await assert.rejects(co.call('jason', { action: 'choose', kind: 'business', calendarId: work.id }), httpsError('failed-precondition', MESSAGES.cantUseCalendar));
+    assert.deepEqual(co.appEventsIn(first), ['e1', 'e2'], 'the schedule stays');
+    assert.equal(fake.calendar(first).deleted, false);
+    assert.deepEqual(co.appEventsIn(work.id), []);
+    let link = await co.link('business');
+    assert.deepEqual([link.calendarId, link.appCalendar, link.status, link.error, link.count], [first, true, 'on', '', 2]);
+    assert.equal((await co.token('business')).calendarId, first);
+    assert.ok(bed.logs.some(([level, message]) => level === 'warn' && /didn't take the schedule/.test(message)));
+    fake.state.failures.length = 0;
+    await co.write('e3', at('2026-10-16'));
+    assert.ok(co.inGoogle(first, 'e3'), 'new events still go there');
+
+    // Moving from one of the owner's calendars to a new one the app makes: the new one is deleted again.
+    assert.equal((await co.call('jason', { action: 'choose', kind: 'business', calendarId: work.id })).ok, true);
+    assert.deepEqual(co.appEventsIn(work.id), ['e1', 'e2', 'e3']);
+    fake.fail({ method: 'PUT', path: new RegExp(`/calendars/(?!${work.id.split('@')[0]})[^/]+/events/`), status: 403, reason: 'forbidden', message: 'Forbidden', times: 50 });
+    const before = [...fake.state.calendars.keys()];
+    await assert.rejects(co.call('jason', { action: 'choose', kind: 'business', calendarId: 'new' }), httpsError('failed-precondition', MESSAGES.cantUseCalendar));
+    const made = [...fake.state.calendars.values()].filter((c) => c.owner === 'jason@example.com' && !before.includes(c.id));
+    assert.equal(made.length, 1);
+    assert.equal(made[0].deleted, true, 'the calendar just made is deleted again');
+    assert.deepEqual(co.appEventsIn(work.id), ['e1', 'e2', 'e3']);
+    link = await co.link('business');
+    assert.deepEqual([link.calendarId, link.appCalendar, link.status], [work.id, false, 'on']);
+  });
+
+  it('leaves another business\'s events alone in a calendar both use, however Google reads the tag filters', async () => {
+    // One of Google's docs says a repeated privateExtendedProperty matches any of them, not all.
+    fake.state.extendedFilters = 'or';
+    const other = business(bed, 'caltest-b');
+    await other.seed({ name: 'Reed Glass Repair' });
+    const work = fake.addCalendar({ owner: 'jason@example.com', summary: 'Work' });
+    await co.put('e1', {});
+    await other.put('b1', {});
+    await co.connect('jason', 'business', 'emulator:jason@example.com:pick');
+    await other.connect('jason', 'business', 'emulator:jason@example.com:pick');
+    await co.call('jason', { action: 'choose', kind: 'business', calendarId: work.id });
+    await other.call('jason', { action: 'choose', kind: 'business', calendarId: work.id });
+    assert.deepEqual(co.appEventsIn(work.id), ['b1', 'e1']);
+
+    assert.equal((await co.call('jason', { action: 'resync', kind: 'business' })).ok, true);
+    assert.deepEqual(co.appEventsIn(work.id), ['b1', 'e1'], 'a full sync keeps the other business\'s');
+    await co.call('jason', { action: 'choose', kind: 'business', calendarId: 'new' });
+    assert.deepEqual(co.appEventsIn(work.id), ['b1'], 'moving away takes only this business\'s off');
+    await co.call('jason', { action: 'choose', kind: 'business', calendarId: work.id });
+    await co.call('jason', { action: 'disconnect', kind: 'business' });
+    assert.deepEqual(co.appEventsIn(work.id), ['b1'], 'and so does disconnecting');
   });
 
   it('disconnects a person\'s own calendar but keeps the access the business calendar still uses', async () => {

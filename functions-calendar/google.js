@@ -114,15 +114,21 @@ export function makeClientLoader({
         headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
-    } catch {
+    } catch (e) {
+      logger.warn('Calendar sync: couldn\'t reach Firebase Auth for the Google sign-in settings', { error: e?.message });
       throw new HttpsError('unavailable', MESSAGES.unavailable);
     }
     if (res.status === 401 || res.status === 403) {
-      logger.warn('Calendar sync: reading Firebase Auth\'s Google sign-in settings was refused. The functions\' service account needs the Firebase Authentication Admin role.', { status: res.status });
+      const { reason, message } = await errorDetails(res);
+      logger.warn('Calendar sync: reading Firebase Auth\'s Google sign-in settings was refused. The functions\' service account needs the Firebase Authentication Admin role.', { status: res.status, reason, message });
       throw new HttpsError('failed-precondition', MESSAGES.setupCantRead);
     }
     if (res.status === 404) throw new HttpsError('failed-precondition', MESSAGES.googleSignInOff);
-    if (!res.ok) throw new HttpsError('unavailable', MESSAGES.unavailable);
+    if (!res.ok) {
+      const { reason, message } = await errorDetails(res);
+      logger.warn('Calendar sync: Firebase Auth didn\'t give the Google sign-in settings', { status: res.status, reason, message });
+      throw new HttpsError('unavailable', MESSAGES.unavailable);
+    }
     const cfg = await res.json();
     if (!cfg.enabled || !cfg.clientId) throw new HttpsError('failed-precondition', MESSAGES.googleSignInOff);
     if (!cfg.clientSecret) {
@@ -159,9 +165,9 @@ export async function exchangeCode({ fetch: fetchFn = globalThis.fetch, oauthBas
     throw new GoogleError(`Couldn't reach Google to finish signing in: ${e.message}`, { kind: 'transient' });
   }
   if (!res.ok) {
-    const { reason } = await errorDetails(res);
+    const { reason, message } = await errorDetails(res);
     const kind = res.status === 429 || res.status >= 500 ? 'transient' : (reason === 'invalid_client' || reason === 'unauthorized_client' ? 'client' : 'refused');
-    throw new GoogleError(`Google didn't take the sign-in code: ${res.status} ${reason}`.trim(), { status: res.status, reason, kind });
+    throw new GoogleError(`Google didn't take the sign-in code: ${res.status} ${reason}${message ? `: ${message}` : ''}`.trim(), { status: res.status, reason, kind });
   }
   const body = await res.json();
   return {
