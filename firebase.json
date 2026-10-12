@@ -6,6 +6,9 @@
   "storage": {
     "rules": "storage.rules"
   },
+  "ailogic": {
+    "templates": "prompts"
+  },
   "functions": [
     {
       "source": "functions-calendar",

@@ -8,7 +8,7 @@
     "dev:google": "node functions-calendar/test/fake-google.js",
     "test": "firebase emulators:exec --only firestore,storage --project demo-stellar-glass \"mocha test functions-calendar/test\"",
     "test:calc": "mocha test/calc.test.mjs",
-    "test:takeoff": "mocha test/takeoff.test.mjs",
+    "test:takeoff": "mocha test/takeoff.test.mjs test/vision.test.mjs",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage",
     "deploy": "firebase deploy --only firestore:rules,firestore:indexes,storage,hosting",
     "deploy:calendar": "firebase deploy --only firestore:indexes,functions:calendar:calendarAccount,functions:calendar:calendarSync",
