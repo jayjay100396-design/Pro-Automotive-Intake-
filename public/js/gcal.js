@@ -305,7 +305,7 @@ export function mountCalendarPanel(box, { compact = false } = {}) {
     ];
     return `<div class="gc-picker"><p class="small"><b>Which calendar gets the schedule?</b></p>
       ${rows.map((c) => `<label class="pick-row"><input type="radio" name="gc-cal" value="${esc(c.id)}" ${c.current || (!current && c.id === 'new') ? 'checked' : ''}> ${esc(c.name)}${c.current ? ' <span class="muted small">(now)</span>' : ''}</label>`).join('')}
-      <p class="hint">The app's events are tagged, so it only ever changes or removes its own events, never yours. Switching moves them: they come off the old calendar and go on the new one.</p>
+      <p class="hint">The app's events are tagged, so it only ever changes or removes its own events, never yours. Switching moves them to the calendar you pick.</p>
       <div class="row">${button('data-choose', 'Use this calendar', 'primary')}${button('data-cancel', 'Cancel')}</div></div>`;
   }
 

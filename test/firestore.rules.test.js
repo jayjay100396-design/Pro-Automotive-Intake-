@@ -459,6 +459,100 @@ describe('Firestore rules', function () {
     });
   });
 
+  describe('suppliers and parts orders', () => {
+    const { serverTimestamp, arrayUnion } = require('firebase/firestore');
+    const supplier = (over = {}) => ({
+      name: 'Trulite Glass & Aluminum Solutions', plugin: 'trulite', branch: 'Plant City', branchAddress: '4106 Rice Road, Plant City, FL 33566',
+      branchPhone: '(863) 323-2548', contactName: 'Pat', emails: ['pat@trulite.example'], cc: [], phone: '', account: 'STE-1001',
+      website: 'https://www.trulite.com', kind: 'quote', listType: 'parts', delivery: 'site', notes: '', createdAt: serverTimestamp(), createdBy: 'wes', ...over,
+    });
+    const parts = (by, over = {}) => ({
+      number: 1, jobId: 'j1', supplierId: 's1', status: 'draft', kind: 'quote', listType: 'parts',
+      items: [{ heading: 'Stock lengths' }, { qty: 5, unit: 'S/L', partNo: 'CG451-1', desc: 'Head/jamb', got: 0 }], attachments: [],
+      events: [{ at: '2026-10-11T21:00:00.000Z', status: 'draft', note: 'Started', by: 'Crew' }], createdAt: serverTimestamp(), createdBy: by, ...over,
+    });
+    const s = (f, id = 's1') => doc(f, `companies/stellar/suppliers/${id}`);
+    const pr = (f, id = 'p1') => doc(f, `companies/stellar/partsRequests/${id}`);
+
+    it('lets the owner and admins choose who parts requests are emailed to', async () => {
+      await assertSucceeds(setDoc(s(db('wes')), supplier()));
+      await assertSucceeds(setDoc(s(db('admin1'), 's2'), supplier({ name: 'C.R. Laurence (CRL)', plugin: 'crl', createdBy: 'admin1' })));
+      await assertSucceeds(updateDoc(s(db('admin1')), { emails: ['orders@trulite.example', 'pat@trulite.example'], updatedAt: serverTimestamp() }));
+      // Staff and the accountant see suppliers, but can't add one or change where the emails go.
+      for (const uid of ['crew', 'cpa']) {
+        await assertSucceeds(getDoc(s(db(uid))));
+        await assertSucceeds(getDocs(collection(db(uid), 'companies/stellar/suppliers')));
+        await assertFails(setDoc(s(db(uid), 's3'), supplier({ createdBy: uid })));
+        await assertFails(updateDoc(s(db(uid)), { emails: ['me@example.com'] }));
+        await assertFails(deleteDoc(s(db(uid))));
+      }
+      await assertFails(getDoc(s(db('bob'))));
+      await assertFails(setDoc(doc(db('bob'), 'companies/stellar/suppliers/s4'), supplier({ createdBy: 'bob' })));
+      // Shape.
+      const w = db('wes');
+      await assertFails(setDoc(s(w, 'x1'), supplier({ name: '' })));
+      await assertFails(setDoc(s(w, 'x2'), supplier({ name: 'x'.repeat(121) })));
+      await assertFails(setDoc(s(w, 'x3'), supplier({ emails: ['1@x.co', '2@x.co', '3@x.co', '4@x.co', '5@x.co', '6@x.co'] })));
+      await assertFails(setDoc(s(w, 'x4'), supplier({ emails: 'pat@trulite.example' })));
+      await assertFails(setDoc(s(w, 'x5'), supplier({ cc: ['1@x.co', '2@x.co', '3@x.co', '4@x.co', '5@x.co', '6@x.co'] })));
+      await assertFails(setDoc(s(w, 'x6'), supplier({ account: 'x'.repeat(41) })));
+      await assertFails(setDoc(s(w, 'x7'), supplier({ notes: 'x'.repeat(1001) })));
+      await assertFails(setDoc(s(w, 'x8'), supplier({ bcc: ['someone@example.com'] })));
+      // Nothing hides under a supplier, out of these rules' reach.
+      await assertFails(setDoc(doc(w, 'companies/stellar/suppliers/s1/contacts/c1'), { email: 'x@example.com' }));
+      await assertFails(deleteDoc(s(db('crew'))));
+      await assertSucceeds(deleteDoc(s(db('admin1'))));
+    });
+
+    it('lets the team write parts requests, and only the server note how its email went', async () => {
+      const crew = db('crew');
+      await assertSucceeds(setDoc(pr(crew), parts('crew')));
+      await assertSucceeds(updateDoc(pr(crew), {
+        status: 'quoted', quoteRef: 'Q-7731', quoteTotal: 1840.5, quotedOn: '2026-10-14', updatedAt: serverTimestamp(),
+        events: arrayUnion({ at: '2026-10-14T13:00:00.000Z', status: 'quoted', note: 'Quote #Q-7731', by: 'Crew' }),
+      }));
+      await assertSucceeds(updateDoc(pr(db('wes')), { status: 'ordered', kind: 'order', orderedOn: '2026-10-15', lastEmail: { what: 'order', via: 'gmail', at: '2026-10-15T12:00:00Z' } }));
+      // The accountant can follow orders but not change them.
+      await assertSucceeds(getDoc(pr(db('cpa'))));
+      await assertSucceeds(getDocs(collection(db('cpa'), 'companies/stellar/partsRequests')));
+      await assertFails(setDoc(pr(db('cpa'), 'p2'), parts('cpa')));
+      await assertFails(updateDoc(pr(db('cpa')), { status: 'received' }));
+      await assertFails(getDoc(pr(db('bob'))));
+      // Who started it is who's signed in, and stays put.
+      await assertFails(setDoc(pr(crew, 'p3'), parts('wes')));
+      await assertFails(updateDoc(pr(crew), { createdBy: 'crew2' }));
+      await assertFails(updateDoc(pr(crew), { createdAt: serverTimestamp() }));
+      // How the app's email went is the server's to say (functions-parts/parts-request.js).
+      await assertFails(setDoc(pr(crew, 'p4'), parts('crew', { appEmail: { status: 'sent', sendId: 'x', to: ['a@b.co'] } })));
+      await assertFails(updateDoc(pr(crew), { appEmail: { status: 'sent' } }));
+      await assertFails(updateDoc(pr(db('wes')), { 'appEmail.status': 'failed' }));
+      await env.withSecurityRulesDisabled((ctx) => updateDoc(pr(ctx.firestore()), { appEmail: { status: 'sent', sendId: 'abc12345' } }));
+      await assertSucceeds(updateDoc(pr(crew), { status: 'received', receivedOn: '2026-10-20' }));
+      await assertFails(updateDoc(pr(crew), { appEmail: { status: 'sending', sendId: 'abc12345' } }));
+      // Shape.
+      for (const [i, over] of [
+        { status: 'lost' }, { kind: 'rush' }, { listType: 'photos' }, { items: 'CG451-1' },
+        { items: Array.from({ length: 201 }, () => ({ qty: 1, desc: 'x' })) }, { attachments: Array.from({ length: 11 }, (_, n) => `f${n}`) },
+        { jobId: 'x'.repeat(65) }, { supplierId: 5 },
+      ].entries()) await assertFails(setDoc(pr(crew, `bad${i}`), parts('crew', over)));
+      const { status, ...noStatus } = parts('crew');
+      await assertFails(setDoc(pr(crew, 'bad9'), noStatus));
+      // Nothing hides under a request either.
+      await assertFails(setDoc(doc(crew, 'companies/stellar/partsRequests/p1/lines/l1'), { qty: 1 }));
+      // Staff don't delete requests; the owner and admins do.
+      await assertFails(deleteDoc(pr(crew)));
+      await assertFails(deleteDoc(pr(db('cpa'))));
+      await assertSucceeds(deleteDoc(pr(db('admin1'))));
+    });
+
+    it('keeps the app\'s daily email count to the server', async () => {
+      for (const uid of ['wes', 'crew', 'bob']) {
+        await assertFails(getDoc(doc(db(uid), 'emailUsage/stellar')));
+        await assertFails(setDoc(doc(db(uid), 'emailUsage/stellar'), { day: '2026-10-11', count: 0 }));
+      }
+    });
+  });
+
   it('keeps user profiles private', async () => {
     await assertSucceeds(setDoc(doc(db('wes'), 'users/wes'), { name: 'Wes' }));
     await assertFails(getDoc(doc(db('crew'), 'users/wes')));
