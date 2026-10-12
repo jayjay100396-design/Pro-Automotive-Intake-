@@ -50,13 +50,18 @@ export function stripeItems(inv) {
   return { items, totalCents: toCents(t.total) };
 }
 
-// What's been paid on a bill: what Stripe collected when it was paid through Stripe (the bill may
-// have been edited after it was sent), its total when marked paid by hand, else any part paid online.
-// What Stripe collected counts credit on the customer's Stripe account that it used on the invoice.
-// Same as paidOn in public/js/calc.js.
-export const paidOn = (inv) => (inv.status === 'paid'
-  ? (inv.stripe?.status === 'paid' && inv.stripe.amountPaid != null ? num(inv.stripe.amountPaid) : invoiceTotals(inv).total)
-  : num(inv.stripe?.amountPaid));
+// Payments recorded on a bill in the app: cash, check or other, each with its amount and date.
+export const recordedPaid = (inv) => round2((inv.payments || []).reduce((s, p) => s + num(p.amount), 0));
+
+// What's been paid on a bill: the payments recorded on it plus what Stripe collected online. Both are
+// amounts kept when they came in, so editing the bill afterwards doesn't change them. A bill marked
+// paid before payments were recorded counts its total. What Stripe collected counts credit on the
+// customer's Stripe account that it used on the invoice. Same as paidOn in public/js/calc.js.
+export function paidOn(inv) {
+  const st = inv.stripe || {};
+  if (inv.payments?.length || (st.status === 'paid' && st.amountPaid != null)) return round2(recordedPaid(inv) + num(st.amountPaid));
+  return inv.status === 'paid' ? invoiceTotals(inv).total : num(st.amountPaid);
+}
 
 // For a bill made from a proposal: the proposal's price, what's been paid on it before this invoice
 // and what's left after it. It goes on the Stripe invoice, so the payment page shows where the job stands.

@@ -92,14 +92,24 @@ service cloud.firestore {
     }
 
     // While its live Stripe invoice can still be paid (open, or marked uncollectible, which Stripe
-    // still takes payment on), an invoice keeps its status and isn't deleted. The app has the Cloud
-    // Function void the Stripe invoice first, so this only stops a stale or offline tab from leaving a
-    // payment link out for a bill marked paid, void or deleted. One with a payment on it can't be
-    // voided, so it stays: it's the record of that payment.
+    // still takes payment on), an invoice stays as it is (only updatedAt changes) and isn't deleted:
+    // the customer is paying the Stripe invoice made from it, so a payment mustn't mark a different bill
+    // paid. To change it, the app has the Cloud Function void the Stripe invoice first; this stops a
+    // stale or offline tab. One with a payment on it can't be voided, so it stays: it's the record of
+    // that payment.
     function payableThroughStripe(collection) {
       return collection == 'invoices' && resource != null
         && resource.data.get('stripe', {}).get('status', '') in ['open', 'uncollectible']
         && resource.data.get('stripe', {}).get('livemode', false) == true;
+    }
+
+    // Payments recorded on an invoice (cash, check or other) are the record of money that came in. The
+    // owner and admins can remove one (say it was entered by mistake); others can only add them.
+    function keepsPayments(companyId, collection) {
+      let before = resource == null ? [] : resource.data.get('payments', []);
+      let after = request.resource.data.get('payments', []);
+      return collection != 'invoices' || canManage(companyId)
+        || (after is list && (before.size() == 0 || (after.size() >= before.size() && after[0:before.size()] == before)));
     }
 
     // ---------- Job files ----------
@@ -511,8 +521,9 @@ service cloud.firestore {
         allow read: if isRecord(collection) && isMember(companyId);
         allow create, update: if isRecord(collection) && canEditCollection(companyId, collection)
           && keepsServerFields()
+          && keepsPayments(companyId, collection)
           && (!paidThroughStripe(collection) || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']))
-          && (!payableThroughStripe(collection) || request.resource.data.get('status', '') == resource.data.get('status', ''));
+          && (!payableThroughStripe(collection) || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']));
         allow delete: if isRecord(collection) && canManage(companyId) && !paidThroughStripe(collection) && !payableThroughStripe(collection);
       }
 

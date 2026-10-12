@@ -5,12 +5,16 @@
 //   status      'creating' | 'open' | 'paid' | 'void' | 'uncollectible' (Stripe's invoice status)
 //   invoiceId   Stripe invoice id; number, hostedUrl (payment page), pdfUrl, amountDue, livemode
 //   amountPaid  what counts as paid on the bill: payments, plus credit on the customer's Stripe account
-//               used on it, less credit notes after payment (refunds or credits). credited is that
-//               credit note total, paidOnline the payments alone, and balanceApplied the customer's
-//               Stripe balance used on it (negative: a balance they owed, added to it)
+//               used on it, less credit notes after payment (refunds or credits) and less any overpayment
+//               (Stripe makes that credit for the customer's next invoice). credited is that credit note
+//               total, paidOnline the payments alone, overpaid the overpayment, and balanceApplied the
+//               customer's Stripe balance used on it (negative: a balance they owed, added to it)
+//   preCredited what credit notes took off before payment (Stripe asks for that much less)
 //   issued      how many Stripe invoices have been finalized for this bill (numbers 1003, 1003-2, ...)
 //   sent        what the Stripe invoice was made from (number, lines, tax, notes, due date, and the job's
 //               name, site and PO), so the app can tell when the bill or its job is edited afterwards
+//   party       who and what it was billed to when it was made (the customer's name, company, address,
+//               phone and email; the job's name, site, PO and architect), for the printed invoice once paid
 //   sentTo, sentAt, error
 //   pending     ids of Stripe invoices a try made that aren't saved here yet, kept from before each is
 //               finalized until the try ends, so a later try can find one whatever happened
@@ -76,14 +80,19 @@ const summary = (s) => ({
 // on their next invoice when it's finalized: Stripe asks for less, or marks it paid outright. A balance
 // they owe is added the same way. That amount counts toward what's paid on the bill, and a void
 // invoice gives it back. A credit note after payment (a refund, or a credit) takes back part of it.
+// A credit note before payment takes that much off what Stripe asks for (preCredited). A customer who
+// pays more than it asks for gets the extra as credit on their Stripe account, which counts on the
+// invoice it's used on, so it doesn't count here too.
 const fromStripe = (si) => {
   const applied = si.status === 'void' || si.ending_balance == null ? 0 : si.ending_balance - (si.starting_balance ?? 0);
   const credited = si.post_payment_credit_notes_amount ?? 0;
+  const overpaid = si.amount_overpaid ?? 0;
   return {
     status: si.status, invoiceId: si.id, number: si.number || null, hostedUrl: si.hosted_invoice_url || null,
     pdfUrl: si.invoice_pdf || null, amountDue: (si.amount_due ?? 0) / 100, livemode: !!si.livemode,
     paidOnline: (si.amount_paid ?? 0) / 100, balanceApplied: applied / 100,
-    amountPaid: Math.max(0, (si.amount_paid ?? 0) + applied - credited) / 100, credited: credited / 100,
+    amountPaid: Math.max(0, (si.amount_paid ?? 0) - overpaid + applied - credited) / 100, credited: credited / 100,
+    preCredited: (si.pre_payment_credit_notes_amount ?? 0) / 100, overpaid: overpaid / 100,
   };
 };
 
@@ -124,6 +133,12 @@ function customerFields(cust, companyId, customerId) {
   if (cust.address) fields.address = { line1: clip(cust.address, 200) };
   return fields;
 }
+
+// Who and what a Stripe invoice bills, as the printed invoice shows them (public/js/print.js party).
+const partyOf = (cust, job) => ({
+  customer: { name: cust.name ?? '', company: cust.company ?? '', address: cust.address ?? '', phone: cust.phone ?? '', email: cust.email ?? '' },
+  job: { name: job.name ?? '', siteAddress: job.siteAddress ?? '', poNumber: job.poNumber ?? '', architect: job.architect ?? '' },
+});
 
 // A fingerprint of what a Stripe invoice is made from: the bill and its job (sentFrom), and who it's to.
 const fingerprint = (sent, cust, companyId, customerId) => createHash('sha256')
@@ -186,14 +201,44 @@ async function proposalStatus(db, companyId, invoiceId, inv) {
   return proposalStatusText({ number: inv.proposalNumber ?? '', price, paidBefore, thisInvoice: invoiceTotals(inv).total });
 }
 
-// Has Stripe email the invoice. A failure here leaves the invoice made, with a note to send it again.
-async function sendEmail(stripe, ref, stripeInvoiceId, email) {
+// Payments recorded in the app (cash, check or other) and Stripe don't mix on one bill.
+const RECORDED = 'Payments are recorded on this invoice in the app, so it can\'t go out with Stripe: Stripe would ask for the whole amount.';
+
+// Has Stripe email the invoice. It's noted as emailed first, in a transaction that checks the bill is
+// still the one to send (still this open Stripe invoice, and check(tx, bill) for one emailed again): a note
+// written after Stripe emailed it could fail and leave it looking unsent, inviting a second email. If
+// Stripe says it couldn't email it, the note is put back. made: the Stripe invoice was just made; a
+// problem then is returned (the invoice is made either way), else it's thrown. Returns a warning or null.
+async function sendEmail({ db, stripe, ref, stripeInvoiceId, email, made = false, check = null }) {
+  const lead = made ? 'Made the Stripe invoice, but ' : '';
+  let before;
+  try {
+    before = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const st = snap.data()?.stripe || {};
+      if (!snap.exists || st.invoiceId !== stripeInvoiceId || st.status !== 'open') {
+        throw new HttpsError('failed-precondition', 'This invoice\'s Stripe invoice changed just now. Reopen the invoice to see where it stands.');
+      }
+      if (check) await check(tx, snap.data());
+      tx.update(ref, { 'stripe.sentTo': email || null, 'stripe.sentAt': new Date(), 'stripe.error': null });
+      return { sentTo: st.sentTo ?? null, sentAt: st.sentAt ?? null };
+    });
+  } catch (e) {
+    const err = friendlyError(e);
+    if (!made) throw err;
+    return `${lead}it wasn't emailed. ${err.message}`;
+  }
   try {
     await stripe.invoices.sendInvoice(stripeInvoiceId);
-    await ref.update({ 'stripe.sentTo': email || null, 'stripe.sentAt': new Date(), 'stripe.error': null });
   } catch (e) {
-    const message = `Made the Stripe invoice, but Stripe couldn't email it. ${friendlyError(e).message}`;
-    await ref.update({ 'stripe.error': message });
+    // No answer from Stripe: it may have emailed it, so it stays noted as emailed rather than invite a second email.
+    if (e?.type === 'StripeConnectionError') {
+      const message = `${made ? 'Made the Stripe invoice, but couldn\'t tell whether Stripe emailed it' : 'Couldn\'t tell whether Stripe emailed this invoice'} (Stripe didn't answer). Check it in Stripe's dashboard before emailing it again.`;
+      await ref.update({ 'stripe.error': message }).catch(() => {});
+      return message;
+    }
+    const message = `${lead}Stripe couldn't email it. ${friendlyError(e).message}`;
+    await ref.update({ 'stripe.sentTo': before.sentTo, 'stripe.sentAt': before.sentAt, 'stripe.error': message }).catch(() => {});
     return message;
   }
   // Stripe's reminders for unpaid invoices (if they're on in its settings) need automatic collection.
@@ -203,7 +248,7 @@ async function sendEmail(stripe, ref, stripeInvoiceId, email) {
     await stripe.invoices.update(stripeInvoiceId, { auto_advance: true });
   } catch (e) {
     const message = `${REMINDERS_OFF} ${friendlyError(e).message} Opening the invoice in the app tries again.`;
-    await ref.update({ 'stripe.error': message });
+    await ref.update({ 'stripe.error': message }).catch(() => {});
     return message;
   }
   return null;
@@ -222,6 +267,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     const prev = inv.stripe || {};
     if (inv.status === 'paid' || prev.status === 'paid') throw new HttpsError('failed-precondition', 'This invoice is already paid.');
     if (inv.status === 'void') throw new HttpsError('failed-precondition', 'This invoice is void.');
+    if (inv.payments?.length) throw new HttpsError('failed-precondition', RECORDED);
     if (prev.status === 'open' && !!prev.livemode === livemode) return { inv, prev, existing: true };
     // A live Stripe invoice that can still be paid stays linked, or its payment couldn't be recorded.
     if (prev.status === 'open' && prev.livemode) {
@@ -236,6 +282,11 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     if (prev.status === 'creating' && claimedAt && now - claimedAt < CLAIM_MS) {
       throw new HttpsError('aborted', 'The Stripe invoice is already being made. Wait a moment, then reopen the invoice.');
     }
+    // Online payments stay off until the owner turns them on in Settings (one already out can still be
+    // emailed again, above).
+    if ((await tx.get(db.doc(`companies/${companyId}`))).data()?.onlinePayments !== true) {
+      throw new HttpsError('failed-precondition', 'Online payments are off. The owner can turn them on in Settings > Online payments.');
+    }
     tx.update(ref, { stripe: { ...prev, status: 'creating', claimedAt: now, error: null } });
     return { inv, prev };
   });
@@ -245,37 +296,57 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
   if (claim.existing) {
     let warning = null;
     if (send) {
-      const { cust, customerId, job } = await billTo(db, companyId, inv);
-      if (!cust?.email) throw new HttpsError('failed-precondition', 'Add an email address for this customer first (Customers page).');
-      const defaultNotes = await defaultNotesOf(db, companyId);
-      // Changed since the Stripe invoice was made (the app hides Email it again then, but another
-      // device may have just changed it): the Stripe invoice still shows the old details.
-      if (prev.sent && JSON.stringify(sentFrom(inv, job, defaultNotes)) !== JSON.stringify(sentFrom(prev.sent, prev.sent.job))) {
-        throw new HttpsError('failed-precondition', 'This invoice changed after its Stripe invoice was made. Void the Stripe invoice and send a new one so the customer sees the changes.');
-      }
-      // A Stripe invoice keeps the customer's email from when it was made, and Stripe emails that
-      // address. If the bill now goes to someone else, or the email changed, it needs a new one.
+      const bill = await billTo(db, companyId, inv);
+      if (!bill.cust?.email) throw new HttpsError('failed-precondition', 'Add an email address for this customer first (Customers page).');
       let si;
+      let customer;
       try {
-        const customer = await ensureCustomer({ db, stripe, livemode, companyId, customerId, cust });
+        customer = await ensureCustomer({ db, stripe, livemode, companyId, customerId: bill.customerId, cust: bill.cust });
         si = await stripe.invoices.retrieve(prev.invoiceId);
-        if ((si.customer?.id ?? si.customer) !== customer) {
-          throw new HttpsError('failed-precondition', 'This invoice now goes to a different customer. Void the Stripe invoice, then send it again.');
-        }
       } catch (e) {
         throw friendlyError(e);
       }
-      if (!sameEmail(si.customer_email, cust.email)) {
-        const to = si.customer_email ? `is addressed to ${si.customer_email}` : 'was made without an email address';
-        throw new HttpsError('failed-precondition', `This Stripe invoice ${to}. Void it and send a new one so it goes to ${String(cust.email).trim()}.`);
+      // Paid, voided or marked uncollectible in Stripe since the app last heard: that's recorded instead.
+      if (si.status !== 'open') {
+        await applyStripeInvoice(db, stripe, si).catch(() => {});
+        throw new HttpsError('failed-precondition', si.status === 'paid' ? 'The customer already paid this Stripe invoice.'
+          : `This Stripe invoice is ${si.status === 'void' ? 'void' : 'marked uncollectible'} now, so it wasn't emailed.`);
       }
-      // It keeps the bill-to name, phone and address from then too.
-      const want = customerFields(cust, companyId, customerId);
-      const same = (a, b) => String(a ?? '').trim() === String(b ?? '').trim();
-      if (!same(si.customer_name, want.name) || !same(si.customer_phone, want.phone) || !same(si.customer_address?.line1, want.address?.line1)) {
-        throw new HttpsError('failed-precondition', 'This customer\'s name, phone or address changed after the Stripe invoice was made. Void it and send a new one so it shows the new details.');
-      }
-      warning = await sendEmail(stripe, ref, prev.invoiceId, si.customer_email);
+      const otherCustomer = () => new HttpsError('failed-precondition', 'This invoice now goes to a different customer. Void the Stripe invoice, then send it again.');
+      if ((si.customer?.id ?? si.customer) !== customer) throw otherCustomer();
+      const mode = livemode ? 'live' : 'test';
+      // Checked against the bill, its job and customer as they're saved when it's noted as emailed, so a
+      // change made meanwhile on another device (or a payment recorded) stops it.
+      const check = async (tx, cur) => {
+        const read = async (path) => (await tx.get(db.doc(`companies/${companyId}${path}`))).data();
+        if (cur.status === 'paid' || cur.status === 'void') throw new HttpsError('failed-precondition', `This invoice was marked ${cur.status}, so it wasn't emailed.`);
+        if (cur.payments?.length) throw new HttpsError('failed-precondition', RECORDED);
+        const job = (cur.jobId && await read(`/jobs/${cur.jobId}`)) || {};
+        const customerId = cur.customerId || job.customerId || null;
+        const cust = customerId ? await read(`/customers/${customerId}`) : null;
+        const defaultNotes = (await read(''))?.invoiceNotes ?? '';
+        if (!cust || customerId !== bill.customerId || (cust.stripeCustomerIds?.[mode] ?? customer) !== customer) throw otherCustomer();
+        if (!cust.email) throw new HttpsError('failed-precondition', 'Add an email address for this customer first (Customers page).');
+        // Changed since the Stripe invoice was made (the app hides Email it again then): the Stripe invoice
+        // still shows the old details.
+        const sent = cur.stripe.sent;
+        if (sent && JSON.stringify(sentFrom(cur, job, defaultNotes)) !== JSON.stringify(sentFrom(sent, sent.job))) {
+          throw new HttpsError('failed-precondition', 'This invoice changed after its Stripe invoice was made. Void the Stripe invoice and send a new one so the customer sees the changes.');
+        }
+        // A Stripe invoice keeps the customer's email from when it was made, and Stripe emails that
+        // address. If the email changed, it needs a new one.
+        if (!sameEmail(si.customer_email, cust.email)) {
+          const to = si.customer_email ? `is addressed to ${si.customer_email}` : 'was made without an email address';
+          throw new HttpsError('failed-precondition', `This Stripe invoice ${to}. Void it and send a new one so it goes to ${String(cust.email).trim()}.`);
+        }
+        // It keeps the bill-to name, phone and address from then too.
+        const want = customerFields(cust, companyId, customerId);
+        const same = (a, b) => String(a ?? '').trim() === String(b ?? '').trim();
+        if (!same(si.customer_name, want.name) || !same(si.customer_phone, want.phone) || !same(si.customer_address?.line1, want.address?.line1)) {
+          throw new HttpsError('failed-precondition', 'This customer\'s name, phone or address changed after the Stripe invoice was made. Void it and send a new one so it shows the new details.');
+        }
+      };
+      warning = await sendEmail({ db, stripe, ref, stripeInvoiceId: prev.invoiceId, email: si.customer_email, check });
     }
     return { ...summary((await ref.get()).data().stripe), warning };
   }
@@ -403,7 +474,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       if (!curCust || fingerprint(sentFrom(cur, curJob, curNotes), curCust, companyId, curCustomerId) !== madeFrom) return 'changed';
       tx.update(ref, {
         stripe: {
-          ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent,
+          ...fromStripe(finalized), issued: issued + 1, createdAt: now, createdBy: uid, sent, party: partyOf(curCust, curJob),
           sentTo: null, sentAt: null, error: null, claimedAt: null, ...(paidAt ? { paidAt } : {}),
         },
         ...(paidAt ? { status: 'paid', paidDate: floridaDate(paidAt.getTime()) } : {}),
@@ -441,7 +512,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
   // Paid already: there's nothing for the customer to pay, so nothing is emailed.
   const warning = finalized.status === 'paid'
     ? 'Credit on this customer\'s Stripe account covered the whole invoice, so Stripe marked it paid and there was nothing to send.'
-    : send ? await sendEmail(stripe, ref, finalized.id, finalized.customer_email || cust.email) : null;
+    : send ? await sendEmail({ db, stripe, ref, stripeInvoiceId: finalized.id, email: finalized.customer_email || cust.email, made: true }) : null;
   return { ...summary((await ref.get()).data().stripe), warning };
 }
 
@@ -457,7 +528,9 @@ export async function voidStripeInvoice({ db, stripe, livemode, companyId, invoi
     if (s.livemode) throw new HttpsError('failed-precondition', 'That Stripe invoice is live, but the app is using a test key right now.');
     // Made with the test key: the live key can't see it, and nobody can pay it for real. Nothing on it
     // counts as paid any more (say test credit that Stripe used on it).
-    await ref.update({ 'stripe.status': 'void', 'stripe.voidedAt': new Date(), 'stripe.amountPaid': 0, 'stripe.paidOnline': 0, 'stripe.balanceApplied': 0 });
+    await ref.update({
+      'stripe.status': 'void', 'stripe.voidedAt': new Date(), 'stripe.amountPaid': 0, 'stripe.paidOnline': 0, 'stripe.balanceApplied': 0, 'stripe.preCredited': 0,
+    });
     return summary({ ...s, status: 'void' });
   }
   try {

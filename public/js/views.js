@@ -1,13 +1,17 @@
 // Screens: dashboard, customers, jobs, estimates, contracts (with change orders), pay apps, invoices, settings.
 // Each view returns { html, mount(root), live }. Live views re-render when data changes;
 // editors render once so typing isn't interrupted.
-import { state, add, update, remove, get, where, nextNumber, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
+import { state, add, update, updateWith, remove, get, where, nextNumber, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
   proposalOptions, estimateAmount, proposalDeposit, depositSentence, termsWithoutDeposit, proposalTerms, proposalPayment, paidOn,
+  billedOn, dueOn,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
-import { proposalBilling, mountProposalBilling, stripeCard, mountStripeCard, settleStripeFirst, paymentsSettings, mountPaymentsSettings } from './billing.js';
+import {
+  proposalBilling, mountProposalBilling, stripeCard, mountStripeCard, settleStripeFirst, paymentsSettings, mountPaymentsSettings,
+  paymentsCard, mountPaymentsCard, paidFields, frozen, lockNote,
+} from './billing.js';
 import { fileBrowser, countJobFiles } from './files.js';
 import { DRAFT_KEY } from './takeoff/takeoff.js';
 
@@ -61,8 +65,9 @@ export function dashboard() {
   const estValue = est.reduce((s, e) => s + estimateAmount(e), 0);
   const active = D().jobs.filter((j) => ['contracted', 'in progress'].includes(j.status));
   const unpaid = D().invoices.filter((i) => i.status === 'unpaid');
-  // Less anything already paid on them through Stripe (part paid, or credit Stripe used on it).
-  const owed = unpaid.reduce((s, i) => s + Math.max(0, invoiceTotals(i).total - paidOn(i)), 0);
+  // Less what's been paid on them (payments recorded, part paid online, or credit Stripe used on it) and
+  // credit notes in Stripe.
+  const owed = unpaid.reduce((s, i) => s + dueOn(i), 0);
   const overdue = unpaid.filter((i) => i.dueDate && i.dueDate < today());
   const pending = D().payApps.filter((p) => ['submitted', 'approved'].includes(p.status));
   const pendingDue = pending.reduce((s, p) => s + payAppSummary(p).currentDue, 0);
@@ -680,13 +685,17 @@ function rerender() {
 }
 
 // ---------- Pay apps (AIA G702 / G703) ----------
+// Invoices made from the contract's proposal (a deposit, say) billed part of the job before its pay apps,
+// so the pay apps take that off (G702 line 7a) until it's used up.
 export function payAppSummary(p, override) {
   const c = get('contracts', p.contractId) || { amount: 0 };
   const prior = where('payApps', 'contractId', p.contractId)
     .filter((x) => (Number(x.number) || 0) < (Number(p.number) || 0))
     .sort(sortNum)[0];
   const prevCert = prior ? payAppSummary(prior).earnedLessRetainage : 0;
-  return g702(override || p, c, coForContract(p.contractId), prevCert);
+  const deposits = c.estimateId ? where('invoices', 'estimateId', c.estimateId).filter((i) => i.status !== 'void' && billedOn(i) > 0).sort(sortNum) : [];
+  const s = g702(override || p, c, coForContract(p.contractId), prevCert, deposits.reduce((t, i) => t + billedOn(i), 0));
+  return { ...s, depositFrom: deposits.map((i) => i.number) };
 }
 
 export function payApps() {
@@ -781,10 +790,12 @@ export function payAppEdit(id) {
       });
       root.querySelector('#toinvoice')?.addEventListener('click', async () => {
         const s = payAppSummary(p, current());
+        if (s.depositApplied > 0 && s.currentDue <= 0) return toast('The proposal\'s deposit covers this application, so there\'s nothing to invoice.', true);
+        const less = s.depositApplied > 0 ? `, less ${money(s.depositApplied)} of the deposit` : '';
         const r = await attempt(() => add('invoices', {
           number: nextNumber('invoices'), jobId: p.jobId, customerId: p.customerId || get('jobs', p.jobId)?.customerId || '', payAppId: id,
           date: today(), dueDate: addDays(today(), 30), status: 'unpaid', taxPct: 0,
-          lines: [{ desc: `Application for payment #${p.number}, period to ${p.periodTo} (net of retainage)`, qty: 1, price: s.currentDue }],
+          lines: [{ desc: `Application for payment #${p.number}, period to ${p.periodTo} (net of retainage${less})`, qty: 1, price: s.currentDue }],
         }), 'Invoice created');
         if (r) go(`#/invoices/${r.id}`);
       });
@@ -807,7 +818,8 @@ export function g702Table(s) {
     ${r('5.', 'Total retainage', s.totalRetainage)}
     ${r('6.', 'Total earned less retainage (4 − 5)', s.earnedLessRetainage)}
     ${r('7.', 'Less previous certificates for payment', s.previousCertificates)}
-    ${r('8.', 'Current payment due', s.currentDue, 'grand')}
+    ${s.deposit > 0 ? r('7a.', `Less deposit applied (${money(s.deposit)} billed on proposal invoice ${(s.depositFrom || []).join(', ')})`, s.depositApplied) : ''}
+    ${r('8.', `Current payment due (6 − 7${s.deposit > 0 ? ' − 7a' : ''})`, s.currentDue, 'grand')}
     ${r('9.', 'Balance to finish, including retainage (3 − 6)', s.balanceToFinish)}`;
 }
 
@@ -818,7 +830,7 @@ export function invoices() {
     live: true,
     html: `${header('Invoices', can.bill() ? '<a class="btn primary" href="#/invoices/new">New invoice</a>' : '')}
     <div class="card">${rows.length ? `<table class="list"><thead><tr><th>#</th><th>Job</th><th>Customer</th><th>Date</th><th>Due</th><th>Status</th><th class="num">Total</th></tr></thead><tbody>
-    ${rows.map((i) => { const late = i.status === 'unpaid' && i.dueDate && i.dueDate < today(); return `<tr data-href="#/invoices/${esc(i.id)}"><td>${esc(i.number)}</td><td>${esc(jobName(i.jobId))}</td><td>${esc(customerName(i.customerId))}</td><td>${fmtDate(i.date)}</td><td class="${late ? 'warn' : ''}">${fmtDate(i.dueDate)}${late ? ' (overdue)' : ''}</td><td>${badge(i.status)}</td><td class="num">${money(invoiceTotals(i).total)}</td></tr>`; }).join('')}
+    ${rows.map((i) => { const late = i.status === 'unpaid' && i.dueDate && i.dueDate < today(); return `<tr data-href="#/invoices/${esc(i.id)}"><td>${esc(i.number)}</td><td>${esc(jobName(i.jobId))}</td><td>${esc(customerName(i.customerId))}</td><td>${fmtDate(i.date)}</td><td class="${late ? 'warn' : ''}">${fmtDate(i.dueDate)}${late ? ' (overdue)' : ''}</td><td>${badge(i.status === 'unpaid' && paidOn(i) > 0 ? 'partly paid' : i.status)}</td><td class="num">${money(invoiceTotals(i).total)}</td></tr>`; }).join('')}
     </tbody></table>` : empty('No invoices yet.')}</div>`,
   };
 }
@@ -847,17 +859,19 @@ export function invoiceEdit(id, params) {
     ? { number: nextNumber('invoices'), jobId: job?.id || '', date: today(), dueDate: addDays(today(), 30), status: 'unpaid', taxPct: 7, lines: [{ desc: '', qty: 1, price: 0 }] }
     : get('invoices', id);
   if (!inv) return { waiting: true, html: '<p class="muted">Loading…</p>' };
-  // Paid through Stripe for real: it stays as it was paid, like Stripe's receipt (firestore.rules too).
-  const locked = inv.stripe?.status === 'paid' && !!inv.stripe.livemode;
+  // Paid through Stripe for real (it stays as it was paid, like Stripe's receipt), or out for payment on a
+  // live Stripe invoice (it can't change while the customer can pay it). firestore.rules too. The Online
+  // payment card locks or unlocks the form if that changes while it's open.
+  const locked = frozen(inv.stripe);
   const ro = can.bill() && !locked ? '' : 'disabled';
   return {
     html: `${header(isNew ? 'New invoice' : `Invoice ${esc(inv.number)}`, `
       ${!isNew ? `<a class="btn" href="#/invoices/${esc(id)}/print">Print / PDF</a>` : ''}
-      ${!isNew && can.bill() && inv.status === 'unpaid' ? '<button class="btn primary" id="paid">Mark paid</button>' : ''}
+      ${!isNew && can.bill() ? `<button class="btn primary" id="paid" ${inv.status === 'unpaid' ? '' : 'hidden'}>Record payment</button>` : ''}
       ${!isNew && can.remove() ? '<button class="btn danger" id="del">Delete</button>' : ''}`)}
     ${inv.payAppId ? `<p class="muted">From <a href="#/payapps/${esc(inv.payAppId)}">pay app ${esc(get('payApps', inv.payAppId)?.number || '')}</a></p>` : ''}
     ${inv.estimateId ? `<p class="muted" id="proposal-link">${proposalLink(inv)}</p>` : ''}
-    ${locked ? '<p class="muted">Paid through Stripe, so this invoice stays as it was paid.</p>' : ''}
+    <p class="muted" id="locknote" ${locked ? '' : 'hidden'}>${esc(lockNote(inv.stripe))}</p>
     <form id="f" class="stack">
       <fieldset class="card grid4" ${ro}>
         <label class="span2">Job <select name="jobId" required>${jobOptions(inv.jobId)}</select></label>
@@ -879,7 +893,7 @@ export function invoiceEdit(id, params) {
       </div>
       <div class="row"><button class="btn primary" ${ro}>Save invoice</button></div>
     </form>
-    ${isNew ? '' : stripeCard()}`,
+    ${isNew ? '' : `${paymentsCard()}${stripeCard(inv)}`}`,
     mount(root) {
       const body = root.querySelector('#lines');
       const form = root.querySelector('#f');
@@ -893,25 +907,46 @@ export function invoiceEdit(id, params) {
       body.addEventListener('click', (ev) => { if (ev.target.closest('[data-del]')) { ev.target.closest('tr').remove(); recalc(); } });
       root.querySelector('#addline').addEventListener('click', () => { body.insertAdjacentHTML('beforeend', invRow()); recalc(); });
       recalc();
-      const save = async (extra = {}) => {
-        const data = { ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price), ...extra };
+      const save = async () => {
+        const data = { ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price) };
         data.customerId = get('jobs', data.jobId)?.customerId || inv.customerId || '';
         data.total = invoiceTotals(data).total;
         if (isNew) {
-          const r = await attempt(() => add('invoices', { ...data, payAppId: inv.payAppId || '' }), 'Invoice saved');
+          // Saved as paid: that's a payment for the whole invoice (paidFields).
+          const r = await attempt(() => add('invoices', { ...paidFields({}, data).data, payAppId: inv.payAppId || '' }), 'Invoice saved');
           if (r) go(`#/invoices/${r.id}`);
         } else {
           if (!(await settleStripeFirst(id, data.status))) return;
-          const done = attempt(() => update('invoices', id, data), 'Invoice saved');
-          if (extra.status) rerender(); else await done;
+          // Paid goes with the payments recorded on it (paidFields), worked out from what's saved right now,
+          // so a payment recorded on another device meanwhile isn't lost.
+          let note = '';
+          const saved = await attempt(() => updateWith('invoices', id, (cur) => {
+            const r = paidFields(cur, data);
+            note = r.note || '';
+            return r.data;
+          }), 'Invoice saved');
+          if (!saved) return;
+          if (note) toast(note, true);
+          form.elements.status.value = saved.status;
+          form.elements.paidDate.value = saved.paidDate || '';
         }
       };
       form.addEventListener('submit', (ev) => { ev.preventDefault(); save(); });
-      root.querySelector('#paid')?.addEventListener('click', () => save({ status: 'paid', paidDate: today() }));
+      // Record payment: the Payments card's form, below.
+      root.querySelector('#paid')?.addEventListener('click', () => {
+        const pay = root.querySelector('#payform');
+        if (!pay) return;
+        pay.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        pay.elements.amount.focus({ preventScroll: true });
+      });
       root.querySelector('#del')?.addEventListener('click', async () => {
         if (confirmDelete('invoice') && await attempt(() => remove('invoices', id), 'Invoice deleted') !== null) go('#/invoices');
       });
-      if (!isNew) mountStripeCard(root, id, () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price) }));
+      if (!isNew) {
+        const current = () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price) });
+        mountPaymentsCard(root, id, current);
+        mountStripeCard(root, id, current);
+      }
       // What's been paid on the proposal changes as payments come in.
       const link = root.querySelector('#proposal-link');
       if (link) {

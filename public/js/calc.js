@@ -91,7 +91,10 @@ export function g703Row(line, retainagePct, storedRetainagePct = retainagePct) {
 
 // G702 application summary from the G703 rows.
 //   previousCertificates: total earned less retainage on the prior application (its line 6).
-export function g702(payApp, contract, changeOrders = [], previousCertificates = 0) {
+//   deposit: what invoices made from the contract's proposal billed (its deposit). It comes off the
+//   current payment due as work is earned, until it's used up (depositApplied), so the pay apps and
+//   the deposit together never bill more than the work.
+export function g702(payApp, contract, changeOrders = [], previousCertificates = 0, deposit = 0) {
   const pct = num(payApp.retainagePct);
   const storedPct = payApp.storedRetainagePct == null || payApp.storedRetainagePct === '' ? pct : num(payApp.storedRetainagePct);
   const rows = (payApp.lines || []).map((l) => g703Row(l, pct, storedPct));
@@ -103,7 +106,11 @@ export function g702(payApp, contract, changeOrders = [], previousCertificates =
   const totalRetainage = round2(workRetainage + storedRetainage); // 5
   const earnedLessRetainage = round2(totalCompleted - totalRetainage); // 6
   const prev = round2(previousCertificates); // 7
-  const currentDue = round2(earnedLessRetainage - prev); // 8
+  // The deposit covers the first earnings: what it covers to date, less what it covered by the last app.
+  const dep = Math.max(0, round2(deposit));
+  const covered = (earned) => Math.min(dep, Math.max(0, earned));
+  const depositApplied = round2(covered(earnedLessRetainage) - covered(prev)); // 7a
+  const currentDue = round2(earnedLessRetainage - prev - depositApplied); // 8
   const balanceToFinish = round2(cs.toDate - earnedLessRetainage); // 9
   return {
     rows,
@@ -114,7 +121,7 @@ export function g702(payApp, contract, changeOrders = [], previousCertificates =
     },
     originalSum: cs.original, netChange: cs.netChange, additions: cs.additions, deductions: cs.deductions,
     contractSumToDate: cs.toDate, totalCompleted, workRetainage, storedRetainage, totalRetainage,
-    earnedLessRetainage, previousCertificates: prev, currentDue, balanceToFinish,
+    earnedLessRetainage, previousCertificates: prev, deposit: dep, depositApplied, currentDue, balanceToFinish,
   };
 }
 
@@ -272,13 +279,29 @@ export function depositLine(est) {
   return { desc: `Deposit${pct} on proposal ${est.number}${opts.length > 1 ? `, ${optionLabel(opt)}` : ''}`, qty: 1, price: d.amount, taxable: false };
 }
 
-// What's been paid on a bill: what Stripe collected when it was paid through Stripe (the bill may
-// have been edited after it was sent), its total when marked paid by hand, else any part paid online.
-// What Stripe collected counts credit on the customer's Stripe account that it used on the invoice.
-// Same as paidOn in functions/lines.js.
-export const paidOn = (inv) => (inv.status === 'paid'
-  ? (inv.stripe?.status === 'paid' && inv.stripe.amountPaid != null ? num(inv.stripe.amountPaid) : invoiceTotals(inv).total)
-  : num(inv.stripe?.amountPaid));
+// Payments recorded on a bill by hand: cash, check or other, each with its amount and date.
+export const recordedPaid = (inv) => round2((inv.payments || []).reduce((s, p) => s + num(p.amount), 0));
+
+// What's been paid on a bill: the payments recorded on it plus what Stripe collected online. Both are
+// amounts kept when they came in, so editing the bill afterwards doesn't change them. A bill marked
+// paid before payments were recorded counts its total. What Stripe collected counts credit on the
+// customer's Stripe account that it used on the invoice. Same as paidOn in functions/lines.js.
+export function paidOn(inv) {
+  const st = inv.stripe || {};
+  if (inv.payments?.length || (st.status === 'paid' && st.amountPaid != null)) return round2(recordedPaid(inv) + num(st.amountPaid));
+  return inv.status === 'paid' ? invoiceTotals(inv).total : num(st.amountPaid);
+}
+
+// What credit notes took off the bill's Stripe invoice before it was paid (Stripe then asks for that
+// much less). Only while that Stripe invoice can be paid or is paid; a void one takes nothing off.
+export const creditedOn = (inv) => (['open', 'uncollectible', 'paid'].includes(inv.stripe?.status) ? num(inv.stripe.preCredited) : 0);
+
+// What a bill counts for against the price it was billed from: what was paid on it once it's paid,
+// else what it asks for (its total, less credit notes on its Stripe invoice).
+export const billedOn = (inv) => (inv.status === 'paid' ? paidOn(inv) : round2(invoiceTotals(inv).total - creditedOn(inv)));
+
+// What's still owed on an unpaid bill: what it asks for, less what's been paid on it.
+export const dueOn = (inv) => (inv.status === 'unpaid' ? Math.max(0, round2(billedOn(inv) - paidOn(inv))) : 0);
 
 // How much of a proposal's accepted price has been paid, from the invoices made from it (void ones
 // don't count). status: 'not billed', 'unpaid', 'partly paid' or 'paid'.

@@ -137,7 +137,7 @@ describe('Stripe invoices (server)', function () {
   beforeEach(async () => {
     stripe = fakeStripe();
     await db.recursiveDelete(db.collection('companies'));
-    await db.doc(`companies/${C}`).set({ name: 'Stellar Glass', ownerUid: 'wes' });
+    await db.doc(`companies/${C}`).set({ name: 'Stellar Glass', ownerUid: 'wes', onlinePayments: true });
     await db.doc(`companies/${C}/members/wes`).set({ role: 'owner' });
     await db.doc(`companies/${C}/members/cpa`).set({ role: 'accountant' });
     await db.doc(`companies/${C}/members/viewer`).set({ role: 'viewer' });
@@ -330,12 +330,112 @@ describe('Stripe invoices (server)', function () {
   });
 
   it('keeps the Stripe invoice, and says so, when Stripe can\'t email it', async () => {
-    stripe.fail['invoices.sendInvoice'] = stripeError('StripeConnectionError', 'socket hang up');
+    stripe.fail['invoices.sendInvoice'] = stripeError('StripeInvalidRequestError', 'This invoice can\'t be sent.');
     const r = await create({ send: true });
     assert.equal(r.status, 'open');
-    assert.match(r.warning, /Made the Stripe invoice, but Stripe couldn't email it\. Couldn't reach Stripe/);
+    assert.match(r.warning, /^Made the Stripe invoice, but Stripe couldn't email it\. Stripe: This invoice can't be sent\.$/);
     assert.equal(stripe.called('invoices.update').length, 0);
-    assert.match((await data()).stripe.error, /couldn't email it/);
+    let d = await data();
+    assert.match(d.stripe.error, /couldn't email it/);
+    assert.equal(d.stripe.sentTo, null); // noted as emailed before Stripe was asked, then put back
+    assert.equal(d.stripe.sentAt, null);
+    // Emailed, then Email it again fails: it still says when it was last emailed.
+    assert.equal((await create({ send: true })).sentTo, 'pat@example.com');
+    const sentAt = (await data()).stripe.sentAt.toMillis();
+    stripe.fail['invoices.sendInvoice'] = stripeError('StripeInvalidRequestError', 'Nope.');
+    assert.match((await create({ send: true })).warning, /^Stripe couldn't email it\. Stripe: Nope\.$/);
+    d = await data();
+    assert.equal(d.stripe.sentTo, 'pat@example.com');
+    assert.equal(d.stripe.sentAt.toMillis(), sentAt);
+  });
+
+  it('notes the email before Stripe sends it, so a lost answer doesn\'t invite a second email', async () => {
+    const send = stripe.invoices.sendInvoice;
+    let noted = null;
+    stripe.invoices.sendInvoice = async (id) => { noted = (await data()).stripe.sentTo; return send(id); };
+    await create({ send: true });
+    assert.equal(noted, 'pat@example.com');
+    stripe.invoices.sendInvoice = send;
+    // No answer from Stripe: it may have emailed it, so it stays noted as emailed.
+    stripe.fail['invoices.sendInvoice'] = stripeError('StripeConnectionError', 'socket hang up');
+    const r = await create({ send: true });
+    assert.equal(r.warning, 'Couldn\'t tell whether Stripe emailed this invoice (Stripe didn\'t answer). Check it in Stripe\'s dashboard before emailing it again.');
+    const d = await data();
+    assert.equal(d.stripe.sentTo, 'pat@example.com');
+    assert.match(d.stripe.error, /^Couldn't tell whether Stripe emailed/);
+    // The same when it was just made.
+    await db.doc(`companies/${C}/invoices/i2`).set({ ...(({ stripe: _, ...bill }) => bill)(d), number: 1004 });
+    stripe.fail['invoices.sendInvoice'] = stripeError('StripeConnectionError', 'socket hang up');
+    const made = await create({ invoiceId: 'i2', send: true });
+    assert.match(made.warning, /^Made the Stripe invoice, but couldn't tell whether Stripe emailed it/);
+    assert.equal(made.sentTo, 'pat@example.com');
+  });
+
+  it('checks the bill again as it emails an open Stripe invoice again', async () => {
+    await create();
+    const bill = await data();
+    const retrieve = stripe.invoices.retrieve;
+    // change() runs on another device while Stripe is asked about the invoice, just before it's emailed.
+    const during = async (change, expected, undo) => {
+      stripe.invoices.retrieve = async (id) => { stripe.invoices.retrieve = retrieve; await change(); return retrieve(id); };
+      await assert.rejects(create({ send: true }), { code: 'failed-precondition', message: expected });
+      await undo();
+      assert.equal(stripe.called('invoices.sendInvoice').length, 0);
+      assert.equal((await data()).stripe.sentTo, null);
+    };
+    await during(() => inv().update({ lines: [{ desc: 'Storefront glass', qty: 5, price: 312.5 }] }), /changed after its Stripe invoice was made/,
+      () => inv().update({ lines: bill.lines }));
+    await during(() => db.doc(`companies/${C}/jobs/j1`).update({ siteAddress: '301 Lake Parker Ave' }), /changed after its Stripe invoice was made/,
+      () => db.doc(`companies/${C}/jobs/j1`).update({ siteAddress: '300 Lake Parker Ave' }));
+    await during(() => db.doc(`companies/${C}/customers/c1`).update({ email: 'ap@example.com' }), /addressed to pat@example\.com/,
+      () => db.doc(`companies/${C}/customers/c1`).update({ email: 'pat@example.com' }));
+    await during(() => db.doc(`companies/${C}/customers/c1`).update({ phone: '863-555-0199' }), /name, phone or address changed/,
+      () => db.doc(`companies/${C}/customers/c1`).update({ phone: '863-555-0100' }));
+    await during(() => inv().update({ payments: [{ id: 'p1', method: 'check', amount: 500, date: '2026-10-12' }] }), /Payments are recorded/,
+      () => inv().update({ payments: FieldValue.delete() }));
+    await during(() => inv().update({ 'stripe.status': 'void' }), /changed just now/, () => inv().update({ 'stripe.status': 'open' }));
+    // Paid in Stripe meanwhile: that's recorded instead.
+    stripe.invoices.retrieve = async (id) => { stripe.invoices.retrieve = retrieve; stripe.pay(bill.stripe.invoiceId); return retrieve(id); };
+    await assert.rejects(create({ send: true }), /already paid this Stripe invoice/);
+    assert.equal((await data()).status, 'paid');
+    assert.equal(stripe.called('invoices.sendInvoice').length, 0);
+  });
+
+  it('makes no new Stripe invoice while online payments are off in Settings', async () => {
+    await db.doc(`companies/${C}`).update({ onlinePayments: false });
+    await assert.rejects(create({ send: true }), { code: 'failed-precondition', message: /Online payments are off\. The owner can turn them on in Settings/ });
+    assert.equal(stripe.called('invoices.create').length, 0);
+    assert.equal((await data()).stripe, undefined);
+    // One made while they were on can still be emailed again (and checked or voided).
+    await db.doc(`companies/${C}`).update({ onlinePayments: true });
+    await create();
+    await db.doc(`companies/${C}`).update({ onlinePayments: FieldValue.delete() });
+    assert.equal((await create({ send: true })).sentTo, 'pat@example.com');
+    await voidStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' });
+    await assert.rejects(create(), /Online payments are off/);
+    assert.equal(stripe.called('invoices.create').length, 1);
+  });
+
+  it('won\'t put a bill with payments recorded in the app on Stripe', async () => {
+    const check = { id: 'p1', method: 'check', amount: 500, date: '2026-10-10', ref: '1201', note: '' };
+    await inv().update({ payments: [check] });
+    await assert.rejects(create(), { code: 'failed-precondition', message: /Payments are recorded on this invoice in the app/ });
+    assert.equal(stripe.called('invoices.create').length, 0);
+    // Nor email an open one again once a payment is recorded (the app voids it first).
+    await inv().update({ payments: FieldValue.delete() });
+    await create();
+    await inv().update({ payments: [check] });
+    await assert.rejects(create({ send: true }), /Payments are recorded/);
+    assert.equal(stripe.called('invoices.sendInvoice').length, 0);
+  });
+
+  it('keeps who and what the Stripe invoice billed, for the printed invoice once it\'s paid', async () => {
+    await db.doc(`companies/${C}/jobs/j1`).update({ architect: 'Lunz Prebor Fowler' });
+    await create();
+    assert.deepEqual((await data()).stripe.party, {
+      customer: { name: 'Pat Lee', company: 'Lakeland Builders', address: '100 Main St, Lakeland FL', phone: '863-555-0100', email: 'pat@example.com' },
+      job: { name: 'LCP Bldg 300', siteAddress: '300 Lake Parker Ave', poNumber: 'PO-77', architect: 'Lunz Prebor Fowler' },
+    });
   });
 
   it('refuses amounts Stripe can\'t collect', async () => {
@@ -647,12 +747,40 @@ describe('Stripe invoices (server)', function () {
     const { invoiceId } = await create();
     const note = (type) => ({ type, data: { object: { id: 'cn_2', invoice: invoiceId } } });
     // $100 taken off the open invoice in Stripe's dashboard, then that credit note voided.
-    stripe.invoices.get(invoiceId).amount_due = 179000;
+    Object.assign(stripe.invoices.get(invoiceId), { amount_due: 179000, pre_payment_credit_notes_amount: 10000 });
     assert.equal(await handleStripeEvent({ db, stripe, event: note('credit_note.created'), allowed: C }), 'updated');
-    assert.equal((await data()).stripe.amountDue, 1790);
-    stripe.invoices.get(invoiceId).amount_due = 189000;
+    let d = await data();
+    assert.equal(d.stripe.amountDue, 1790);
+    assert.equal(d.stripe.preCredited, 100);
+    assert.equal(d.stripe.amountPaid, 0);
+    Object.assign(stripe.invoices.get(invoiceId), { amount_due: 189000, pre_payment_credit_notes_amount: 0 });
     assert.equal(await handleStripeEvent({ db, stripe, event: note('credit_note.voided'), allowed: C }), 'updated');
-    assert.equal((await data()).stripe.amountDue, 1890);
+    d = await data();
+    assert.equal(d.stripe.amountDue, 1890);
+    assert.equal(d.stripe.preCredited, 0);
+    // Credited in full before any payment: Stripe marks it paid with nothing paid, so nothing counts as paid.
+    Object.assign(stripe.invoices.get(invoiceId), {
+      status: 'paid', amount_due: 0, pre_payment_credit_notes_amount: 189000, status_transitions: { paid_at: Date.parse('2026-10-21T15:00:00Z') / 1000 },
+    });
+    assert.equal(await handleStripeEvent({ db, stripe, event: note('credit_note.created'), allowed: C }), 'updated');
+    d = await data();
+    assert.equal(d.status, 'paid');
+    assert.equal(d.stripe.preCredited, 1890);
+    assert.equal(d.stripe.amountPaid, 0);
+    assert.equal(paidOn(d), 0);
+  });
+
+  it('doesn\'t count an overpayment, which Stripe makes credit for the customer\'s next invoice', async () => {
+    const { invoiceId } = await create();
+    stripe.pay(invoiceId);
+    Object.assign(stripe.invoices.get(invoiceId), { amount_paid: 199000, amount_overpaid: 10000 });
+    await syncStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' });
+    const d = await data();
+    assert.equal(d.status, 'paid');
+    assert.equal(d.stripe.paidOnline, 1990);
+    assert.equal(d.stripe.overpaid, 100);
+    assert.equal(d.stripe.amountPaid, 1890);
+    assert.equal(paidOn(d), 1890);
   });
 
   it('records a Stripe invoice that credit on the customer\'s Stripe account pays in full', async () => {

@@ -1,7 +1,8 @@
 // Printable documents. Each opens as a clean page; "Print / Save PDF" uses the browser's print dialog.
 import { state, get, where } from './data.js';
-import { estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, money, pctFmt, proposalOptions, proposalTerms, paidOn } from './calc.js';
+import { estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, money, pctFmt, proposalOptions, proposalTerms, paidOn, creditedOn, round2 } from './calc.js';
 import { payAppSummary, g702Table } from './views.js';
+import { howPaid } from './billing.js';
 import { esc, fmtDate } from './ui.js';
 import { websiteUrl } from './brand.js';
 
@@ -18,9 +19,11 @@ function letterhead(title, meta) {
   </div>`;
 }
 
-function party(jobId, customerId) {
-  const j = get('jobs', jobId) || {};
-  const cu = get('customers', customerId || j.customerId) || {};
+// snap: who and what an invoice paid through Stripe was billed to, as it was then (functions/stripe-invoices.js
+// keeps it), so its printout matches Stripe's receipt even if the customer or job changed later.
+function party(jobId, customerId, snap = null) {
+  const j = snap?.job || get('jobs', jobId) || {};
+  const cu = snap?.customer || get('customers', customerId || j.customerId) || {};
   return `<div class="doc-parties">
     <div><div class="label">Bill to</div>${esc(cu.name || '')}${cu.company ? '<br>' + esc(cu.company) : ''}<br>${esc(cu.address || '')}<br>${esc(cu.phone || '')} ${esc(cu.email || '')}</div>
     <div><div class="label">Project</div>${esc(j.name || '')}<br>${esc(j.siteAddress || '')}${j.poNumber ? '<br>PO / project # ' + esc(j.poNumber) : ''}${j.architect ? '<br>GC / Architect: ' + esc(j.architect) : ''}</div>
@@ -183,17 +186,29 @@ export function invoiceDoc(id) {
   const inv = get('invoices', id);
   if (!inv) return { waiting: true, html: '<p class="muted">Loading…</p>' };
   const t = invoiceTotals(inv);
-  // Part paid online (through Stripe), or credit on the customer's Stripe account used on it: that comes
-  // off what's due.
-  const paid = inv.status === 'paid' ? 0 : Math.min(paidOn(inv), t.total);
-  const credit = Number(inv.stripe?.balanceApplied) > 0;
-  const paidLabel = !credit ? 'Paid online' : Number(inv.stripe?.paidOnline) > 0 ? 'Paid and credited' : 'Credit applied';
+  const st = inv.stripe || {};
+  // What comes off the total: a credit note in Stripe, each payment recorded here (cash, check or other),
+  // and what was paid online (credit on the customer's Stripe account used on it included). A bill marked
+  // paid without payments recorded, or paid through Stripe, shows as paid in full.
+  const pays = [...(inv.payments || [])].sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+  const rows = [];
+  if (inv.status !== 'paid' || (pays.length && st.status !== 'paid')) {
+    const credited = creditedOn(inv);
+    if (credited > 0) rows.push(['Credit note', credited]);
+    for (const p of pays) rows.push([`Paid ${fmtDate(p.date)}, ${howPaid(p)}`, Number(p.amount) || 0]);
+    const online = round2(paidOn(inv) - pays.reduce((sum, p) => sum + (Number(p.amount) || 0), 0));
+    const credit = Number(st.balanceApplied) > 0;
+    if (online > 0) rows.push([!credit ? 'Paid online' : Number(st.paidOnline) > 0 ? 'Paid and credited' : 'Credit applied', online]);
+  }
+  const due = inv.status === 'paid' ? 0 : Math.max(0, round2(t.total - rows.reduce((sum, [, amount]) => sum + amount, 0)));
+  // Paid through Stripe for real: billed to whoever it was billed to then.
+  const snap = st.status === 'paid' && st.livemode ? st.party : null;
   return page(`Invoice ${inv.number}`, `
     ${letterhead('Invoice', `<div>No. ${esc(inv.number)}</div><div>${fmtDate(inv.date)}</div>${inv.dueDate ? `<div class="small">Due ${fmtDate(inv.dueDate)}</div>` : ''}${inv.status === 'paid' ? `<div class="paid-stamp">PAID ${fmtDate(inv.paidDate)}</div>` : ''}`)}
-    ${party(inv.jobId, inv.customerId)}
+    ${party(inv.jobId, inv.customerId, snap)}
     <table class="doc-table"><thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Amount</th></tr></thead><tbody>
     ${(inv.lines || []).map((l) => `<tr><td>${esc(l.desc)}</td><td class="num">${esc(l.qty)}</td><td class="num">${money(l.price)}</td><td class="num">${money((Number(l.qty) || 0) * (Number(l.price) || 0))}</td></tr>`).join('')}
     </tbody></table>
-    <div class="doc-totals"><div class="tr"><span>Subtotal</span><span>${money(t.subtotal)}</span></div><div class="tr"><span>Sales tax</span><span>${money(t.tax)}</span></div>${paid > 0 ? `<div class="tr"><span>Total</span><span>${money(t.total)}</span></div><div class="tr"><span>${paidLabel}</span><span>${money(-paid)}</span></div>` : ''}<div class="tr grand"><span>${paid > 0 ? 'Balance due' : 'Total due'}</span><span>${money(inv.status === 'paid' ? 0 : t.total - paid)}</span></div></div>
+    <div class="doc-totals"><div class="tr"><span>Subtotal</span><span>${money(t.subtotal)}</span></div><div class="tr"><span>Sales tax</span><span>${money(t.tax)}</span></div>${rows.length ? `<div class="tr"><span>Total</span><span>${money(t.total)}</span></div>${rows.map(([label, amount]) => `<div class="tr"><span>${esc(label)}</span><span>${money(-amount)}</span></div>`).join('')}` : ''}<div class="tr grand"><span>${rows.length ? 'Balance due' : 'Total due'}</span><span>${money(due)}</span></div></div>
     ${inv.notes ? `<div class="doc-terms">${nl(inv.notes)}</div>` : ''}`);
 }

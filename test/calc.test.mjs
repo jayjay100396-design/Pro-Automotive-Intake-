@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import {
   sqft, lineTotal, estimateTotals, proposalOptions, estimateAmount, invoiceTotals, contractSum, g702, nextPayAppLines,
   proposalBill, depositLine, proposalDeposit, depositSentence, proposalTerms, termsWithoutDeposit, proposalPayment,
+  paidOn, billedOn, dueOn, creditedOn, recordedPaid,
 } from '../public/js/calc.js';
+import { paidOn as serverPaidOn } from '../functions/lines.js';
 
 describe('money math', () => {
   it('bills glass by square foot with a per-lite minimum', () => {
@@ -188,6 +190,54 @@ describe('money math', () => {
     assert.equal(proposalPayment(est, [{ ...dep, stripe: { status: 'open', amountPaid: 500 } }]).paid, 500);
     // Paid through Stripe, then edited here: what Stripe collected counts.
     assert.equal(proposalPayment(est, [{ ...dep, status: 'paid', lines: [{ qty: 1, price: 1500, taxable: false }], stripe: { status: 'paid', amountPaid: 1302.09 } }]).paid, 1302.09);
+    // Paid by check, then edited here: the check's amount counts, not the new total.
+    const check = { id: 'p1', method: 'check', amount: 1302.09, date: '2026-10-10', ref: '1201' };
+    const byCheck = { ...dep, status: 'paid', payments: [check] };
+    assert.equal(proposalPayment(est, [byCheck]).paid, 1302.09);
+    assert.equal(proposalPayment(est, [{ ...byCheck, lines: [{ qty: 1, price: 1800, taxable: false }] }]).paid, 1302.09);
+    assert.equal(proposalPayment(est, [{ ...byCheck, lines: [{ qty: 1, price: 800, taxable: false }] }]).paid, 1302.09);
+  });
+
+  it('counts payments recorded by hand, credit notes and what is still owed', () => {
+    const bill = { status: 'unpaid', taxPct: 0, lines: [{ qty: 1, price: 1000, taxable: false }] };
+    const p = (id, amount) => ({ id, method: 'check', amount, date: '2026-10-1' + id });
+    // Nothing paid yet.
+    assert.deepEqual([paidOn(bill), billedOn(bill), dueOn(bill), creditedOn(bill)], [0, 1000, 1000, 0]);
+    // Partly paid by check and cash.
+    const part = { ...bill, payments: [p(1, 300), { ...p(2, 150.55), method: 'cash' }] };
+    assert.equal(recordedPaid(part), 450.55);
+    assert.deepEqual([paidOn(part), billedOn(part), dueOn(part)], [450.55, 1000, 549.45]);
+    // Paid in full: it counts what was paid, whatever the bill says now.
+    const paid = { ...part, status: 'paid', payments: [...part.payments, p(3, 549.45)] };
+    assert.deepEqual([paidOn(paid), billedOn(paid), dueOn(paid)], [1000, 1000, 0]);
+    assert.equal(billedOn({ ...paid, lines: [{ qty: 1, price: 4000, taxable: false }] }), 1000);
+    // Marked paid before payments were recorded here: its total.
+    assert.equal(paidOn({ ...bill, status: 'paid' }), 1000);
+    // A void bill owes nothing.
+    assert.equal(dueOn({ ...part, status: 'void' }), 0);
+    // A credit note in Stripe takes $100 off what its open Stripe invoice asks for, and $250 was paid online.
+    const credited = { ...bill, stripe: { status: 'open', preCredited: 100, amountPaid: 250 } };
+    assert.deepEqual([creditedOn(credited), billedOn(credited), paidOn(credited), dueOn(credited)], [100, 900, 250, 650]);
+    // Once that Stripe invoice is voided, its credit note doesn't count.
+    assert.equal(creditedOn({ ...credited, stripe: { status: 'void', preCredited: 100, amountPaid: 0 } }), 0);
+    // The server counts payments the same way.
+    for (const inv of [bill, part, paid, credited, { ...bill, status: 'paid' }]) assert.equal(serverPaidOn(inv), paidOn(inv));
+  });
+
+  it('takes a proposal deposit off the pay apps until it is used up', () => {
+    const contract = { amount: 100000 };
+    const app = (done, prevWork = 0) => ({ retainagePct: 0, lines: [{ item: 1, value: 100000, prevWork, thisWork: done - prevWork, stored: 0 }] });
+    // A $50,000 deposit: the first $50,000 of work is already paid for.
+    const s1 = g702(app(30000), contract, [], 0, 50000);
+    assert.deepEqual([s1.deposit, s1.depositApplied, s1.currentDue], [50000, 30000, 0]);
+    const s2 = g702(app(60000, 30000), contract, [], s1.earnedLessRetainage, 50000);
+    assert.deepEqual([s2.depositApplied, s2.currentDue], [20000, 10000]);
+    const s3 = g702(app(100000, 60000), contract, [], s2.earnedLessRetainage, 50000);
+    assert.deepEqual([s3.depositApplied, s3.currentDue], [0, 40000]);
+    // So the pay apps and the deposit together bill the contract once.
+    assert.equal(s1.currentDue + s2.currentDue + s3.currentDue + 50000, 100000);
+    // No deposit: as before.
+    assert.deepEqual([g702(app(30000), contract).depositApplied, g702(app(30000), contract).currentDue], [0, 30000]);
   });
 
   it('can hold a different retainage on stored materials', () => {

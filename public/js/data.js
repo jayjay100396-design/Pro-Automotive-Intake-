@@ -119,6 +119,15 @@ export const putOnce = (c, id, data) => runTransaction(db, async (tx) => {
   tx.set(ref(c, id), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
   return true;
 });
+// Changes a record from what's saved right now (a transaction, so two devices changing it at once
+// don't undo each other; it needs a connection). fn(saved) returns the fields to change.
+export const updateWith = (c, id, fn) => runTransaction(db, async (tx) => {
+  const snap = await tx.get(ref(c, id));
+  if (!snap.exists()) throw Object.assign(new Error('That record no longer exists.'), { code: 'not-found' });
+  const fields = fn(snap.data());
+  tx.update(ref(c, id), { ...fields, updatedAt: serverTimestamp() });
+  return { ...snap.data(), ...fields };
+});
 export const updateCompany = (data) => updateDoc(doc(db, 'companies', state.companyId), data);
 
 // Remembers who prepares proposals, so the next one is pre-filled. Private to this user.
