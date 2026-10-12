@@ -513,7 +513,7 @@ export function takeoffPage(fileId, params) {
 
   // ---------- Reading with Gemini ----------
 
-  const gemResult = () => openingsFrom([...(gem?.pages.values() || [])]);
+  const gemResult = () => openingsFrom([...(gem?.pages.values() || [])], { prefer: gem?.family || '' });
 
   // The page drawn at reading size: a sheet SHEET_PX wide at most, a photo as it is (capped the same).
   async function pageCanvas(n) {
@@ -610,11 +610,13 @@ export function takeoffPage(fileId, params) {
       box.innerHTML = `<h2>What Gemini read</h2>
         <p class="small">${esc(readPages.map((p) => (img ? 'the picture' : sheetName(p))).join(', '))} (${esc(fmtCents(gem.cents))}): ${r.main ? `${esc(r.main.shape)} tags counted, ${total} opening${total === 1 ? '' : 's'} of ${counted.length} type${counted.length === 1 ? '' : 's'}` : counted.length ? `${total} opening${total === 1 ? '' : 's'} written out` : 'no openings found'}. Check the counts and sizes before pricing.</p>
         ${counted.length ? `<ul class="links tk-gem">${r.openings.map((o) => `<li><span class="small">${esc(o.label)}${o.qty ? ` ×${o.qty}` : ''}${o.widthIn || o.heightIn ? ` ${esc(o.widthIn ? fmtIn(o.widthIn) : '?')} x ${esc(o.heightIn ? fmtIn(o.heightIn) : '?')}` : ''}<br><span class="muted">${esc(o.how)}</span></span></li>`).join('')}</ul>` : ''}
-        ${others.length ? `<p class="small">Other tags: ${others.map((f) => `<b>${esc(f.shape)}</b> ${Object.entries(f.counts).map(([k, v]) => `${esc(k)} ×${v}`).join(', ')}`).join('; ')}.</p>` : ''}
+        ${others.length ? `<p class="small">Other tags: ${others.map((f) => `<b>${esc(f.shape)}</b> ${Object.entries(f.counts).map(([k, v]) => `${esc(k)} ×${v}`).join(', ')}`).join('; ')}.</p>
+        <div class="row">${others.map((f) => `<button type="button" class="btn small" data-gfam="${esc(f.shape)}">Count the ${esc(f.shape)} tags instead</button>`).join('')}</div>` : ''}
         ${r.notes.length ? `<details class="small"><summary>${r.notes.length} note${r.notes.length === 1 ? '' : 's'} on the drawing</summary><ul>${r.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></details>` : ''}
         <div class="row">${counted.length ? '<button type="button" class="btn small primary" data-guse>Put these in the openings table</button>' : ''}</div>
         ${buttons}`;
       box.querySelector('[data-guse]')?.addEventListener('click', () => useOpenings(counted));
+      box.querySelectorAll('[data-gfam]').forEach((b) => b.addEventListener('click', () => { gem.family = b.dataset.gfam; renderGemini(); overlay(); }));
     }
     box.querySelectorAll('[data-gread]').forEach((b) => b.addEventListener('click', () => {
       const all = b.dataset.gread === 'all';

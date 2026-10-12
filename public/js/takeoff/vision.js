@@ -107,14 +107,18 @@ export function tagFamilies(pages) {
 // returned too, in case the person wants those instead. Sizes come from type sheets or schedules
 // (types), else from items with the same label. Openings written out with a count (field notes,
 // markups, sketches) are added as they're written.
-export function openingsFrom(pages) {
+export function openingsFrom(pages, { prefer = '' } = {}) {
   const sizes = new Map();
   const items = [];
   const notes = [];
   const families = tagFamilies(pages);
-  const typeLabels = new Set(pages.flatMap((p) => (p.answer?.types || []).map((t) => cleanLabel(t.label))));
-  const matches = (f) => Object.keys(f.counts).filter((l) => typeLabels.has(l)).length;
-  families.sort((a, b) => matches(b) - matches(a) || b.total - a.total);
+  // The family the person picked comes first. Otherwise circles go last, since on most sets they
+  // are door numbers (or grid bubbles), and door tags outnumber window tags on an elevation; then
+  // the family whose labels and shape match the type sizes read, then the biggest.
+  const typeKeys = new Set(pages.flatMap((p) => (p.answer?.types || []).map((t) => `${String(t.shape ?? '').trim().toLowerCase()}|${cleanLabel(t.label)}`)));
+  const matches = (f) => Object.keys(f.counts).filter((l) => typeKeys.has(`${f.shape}|${l}`) || typeKeys.has(`|${l}`)).length;
+  const rank = (f) => [f.shape === prefer ? 0 : 1, f.shape === 'circle' ? 1 : 0, -matches(f), -f.total];
+  families.sort((a, b) => { const ra = rank(a), rb = rank(b); return ra.map((v, i) => v - rb[i]).find((d) => d) || 0; });
   const main = families[0] || null;
   const counts = new Map(Object.entries(main?.counts || {}));
   // Sizes read off a type sheet or a schedule beat sizes the model worked out from an elevation.

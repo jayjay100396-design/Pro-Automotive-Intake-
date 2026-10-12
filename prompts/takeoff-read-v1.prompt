@@ -6,36 +6,113 @@ config:
     thinkingLevel: low
 input:
   schema:
-    hint?: string, what the person said about the page
-    images(array, the whole page first, then its close-ups):
-      caption: string, which part of the page the image shows
-      mimeType: string
-      data: string, the image, base64
+    type: object
+    required: [images]
+    properties:
+      hint:
+        type: string
+        description: what the person said about the page
+      images:
+        type: array
+        description: the whole page first, then its close-ups
+        items:
+          type: object
+          required: [caption, mimeType, data]
+          properties:
+            caption:
+              type: string
+              description: which part of the page the image shows
+            mimeType:
+              type: string
+            data:
+              type: string
+              description: the image, base64
 output:
   format: json
   schema:
-    kind: string, what the page is, in a few words
-    sheet?: string, the sheet number from the title block
-    scale?: string, the printed drawing scale
-    tags(array, every small labelled symbol on the page):
-      label: string, as written
-      shape: string, diamond, hexagon, circle, square, oval or other
-      where: string, elevation, plan, type-elevation, schedule, legend or other
-      image: integer, the number of the image it was read in
-      box(array, ymin xmin ymax xmax on that image, 0 to 1000): integer
-    types(array, window, storefront and door types with their sizes):
-      label: string, as written
-      shape?: string, the shape of the type's tag
-      width: string, overall width as written
-      height: string, overall height as written
-      note?: string
-    items(array, openings and pieces written out with their sizes):
-      label: string, the type mark, the opening's name, or what it is
-      qty: integer, the count written with it, else 1
-      width?: string, as written
-      height?: string, as written
-      note?: string
-    notes(array, short notes that change the price): string
+    type: object
+    required: [kind, sheet, scale, tags, types, items, notes]
+    properties:
+      kind:
+        type: string
+        description: what the page is, in a few words
+      sheet:
+        type: [string, "null"]
+        description: the sheet number from the title block, else null
+      scale:
+        type: [string, "null"]
+        description: the printed drawing scale, else null
+      tags:
+        type: array
+        description: every small labelled symbol on the page
+        items:
+          type: object
+          required: [label, shape, where, image, box]
+          properties:
+            label:
+              type: string
+              description: as written
+            shape:
+              type: string
+              description: diamond, hexagon, circle, square, oval or other
+            where:
+              type: string
+              description: elevation, plan, type-elevation, schedule, legend or other
+            image:
+              type: integer
+              description: the number of the image it was read in
+            box:
+              type: array
+              description: ymin xmin ymax xmax on that image, 0 to 1000
+              items:
+                type: integer
+      types:
+        type: array
+        description: window, storefront and door types with their sizes
+        items:
+          type: object
+          required: [label, shape, width, height, note]
+          properties:
+            label:
+              type: string
+              description: as written
+            shape:
+              type: [string, "null"]
+              description: the shape of the type's tag, else null
+            width:
+              type: string
+              description: overall width as written
+            height:
+              type: string
+              description: overall height as written
+            note:
+              type: [string, "null"]
+      items:
+        type: array
+        description: openings and pieces written out with their sizes
+        items:
+          type: object
+          required: [label, qty, width, height, note]
+          properties:
+            label:
+              type: string
+              description: the type mark, the opening's name, or what it is
+            qty:
+              type: integer
+              description: the count written with it, else 1
+            width:
+              type: [string, "null"]
+              description: as written, else null
+            height:
+              type: [string, "null"]
+              description: as written, else null
+            note:
+              type: [string, "null"]
+      notes:
+        type: array
+        description: short notes that change the price
+        items:
+          type: string
 ---
 
 {{role "system"}}

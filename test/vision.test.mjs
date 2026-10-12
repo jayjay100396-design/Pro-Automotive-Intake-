@@ -97,4 +97,19 @@ describe('takeoff: reading with Gemini', () => {
     assert.equal(r.main, null);
     assert.deepEqual(r.openings.map((o) => [o.label, o.qty]), [['D', 0], ['Opening 2', 1]]);
   });
+
+  it('puts door numbers (circles) behind the window tags even when they outnumber them, unless told otherwise', () => {
+    const tag = (label, shape) => ({ label, shape, where: 'elevation' });
+    // An elevation sheet read on its own, like A-203: 19 window tags, 40 door numbers.
+    const page = { answer: { kind: 'exterior elevations', types: [], items: [], notes: [] },
+      tags: [tag('D', 'diamond'), tag('D', 'diamond'), tag('B', 'circle'), tag('B', 'circle'), tag('C', 'circle'), tag('D', 'circle')] };
+    assert.equal(openingsFrom([page]).main.shape, 'diamond');
+    // Even with the type sheet, whose door types match more of the circle labels.
+    const typeSheet = { answer: { kind: 'schedules', types: [{ label: 'D', shape: 'diamond', width: '48', height: '48' }, { label: 'B', shape: 'circle', width: '36', height: '84' }, { label: 'C', shape: 'circle', width: '36', height: '84' }, { label: 'D', shape: 'circle', width: '120', height: '120' }], items: [], notes: [] }, tags: [] };
+    assert.deepEqual(openingsFrom([page, typeSheet]).openings.map((o) => [o.label, o.qty, o.widthIn]), [['D', 2, 48]]);
+    // The person can ask for the circles instead.
+    const r = openingsFrom([page, typeSheet], { prefer: 'circle' });
+    assert.equal(r.main.shape, 'circle');
+    assert.deepEqual(r.openings.map((o) => [o.label, o.qty, o.widthIn]), [['B', 2, 36], ['C', 1, 36], ['D', 1, 120]]);
+  });
 });
