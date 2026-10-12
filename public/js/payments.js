@@ -24,12 +24,20 @@ export const sendWithStripe = (invoiceId, send) => run('create', { invoiceId, se
 export const voidWithStripe = (invoiceId) => run('void', { invoiceId });
 export const checkWithStripe = (invoiceId) => run('sync', { invoiceId });
 
-// The function's own messages come through as they are. Before it's deployed, a call fails
-// with a bare "internal" error.
+// Firebase adds the HTTP status to the server's sentence ("That invoice no longer exists. [404]"). People see the sentence alone.
+const messageOf = (e) => String(e?.message || '').replace(/\s*\[\d{1,3}\]$/, '');
+
+// The function's own sentences come through as they are. A call that didn't get one fails with a bare code:
+// "internal" (or "not-found") before the function is deployed, with no connection or when it ran out of time,
+// and "INTERNAL" when it crashed.
 export function paymentsError(e) {
   const code = String(e?.code || '').replace(/^functions\//, '');
-  if (code === 'not-found' || (code === 'internal' && (!e.message || e.message === 'internal'))) {
+  const msg = messageOf(e);
+  if (msg && msg !== code && msg !== 'INTERNAL') return msg;
+  if (navigator.onLine === false) return 'You\'re offline. Try again once you\'re connected.';
+  // Online payments only go on once the function answers (Settings), so while they're off it's most likely not deployed.
+  if (['internal', 'not-found'].includes(code) && msg === code && !state.company?.onlinePayments) {
     return 'Online payments aren\'t set up yet (STRIPE_SETUP.md has the steps).';
   }
-  return e?.message || 'Something went wrong.';
+  return 'Stripe didn\'t answer, or something went wrong. Wait a moment, then try again.';
 }

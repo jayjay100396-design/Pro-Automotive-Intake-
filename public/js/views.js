@@ -1023,8 +1023,8 @@ export function invoiceEdit(id, params) {
         <label>Sales tax % <input name="taxPct" type="number" step="any" value="${esc(inv.taxPct)}"></label>
       </fieldset>
       <fieldset class="card" ${ro}>
-        <table class="lines" data-lines><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Tax</th><th class="num">Amount</th><th></th></tr></thead>
-        <tbody id="lines">${(inv.lines || []).map(invRow).join('')}</tbody></table>
+        <div class="scroll"><table class="lines" data-lines><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Tax</th><th class="num">Amount</th><th></th></tr></thead>
+        <tbody id="lines">${(inv.lines || []).map(invRow).join('')}</tbody></table></div>
         <button type="button" class="btn small" id="addline">+ Add line</button>
       </fieldset>
       <div class="cols">

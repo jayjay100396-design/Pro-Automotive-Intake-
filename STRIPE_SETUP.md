@@ -28,6 +28,8 @@ Firebase: the server code needs the **Blaze** (pay as you go) plan. At Wes's vol
 
 ## Setup
 
+The billing itself (invoices, pay apps, deposits and the Payments card) works without Stripe: `npm run deploy` on its own puts it live with online payments off. Until the Stripe functions are deployed (step 9, after the secrets in step 8), **Settings > Online payments** says online payments aren't set up yet and the switch stays off.
+
 Start in Stripe's **test mode** (Stripe calls it a sandbox). Nothing real is charged, and you can switch to live at the end.
 
 ### A. Stripe (in the browser, signed in to Wes's Stripe account)
