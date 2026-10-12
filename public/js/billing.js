@@ -3,7 +3,7 @@
 //   - Payments card on an invoice: payments recorded by hand (cash, check or other).
 //   - Online payment card on an invoice: send it with Stripe, copy the link, check, void.
 //   - Online payments card in Settings: the switch for Stripe, whether it's connected, and the Business ID.
-import { state, putOnce, get, where, nextNumber, can, onChange, updateWith, updateCompany } from './data.js';
+import { state, putOnce, get, where, nextNumber, can, onChange, update, updateWith, updateCompany } from './data.js';
 import {
   invoiceTotals, proposalBill, nextDeposit, proposalDeposit, proposalPayment, proposalOptions, estimateAmount, money, round2,
   paidOn, billedOn, dueOn, creditedOn, contractSum,
@@ -53,6 +53,18 @@ export const startGuard = (contract) => async (read) => {
     throw new Error('An invoice was just made from this contract\'s proposal. Wait a moment for it to show, then start the pay app again.');
   }
 };
+
+// A contract whose pay apps were made before contracts noted it gets the note once a tab that can bill sees
+// them, since a deposit invoice checks the note as it's saved but can't look up pay apps by contract then.
+const noting = new Set();
+onChange(() => {
+  if (!can.bill() || !state.companyId) return;
+  for (const c of state.data.contracts) {
+    if (c.payAppsStarted === true || noting.has(c.id) || !where('payApps', 'contractId', c.id).length) continue;
+    noting.add(c.id);
+    update('contracts', c.id, { payAppsStarted: true }).catch((e) => console.warn('Couldn\'t note that the pay apps started', e));
+  }
+});
 
 const proposalSig = (e) => {
   const d = proposalDeposit(e);

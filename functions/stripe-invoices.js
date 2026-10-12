@@ -116,11 +116,12 @@ const paidAtOf = (si) => new Date((si.status_transitions?.paid_at || Math.floor(
 const prefixed = (fields) => Object.fromEntries(Object.entries(fields).map(([k, v]) => [`stripe.${k}`, v]));
 
 // Writes on the bill only while it still has the Stripe invoice read before asking Stripe (s: its id and
-// mode), so a write that lands late doesn't go on a newer Stripe invoice another device made meanwhile.
+// mode), so a write that lands late doesn't go on a newer Stripe invoice another device made meanwhile,
+// or is making: while one is being made the bill still names the one before, so it's left alone then too.
 // True if it wrote.
 const updateIfSame = (db, ref, s, fields) => db.runTransaction(async (tx) => {
   const cur = (await tx.get(ref)).data()?.stripe;
-  if (cur?.invoiceId !== s.invoiceId || !!cur?.livemode !== !!s.livemode) return false;
+  if (cur?.invoiceId !== s.invoiceId || !!cur?.livemode !== !!s.livemode || cur?.status === 'creating') return false;
   tx.update(ref, fields);
   return true;
 });

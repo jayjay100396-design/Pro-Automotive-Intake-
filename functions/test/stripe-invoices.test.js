@@ -1148,6 +1148,26 @@ describe('Stripe invoices (server)', function () {
     assert.deepEqual([st.invoiceId, st.status, st.claimedAt], [r.invoiceId, 'open', null]);
   });
 
+  it('leaves a resend that started meanwhile alone when a void finishes late', async () => {
+    const { invoiceId: a } = await create();
+    // While Stripe voids it, the void notice is saved and another device starts sending the bill again.
+    const voidInvoice = stripe.invoices.voidInvoice;
+    let claimedAt;
+    stripe.invoices.voidInvoice = async (id) => {
+      stripe.invoices.voidInvoice = voidInvoice;
+      const voided = await voidInvoice(id);
+      await handleStripeEvent({ db, stripe, event: { type: 'invoice.voided', data: { object: voided } }, allowed: C });
+      claimedAt = new Date();
+      await inv().update({ 'stripe.status': 'creating', 'stripe.claimedAt': claimedAt });
+      return voided;
+    };
+    await assert.rejects(voidStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' }), {
+      code: 'aborted', message: /^The Stripe invoice was voided, but this invoice was sent with Stripe again meanwhile/,
+    });
+    const { stripe: st } = await data();
+    assert.deepEqual([st.status, st.invoiceId, st.claimedAt.toMillis()], ['creating', a, claimedAt.getTime()]);
+  });
+
   // A try that stalls past its claim (as if it started long ago), so another try can take the bill over.
   const stalled = () => create({ now: new Date(Date.now() - 600e3) });
   const SUPERSEDED = { code: 'aborted', message: /^Nothing was sent: this invoice was sent with Stripe again meanwhile\./ };
