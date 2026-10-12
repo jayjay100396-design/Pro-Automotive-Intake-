@@ -92,6 +92,7 @@ function fakeStripe() {
     }),
     invoiceItems: {
       create: async (p) => { log('invoiceItems.create', p); get(p.invoice).lines.push(p); return { id: `ii_${++n}` }; },
+      list: async (p) => { log('invoiceItems.list', p); return { data: [] }; },
     },
     // On a paid invoice only: what it credits to the customer's balance goes back on their account.
     creditNotes: {
@@ -107,6 +108,7 @@ function fakeStripe() {
         if (c && p.credit_amount) c.balance = (c.balance || 0) - p.credit_amount;
         return { id: `cn_${++n}`, ...p };
       },
+      list: async (p) => { log('creditNotes.list', p); return { data: [] }; },
     },
     // The customer pays on Stripe's page.
     pay(id, paidAt = Date.parse('2026-10-20T15:00:00Z') / 1000) {
@@ -170,6 +172,16 @@ describe('Stripe invoices (server)', function () {
     const st = await stripeStatus({ stripe, livemode: false });
     assert.equal(st.connected, false);
     assert.match(st.problem, /rejected the API key/);
+    // A permission the app needs left at None shows up here, not on the first invoice. Stripe's error names it.
+    stripe.fail['invoiceItems.list'] = stripeError('StripePermissionError', 'The provided key \'rk_test_***1234\' does not have the required permissions for this endpoint on account \'acct_1\'. Having the \'rak_invoiceitem_read\' permission would allow this request to continue.');
+    const items = await stripeStatus({ stripe, livemode: false });
+    assert.equal(items.connected, false);
+    assert.equal(items.problem, 'The Stripe key needs Customers, Invoices and Credit notes set to Write (and Invoice items, if Stripe lists it). Stripe says it\'s missing Invoice items.');
+    stripe.fail['creditNotes.list'] = stripeError('StripePermissionError', 'Having the \'rak_credit_note_read\' permission would allow this request to continue.');
+    assert.match((await stripeStatus({ stripe, livemode: false })).problem, /Stripe says it's missing Credit notes\.$/);
+    stripe.fail['invoices.list'] = stripeError('StripePermissionError', 'Not allowed.');
+    assert.match((await stripeStatus({ stripe, livemode: false })).problem, /\(and Invoice items, if Stripe lists it\)\.$/);
+    assert.deepEqual(await stripeStatus({ stripe, livemode: false }), { connected: true, livemode: false });
   });
 
   it('makes an itemized Stripe invoice with the app number and emails it', async () => {
@@ -339,6 +351,7 @@ describe('Stripe invoices (server)', function () {
     assert.match(d.stripe.error, /couldn't email it/);
     assert.equal(d.stripe.sentTo, null); // noted as emailed before Stripe was asked, then put back
     assert.equal(d.stripe.sentAt, null);
+    assert.equal(d.stripe.sending, undefined);
     // Emailed, then Email it again fails: it still says when it was last emailed.
     assert.equal((await create({ send: true })).sentTo, 'pat@example.com');
     const sentAt = (await data()).stripe.sentAt.toMillis();
@@ -363,12 +376,41 @@ describe('Stripe invoices (server)', function () {
     const d = await data();
     assert.equal(d.stripe.sentTo, 'pat@example.com');
     assert.match(d.stripe.error, /^Couldn't tell whether Stripe emailed/);
+    assert.equal(d.stripe.sending, undefined); // emailing it again isn't blocked; the note says to check first
     // The same when it was just made.
     await db.doc(`companies/${C}/invoices/i2`).set({ ...(({ stripe: _, ...bill }) => bill)(d), number: 1004 });
     stripe.fail['invoices.sendInvoice'] = stripeError('StripeConnectionError', 'socket hang up');
     const made = await create({ invoiceId: 'i2', send: true });
     assert.match(made.warning, /^Made the Stripe invoice, but couldn't tell whether Stripe emailed it/);
     assert.equal(made.sentTo, 'pat@example.com');
+  });
+
+  it('emails it once when two devices email the same open Stripe invoice at the same moment', async () => {
+    await create();
+    const send = stripe.invoices.sendInvoice;
+    let go;
+    const answer = new Promise((resolve) => { go = resolve; });
+    let asked = 0;
+    // Stripe holds off answering until one of the two is turned away (or both have asked it to email it).
+    stripe.invoices.sendInvoice = async (id) => { asked += 1; if (asked === 2) go(); await answer; return send(id); };
+    const tries = [create({ send: true }), create({ send: true })];
+    tries.forEach((t) => t.catch(() => go()));
+    const results = await Promise.allSettled(tries);
+    stripe.invoices.sendInvoice = send;
+    assert.equal(stripe.called('invoices.sendInvoice').length, 1);
+    assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+    const { reason } = results.find((r) => r.status === 'rejected');
+    assert.equal(reason.code, 'aborted');
+    assert.match(reason.message, /being emailed right now/);
+    let d = await data();
+    assert.equal(d.stripe.sentTo, 'pat@example.com');
+    assert.equal(d.stripe.sending, undefined);
+    // A claim left by a try that stopped (older than the function's timeout) is taken over.
+    await inv().update({ 'stripe.sending': { token: 'gone', at: new Date(Date.now() - 600e3) } });
+    assert.equal((await create({ send: true })).warning, null);
+    assert.equal(stripe.called('invoices.sendInvoice').length, 2);
+    d = await data();
+    assert.equal(d.stripe.sending, undefined);
   });
 
   it('checks the bill again as it emails an open Stripe invoice again', async () => {
@@ -770,6 +812,27 @@ describe('Stripe invoices (server)', function () {
     assert.equal(paidOn(d), 0);
   });
 
+  it('records a payment on part of an open Stripe invoice', async () => {
+    const { invoiceId } = await create({ send: true });
+    // $500 of it paid through Stripe (say a bank transfer that came up short); the rest is still owed.
+    Object.assign(stripe.invoices.get(invoiceId), { amount_paid: 50000, amount_remaining: 139000 });
+    const event = (invoice) => ({ type: 'invoice_payment.paid', data: { object: { id: 'inpay_1', object: 'invoice_payment', invoice, amount_paid: 50000, status: 'paid' } } });
+    assert.equal(await handleStripeEvent({ db, stripe, event: event(invoiceId), allowed: 'someone-else' }), 'ignored');
+    assert.equal((await data()).stripe.paidOnline, 0);
+    assert.equal(await handleStripeEvent({ db, stripe, event: event(invoiceId), allowed: C }), 'updated');
+    const d = await data();
+    assert.equal(d.status, 'unpaid');
+    assert.equal(d.stripe.status, 'open');
+    assert.equal(d.stripe.paidOnline, 500);
+    assert.equal(d.stripe.amountPaid, 500);
+    assert.equal(paidOn(d), 500);
+    // An expanded invoice in the event works too; a payment on an invoice made some other way is ignored.
+    assert.equal(await handleStripeEvent({ db, stripe, event: event({ id: invoiceId }), allowed: C }), 'updated');
+    const other = await stripe.invoices.create({ customer: 'cus_x', metadata: {} });
+    assert.equal(await handleStripeEvent({ db, stripe, event: event(other.id), allowed: C }), 'ignored');
+    assert.equal(await handleStripeEvent({ db, stripe, event: event(null), allowed: C }), 'ignored');
+  });
+
   it('doesn\'t count an overpayment, which Stripe makes credit for the customer\'s next invoice', async () => {
     const { invoiceId } = await create();
     stripe.pay(invoiceId);
@@ -935,6 +998,48 @@ describe('Stripe invoices (server)', function () {
     assert.deepEqual([...stripe.customers.keys()], [kept]);
     assert.equal(stripe.invoices.get(a.invoiceId).customer, kept);
     assert.equal(stripe.invoices.get(b.invoiceId).customer, kept);
+  });
+
+  it('brings the Stripe customer another invoice made at the same moment up to date before using it', async () => {
+    // Another invoice for this customer, sent a moment earlier, made their Stripe customer from details
+    // read before their phone number was changed, and saved it first.
+    const make = stripe.customers.create;
+    stripe.customers.create = async (p) => {
+      stripe.customers.create = make;
+      const other = await make({ ...p, phone: '863-555-0000' });
+      await db.doc(`companies/${C}/customers/c1`).update({ 'stripeCustomerIds.test': other.id });
+      return make(p);
+    };
+    const r = await create({ send: true });
+    const kept = (await data(db.doc(`companies/${C}/customers/c1`))).stripeCustomerIds.test;
+    assert.equal(stripe.called('customers.del').length, 1); // the one this call made
+    assert.deepEqual([...stripe.customers.keys()], [kept]);
+    assert.equal(r.status, 'open');
+    assert.equal(r.sentTo, 'pat@example.com');
+    const si = stripe.invoices.get(r.invoiceId);
+    assert.equal(si.customer, kept);
+    assert.equal(si.customer_phone, '863-555-0100');
+  });
+
+  it('cancels the Stripe invoice if it shows other customer details than the customer has', async () => {
+    // Another invoice for this customer, made from details read before an edit, updates their Stripe
+    // customer while this one is being made.
+    const add = stripe.invoiceItems.create;
+    stripe.invoiceItems.create = async (p) => {
+      stripe.invoiceItems.create = add;
+      await stripe.customers.update(p.customer, { phone: '863-555-0000' });
+      return add(p);
+    };
+    await assert.rejects(create({ send: true }), {
+      code: 'failed-precondition', message: /its customer was changed while its Stripe invoice was being made, so the Stripe invoice was cancelled/,
+    });
+    const [, voided] = stripe.called('invoices.voidInvoice')[0];
+    assert.equal(stripe.invoices.get(voided).status, 'void');
+    assert.equal(stripe.called('invoices.sendInvoice').length, 0);
+    assert.notEqual((await data()).stripe.status, 'open');
+    // Tried again, the Stripe customer gets the customer's details back first.
+    const r = await create({ send: true });
+    assert.equal(stripe.invoices.get(r.invoiceId).customer_phone, '863-555-0100');
   });
 
   it('keeps a Stripe invoice marked uncollectible linked until it\'s voided, since it can still be paid', async () => {

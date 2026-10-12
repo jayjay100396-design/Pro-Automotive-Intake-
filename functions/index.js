@@ -1,6 +1,6 @@
 // Cloud Functions for the Stellar Glass app: Stripe invoices. Setup steps are in STRIPE_SETUP.md.
 //   stripeInvoices  callable from the app: status, create, void, sync
-//   stripeWebhook   Stripe's events (invoice paid, voided, uncollectible, and credit notes made or voided)
+//   stripeWebhook   Stripe's events (invoice paid, partly paid, voided, uncollectible, and credit notes made or voided)
 import { onCall, onRequest, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import { defineSecret, defineString } from 'firebase-functions/params';
