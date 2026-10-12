@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {
   sqft, lineTotal, estimateTotals, proposalOptions, estimateAmount, invoiceTotals, contractSum, g702, nextPayAppLines,
   proposalBill, depositLine, proposalDeposit, depositSentence, proposalTerms, termsWithoutDeposit, proposalPayment,
-  paidOn, billedOn, dueOn, creditedOn, recordedPaid,
+  paidOn, billedOn, dueOn, creditedOn, recordedPaid, nextDeposit, round2,
 } from '../public/js/calc.js';
 import { paidOn as serverPaidOn } from '../functions/lines.js';
 
@@ -238,6 +238,68 @@ describe('money math', () => {
     assert.equal(s1.currentDue + s2.currentDue + s3.currentDue + 50000, 100000);
     // No deposit: as before.
     assert.deepEqual([g702(app(30000), contract).depositApplied, g702(app(30000), contract).currentDue], [0, 30000]);
+  });
+
+  it('keeps what earlier pay apps took off a deposit that is refunded later', () => {
+    const contract = { amount: 100000 };
+    const app = (done, prevWork = 0) => ({ retainagePct: 0, lines: [{ item: 1, value: 100000, prevWork, thisWork: done - prevWork, stored: 0 }] });
+    // App 1 earned $30,000, all of it covered by a $50,000 deposit, so it billed nothing.
+    const s1 = g702(app(30000), contract, [], 0, 50000, 0);
+    assert.deepEqual([s1.depositApplied, s1.currentDue], [30000, 0]);
+    // The deposit is refunded in full: app 2 ($60,000 to date) bills all the work, adding back what app 1 took off.
+    const s2 = g702(app(60000, 30000), contract, [], s1.earnedLessRetainage, 0, s1.depositApplied);
+    assert.deepEqual([s2.depositBefore, s2.depositApplied, s2.currentDue], [30000, -30000, 60000]);
+    // App 1 keeps what it took off, so it still shows what it billed.
+    assert.deepEqual([g702(app(30000), contract, [], 0, 0, 0, s1.depositApplied).currentDue], [0]);
+    // Refunded down to $20,000 instead: app 2 bills all but that.
+    const part = g702(app(60000, 30000), contract, [], s1.earnedLessRetainage, 20000, s1.depositApplied);
+    assert.deepEqual([part.depositApplied, part.currentDue], [-10000, 40000]);
+    const s3 = g702(app(100000, 60000), contract, [], part.earnedLessRetainage, 20000, s1.depositApplied + part.depositApplied);
+    assert.deepEqual([s3.depositApplied, s3.currentDue], [0, 40000]);
+    assert.equal(s1.currentDue + part.currentDue + s3.currentDue + 20000, 100000);
+    // Earlier apps that didn't keep it are taken as covered by the deposit as it is now, as before.
+    assert.equal(g702(app(60000, 30000), contract, [], 30000, 50000).depositApplied, 20000);
+  });
+
+  it('bills the work once however the deposit changes between pay apps', () => {
+    let seed = 11;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const contract = { amount: 100000 };
+    for (let i = 0; i < 300; i++) {
+      const pct = [0, 5, 10][i % 3];
+      let done = 0;
+      let prev = 0;
+      let before = 0;
+      let due = 0;
+      for (let k = 0; k < 6; k++) {
+        // The deposit as it stands when this app is billed: refunded, credited, or another one made.
+        const deposit = Math.round(rnd() * 60000);
+        const next = Math.min(100000, done + Math.round(rnd() * 30000));
+        const s = g702({ retainagePct: pct, lines: [{ value: 100000, prevWork: done, thisWork: next - done, stored: 0 }] }, contract, [], prev, deposit, before);
+        due = round2(due + s.currentDue);
+        before = round2(before + s.depositApplied);
+        prev = s.earnedLessRetainage;
+        done = next;
+        // What the apps billed, plus the deposit kept, is what's been earned.
+        assert.equal(round2(due + Math.min(deposit, prev)), prev, `run ${i}, app ${k + 1}`);
+      }
+    }
+  });
+
+  it('caps another deposit at what the proposal has left to bill, on the contract sum once it is one', () => {
+    const est = { number: 1010, lines: [{ desc: 'Storefront', unit: 'lot', qty: 1, price: 100000 }], depositType: 'percent', depositValue: 80 };
+    assert.deepEqual(nextDeposit(est, 0), { line: { desc: 'Deposit (80%) on proposal 1010', qty: 1, price: 80000, taxable: false }, full: 80000, left: 100000, sum: 100000 });
+    // A second deposit can only bill the $20,000 the first one left.
+    assert.equal(nextDeposit(est, 80000).line.price, 20000);
+    assert.equal(nextDeposit(est, 100000).line.price, 0);
+    assert.equal(nextDeposit(est, 120000).line.price, 0);
+    // Once it's a contract, the deposit is on the contract sum, even if the proposal is raised afterwards.
+    const raised = { ...est, lines: [{ ...est.lines[0], price: 300000 }], depositValue: 50 };
+    const c = nextDeposit(raised, 0, { sum: 100000, label: 'contract 7' });
+    assert.deepEqual([c.line.desc, c.line.price, c.sum], ['Deposit (50%) on contract 7', 50000, 100000]);
+    assert.equal(nextDeposit(raised, 70000, { sum: 100000, label: 'contract 7' }).line.price, 30000);
+    // A dollar deposit is never more than the contract sum either.
+    assert.equal(nextDeposit({ ...raised, depositType: 'amount', depositValue: 150000 }, 0, { sum: 100000, label: 'contract 7' }).full, 100000);
   });
 
   it('can hold a different retainage on stored materials', () => {

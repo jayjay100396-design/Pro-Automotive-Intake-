@@ -514,6 +514,36 @@ describe('Stripe invoices (server)', function () {
     assert.equal((await data()).stripe.issued, 2);
   });
 
+  it('leaves a newer Stripe invoice alone when a void is saved after it was made', async () => {
+    const { invoiceId: a } = await create();
+    // While Stripe voids it, its void notice is saved and another device sends the bill again.
+    const voidInvoice = stripe.invoices.voidInvoice;
+    let b;
+    stripe.invoices.voidInvoice = async (id) => {
+      stripe.invoices.voidInvoice = voidInvoice;
+      const voided = await voidInvoice(id);
+      assert.equal(await handleStripeEvent({ db, stripe, event: { type: 'invoice.voided', data: { object: voided } }, allowed: C }), 'updated');
+      b = (await create()).invoiceId;
+      return voided;
+    };
+    await assert.rejects(voidStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' }), {
+      code: 'aborted', message: /^The Stripe invoice was voided, but this invoice was sent with Stripe again meanwhile/,
+    });
+    assert.equal(stripe.invoices.get(a).status, 'void');
+    const { stripe: st } = await data();
+    assert.deepEqual([st.invoiceId, st.status, st.number], [b, 'open', '1003-2']);
+    // A check that turns Stripe's reminders back on doesn't clear a note left on a newer one either.
+    await inv().update({ 'stripe.error': 'Stripe emailed the invoice, but couldn\'t turn on its payment reminders. Try again.' });
+    const update = stripe.invoices.update;
+    stripe.invoices.update = async (id, p) => {
+      stripe.invoices.update = update;
+      await inv().update({ 'stripe.invoiceId': 'in_newer' });
+      return update(id, p);
+    };
+    await syncStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' });
+    assert.match((await data()).stripe.error, /couldn't turn on its payment reminders/);
+  });
+
   it('lets Stripe number it when the app number is taken', async () => {
     stripe.fail['invoices.create'] = stripeError('StripeInvalidRequestError', 'Invoice number already used', { param: 'number' });
     const r = await create();

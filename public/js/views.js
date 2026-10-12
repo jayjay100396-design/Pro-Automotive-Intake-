@@ -687,17 +687,39 @@ function rerender() {
 
 // ---------- Pay apps (AIA G702 / G703) ----------
 // Invoices made from the contract's proposal (a deposit, say) billed part of the job before its pay apps,
-// so the pay apps take that off (G702 line 7a) until it's used up.
+// so the pay apps take that off (G702 line 7a) until it's used up. Each app keeps what it took off
+// (depositApplied) once it's billed: past draft, or invoiced (fixDeposits). So a deposit refunded or
+// credited later doesn't change what earlier apps billed; the next app adds back what they took beyond it.
+const earlierApps = (p) => where('payApps', 'contractId', p.contractId).filter((x) => (Number(x.number) || 0) < (Number(p.number) || 0));
+const billedApp = (id, status) => status !== 'draft' || where('invoices', 'payAppId', id).some((i) => i.status !== 'void');
+
+// override: the app as its page has it, unsaved changes included.
 export function payAppSummary(p, override) {
+  const a = override || p;
   const c = get('contracts', p.contractId) || { amount: 0 };
-  const prior = where('payApps', 'contractId', p.contractId)
-    .filter((x) => (Number(x.number) || 0) < (Number(p.number) || 0))
-    .sort(sortNum)[0];
-  const prevCert = prior ? payAppSummary(prior).earnedLessRetainage : 0;
+  const prior = earlierApps(p).sort(sortNum)[0];
+  const ps = prior ? payAppSummary(prior) : null;
   const deposits = c.estimateId ? where('invoices', 'estimateId', c.estimateId).filter((i) => i.status !== 'void' && billedOn(i) > 0).sort(sortNum) : [];
-  const s = g702(override || p, c, coForContract(p.contractId), prevCert, deposits.reduce((t, i) => t + billedOn(i), 0));
+  const s = g702(a, c, coForContract(p.contractId), ps ? ps.earnedLessRetainage : 0, deposits.reduce((t, i) => t + billedOn(i), 0),
+    ps ? round2(ps.depositBefore + ps.depositApplied) : 0, typeof a.depositApplied === 'number' ? a.depositApplied : null);
   return { ...s, depositFrom: deposits.map((i) => i.number) };
 }
+
+// Keeps what the earlier apps that don't have it yet take off the deposit, as they show now, and returns
+// what to save on this one (cur: as its page has it; nothing if it has it already). A contract that wasn't
+// made from a proposal has no deposit to keep.
+async function fixDeposits(p, cur) {
+  if (!get('contracts', p.contractId)?.estimateId) return {};
+  const earlier = earlierApps(p).filter((x) => typeof x.depositApplied !== 'number').map((x) => [x.id, payAppSummary(x).depositApplied]);
+  for (const [id, depositApplied] of earlier) await update('payApps', id, { depositApplied });
+  return typeof cur.depositApplied === 'number' ? {} : { depositApplied: payAppSummary(p, cur).depositApplied };
+}
+
+// What the pay app page edits, to tell when it has changes that aren't saved.
+const payAppSig = (x) => JSON.stringify([
+  ['number', 'date', 'periodTo', 'status', 'retainagePct', 'storedRetainagePct'].map((k) => String(x[k] ?? '')),
+  (x.lines || []).map((l) => [String(l.desc ?? ''), ...['value', 'prevWork', 'thisWork', 'stored'].map((k) => Number(l[k]) || 0)]),
+]);
 
 export function payApps() {
   const rows = [...D().payApps].sort((a, b) => (a.jobId || '').localeCompare(b.jobId || '') || sortNum(a, b));
@@ -757,7 +779,8 @@ export function payAppEdit(id) {
     mount(root) {
       const body = root.querySelector('#lines');
       const form = root.querySelector('#f');
-      const current = () => ({ ...p, ...formData(form), lines: readLines(body) });
+      // The saved app under the page's changes: what it keeps off the deposit may have been saved since it opened.
+      const current = () => ({ ...(get('payApps', id) || p), ...formData(form), lines: readLines(body) });
       const recalc = () => {
         const s = payAppSummary(p, current());
         body.querySelectorAll('tr[data-row]').forEach((tr, i) => {
@@ -783,20 +806,37 @@ export function payAppEdit(id) {
       });
       form.addEventListener('input', recalc);
       recalc();
+      const initial = payAppSig(current());
+      const unsaved = () => { const now = payAppSig(current()); return now !== initial && now !== payAppSig(get('payApps', id) || {}); };
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
         const cur = current();
-        const s = payAppSummary(p, cur);
-        await attempt(() => update('payApps', id, { ...formData(form), lines: cur.lines, currentDue: s.currentDue }), 'Pay app saved');
+        // Once it's billed, what it takes off the deposit is kept from now on. A draft with no invoice
+        // figures it afresh.
+        await attempt(async () => {
+          const dep = billedApp(id, cur.status) ? await fixDeposits(p, cur) : typeof cur.depositApplied === 'number' ? { depositApplied: null } : {};
+          const s = payAppSummary(p, { ...cur, ...dep });
+          return update('payApps', id, { ...formData(form), lines: cur.lines, currentDue: s.currentDue, ...dep });
+        }, 'Pay app saved');
+        recalc();
       });
       root.querySelector('#toinvoice')?.addEventListener('click', async () => {
-        const s = payAppSummary(p, current());
+        if (unsaved()) return toast('Save the pay app first, then make the invoice.', true);
+        const cur = current();
+        const s = payAppSummary(p, cur);
         if (s.depositApplied > 0 && s.currentDue <= 0) return toast('The proposal\'s deposit covers this application, so there\'s nothing to invoice.', true);
-        const less = s.depositApplied > 0 ? `, less ${money(s.depositApplied)} of the deposit` : '';
+        // Billed now, so what it takes off the deposit is kept from here on.
+        const kept = await attempt(async () => {
+          const dep = await fixDeposits(p, cur);
+          if (Object.keys(dep).length) await update('payApps', id, dep);
+        });
+        if (kept === null) return;
+        const less = s.depositApplied > 0 ? `, less ${money(s.depositApplied)} of the deposit`
+          : s.depositApplied < 0 ? `, plus ${money(-s.depositApplied)} of the deposit earlier applications took off, since refunded or credited` : '';
         const r = await attempt(() => add('invoices', {
           number: nextNumber('invoices'), jobId: p.jobId, customerId: p.customerId || get('jobs', p.jobId)?.customerId || '', payAppId: id,
           date: today(), dueDate: addDays(today(), 30), status: 'unpaid', taxPct: 0,
-          lines: [{ desc: `Application for payment #${p.number}, period to ${p.periodTo} (net of retainage${less})`, qty: 1, price: s.currentDue }],
+          lines: [{ desc: `Application for payment #${cur.number}, period to ${cur.periodTo} (net of retainage${less})`, qty: 1, price: s.currentDue }],
         }), 'Invoice created');
         if (r) go(`#/invoices/${r.id}`);
       });
@@ -809,6 +849,12 @@ export function payAppEdit(id) {
 
 export function g702Table(s) {
   const r = (n, label, v, cls = '') => `<div class="tr ${cls}"><span><b>${n}</b> ${label}</span><span>${money(v)}</span></div>`;
+  // The deposit as it is now. Refunded or credited after applications took it off, an earlier application
+  // still shows what it took, and the next one adds back what's no longer covered (a negative 7a).
+  const has7a = s.deposit > 0 || s.depositApplied;
+  const dep = s.deposit > 0
+    ? `${money(s.deposit)} billed on proposal invoice ${(s.depositFrom || []).join(', ')}${round2(s.depositBefore + s.depositApplied) > s.deposit ? ' after a refund or credit' : ''}`
+    : 'the deposit has since been refunded or credited';
   return `
     ${r('1.', 'Original contract sum', s.originalSum)}
     ${r('2.', 'Net change by change orders', s.netChange)}
@@ -819,8 +865,8 @@ export function g702Table(s) {
     ${r('5.', 'Total retainage', s.totalRetainage)}
     ${r('6.', 'Total earned less retainage (4 − 5)', s.earnedLessRetainage)}
     ${r('7.', 'Less previous certificates for payment', s.previousCertificates)}
-    ${s.deposit > 0 ? r('7a.', `Less deposit applied (${money(s.deposit)} billed on proposal invoice ${(s.depositFrom || []).join(', ')})`, s.depositApplied) : ''}
-    ${r('8.', `Current payment due (6 − 7${s.deposit > 0 ? ' − 7a' : ''})`, s.currentDue, 'grand')}
+    ${has7a ? r('7a.', `Less deposit applied (${dep}${s.depositApplied < 0 ? `; earlier applications took off ${money(s.depositBefore)}, so the rest is added back` : ''})`, s.depositApplied) : ''}
+    ${r('8.', `Current payment due (6 − 7${has7a ? ' − 7a' : ''})`, s.currentDue, 'grand')}
     ${r('9.', 'Balance to finish, including retainage (3 − 6)', s.balanceToFinish)}`;
 }
 

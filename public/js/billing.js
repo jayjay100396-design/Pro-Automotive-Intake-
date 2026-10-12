@@ -5,8 +5,8 @@
 //   - Online payments card in Settings: the switch for Stripe, whether it's connected, and the Business ID.
 import { state, putOnce, get, where, nextNumber, can, onChange, updateWith, updateCompany } from './data.js';
 import {
-  invoiceTotals, proposalBill, depositLine, proposalDeposit, proposalPayment, proposalOptions, estimateAmount, money, round2,
-  paidOn, billedOn, dueOn, creditedOn,
+  invoiceTotals, proposalBill, nextDeposit, proposalDeposit, proposalPayment, proposalOptions, estimateAmount, money, round2,
+  paidOn, billedOn, dueOn, creditedOn, contractSum,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, badge, toast, formData } from './ui.js';
 import { paymentsStatus, sendWithStripe, voidWithStripe, checkWithStripe, paymentsError } from './payments.js';
@@ -85,6 +85,13 @@ function contractOf(estimateId) {
   return { contract, billing: !!contract && where('payApps', 'contractId', contract.id).length > 0 };
 }
 
+// What a deposit invoice from this proposal bills now (nextDeposit): on the contract sum once it's a contract,
+// and never more than the proposal's invoices (invs) haven't billed.
+function depositNow(e, contract, invs) {
+  const billed = round2(invs.filter((i) => i.status !== 'void').reduce((t, i) => t + billedOn(i), 0));
+  return nextDeposit(e, billed, contract && { sum: contractSum(contract, where('changeOrders', 'contractId', contract.id)).toDate, label: `contract ${contract.number}` });
+}
+
 // e: the proposal as the editor has it (for the deposit); the invoices and payments come from the data.
 function billingHtml(estimateId, e) {
   const invs = fromProposal(estimateId);
@@ -93,21 +100,24 @@ function billingHtml(estimateId, e) {
   const opt = opts[n(e.acceptedOption)] || opts[0];
   const dep = proposalDeposit(e, opt);
   const { contract, billing } = contractOf(estimateId);
+  const now = depositNow(e, contract, invs);
+  const capped = now.full > 0 && now.line.price < now.full;
+  const of = contract ? 'contract sum' : 'price';
   const open = state.company?.onlinePayments ? 'record a payment or email it with Stripe' : 'record a payment';
   return `<div class="row between"><h2>Billing</h2>${pay.status === 'not billed' || contract ? '' : badge(pay.status)}</div>
     ${contract ? `<p class="hint">This proposal became <a href="#/contracts/${esc(contract.id)}">contract ${esc(contract.number)}</a>, so its pay apps bill the rest of the job, less what the invoices here bill. ${billing ? 'Its pay apps have started, so bill anything more on them (a deposit, for example, as materials stored).' : 'A deposit invoice made here before its first pay app comes off the pay apps too.'}</p>` : ''}
     <div class="totals">
-      <div class="tr"><span>${opts.length > 1 ? `Accepted price (Price ${opt.number})` : 'Price'}</span><span>${money(pay.price)}</span></div>
+      <div class="tr"><span>${contract ? 'Contract sum' : opts.length > 1 ? `Accepted price (Price ${opt.number})` : 'Price'}</span><span>${money(contract ? now.sum : pay.price)}</span></div>
       <div class="tr"><span>Paid</span><span>${money(pay.paid)}</span></div>
       ${contract ? '' : `<div class="tr grand"><span>Balance</span><span>${money(pay.balance)}</span></div>`}
     </div>
     ${invs.length ? `<ul class="links top-gap">${invs.map((i) => `<li><a href="#/invoices/${esc(i.id)}">Invoice ${esc(i.number)}</a> ${esc(KIND[i.kind] || '')} ${badge(i.status)}<span class="small muted">${esc(invoiceNote(i))}</span><span class="num">${money(invoiceTotals(i).total)}</span></li>`).join('')}</ul>`
     : '<p class="muted top-gap">No invoices from this proposal yet.</p>'}
     ${can.bill() && !billing ? `<div class="row top-gap">
-      <button type="button" class="btn" id="mkdeposit" ${dep.amount > 0 ? '' : 'disabled'}>Deposit invoice${dep.amount > 0 ? `: ${money(dep.amount)}` : ''}</button>
+      <button type="button" class="btn" id="mkdeposit" ${now.line.price > 0 ? '' : 'disabled'}>Deposit invoice${now.line.price > 0 ? `: ${money(now.line.price)}` : ''}</button>
       ${contract ? '' : '<button type="button" class="btn primary" id="mkfinal">Final invoice</button>'}
     </div>
-    <p class="hint">The deposit (${dep.value ? (dep.type === 'percent' ? `${dep.value}% of the price` : money(dep.value)) : 'none'}) is set under Terms above.${contract ? '' : ' The final invoice lists each line of the accepted price, priced as the printed proposal shows it, with tax only on taxable lines, and subtracts deposit invoices.'} Open an invoice to ${open}.</p>` : ''}`;
+    <p class="hint">The deposit (${dep.value ? (dep.type === 'percent' ? `${dep.value}% of the ${of}` : money(dep.value)) : 'none'}) is set under Terms above.${!capped ? '' : now.left > 0 ? ` The invoices here already bill all but ${money(now.left)} of the ${of}, so another deposit is that much at most.` : ` The invoices here already bill the whole ${of}.`}${contract ? '' : ' The final invoice lists each line of the accepted price, priced as the printed proposal shows it, with tax only on taxable lines, and subtracts deposit invoices.'} Open an invoice to ${open}.</p>` : ''}`;
 }
 
 export function proposalBilling(estimateId) {
@@ -140,13 +150,15 @@ export function mountProposalBilling(root, estimateId, current) {
     const base = {
       number: nextNumber('invoices'), jobId: e.jobId, customerId: e.customerId || get('jobs', e.jobId)?.customerId || '',
       estimateId, payAppId: '', date: today(), status: 'unpaid', notes: state.company?.invoiceNotes || '',
-      // Shown on the Stripe invoice with what's been paid so far (functions/stripe-invoices.js).
-      proposalNumber: e.number ?? '', proposalPrice: estimateAmount(e),
+      // Shown on the Stripe invoice with what's been paid so far (functions/stripe-invoices.js): the price,
+      // or the contract sum once it's a contract.
+      proposalNumber: e.number ?? '', proposalPrice: contract ? depositNow(e, contract, earlier).sum : estimateAmount(e),
     };
     let inv;
     if (kind === 'deposit') {
-      const line = depositLine(e);
-      if (!(line.price > 0)) return toast('This proposal has no deposit. Set one under Terms and save.', true);
+      const { line, full } = depositNow(e, contract, earlier);
+      if (!(full > 0)) return toast('This proposal has no deposit. Set one under Terms and save.', true);
+      if (!(line.price > 0)) return toast(`The invoices from this proposal already bill ${contract ? `contract ${contract.number}'s whole sum` : 'its whole price'}.`, true);
       inv = { ...base, kind, dueDate: today(), taxPct: 0, lines: [line] };
     } else {
       const bill = proposalBill(e);
@@ -169,7 +181,7 @@ export function mountProposalBilling(root, estimateId, current) {
     }
     inv.total = invoiceTotals(inv).total;
     if (inv.total <= 0) return toast('There\'s nothing left to bill on this proposal.', true);
-    const more = kind === 'final' ? ` for the ${money(inv.total)} left` : '';
+    const more = kind === 'final' || inv.total < depositNow(e, contract, earlier).full ? ` for the ${money(inv.total)} left` : ` for ${money(inv.total)}`;
     if (same.length && !confirm(`This proposal already has ${kind} invoice ${same.map((i) => i.number).join(', ')}. Make another one${more}?`)) return;
     try {
       const id = nextProposalId(estimateId);

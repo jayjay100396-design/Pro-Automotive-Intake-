@@ -114,6 +114,17 @@ const paidAtOf = (si) => new Date((si.status_transitions?.paid_at || Math.floor(
 
 const prefixed = (fields) => Object.fromEntries(Object.entries(fields).map(([k, v]) => [`stripe.${k}`, v]));
 
+// Writes on the bill only while it still has the Stripe invoice read before asking Stripe (s: its id and
+// mode), so a write that lands late doesn't go on a newer Stripe invoice another device made meanwhile.
+// True if it wrote.
+const updateIfSame = (db, ref, s, fields) => db.runTransaction(async (tx) => {
+  const cur = (await tx.get(ref)).data()?.stripe;
+  if (cur?.invoiceId !== s.invoiceId || !!cur?.livemode !== !!s.livemode) return false;
+  tx.update(ref, fields);
+  return true;
+});
+const SENT_AGAIN = 'this invoice was sent with Stripe again meanwhile. Reopen it to see its new Stripe invoice.';
+
 const sameEmail = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
 // What a Stripe invoice is made from: the bill, and its job's name, site and PO (custom fields).
@@ -254,7 +265,7 @@ async function sendEmail({ db, stripe, ref, stripeInvoiceId, email, made = false
       }
       if (check) await check(tx, snap.data());
       tx.update(ref, { 'stripe.sentTo': email || null, 'stripe.sentAt': new Date(), 'stripe.error': null, 'stripe.sending': { token, at: new Date() } });
-      return { sentTo: st.sentTo ?? null, sentAt: st.sentAt ?? null };
+      return { sentTo: st.sentTo ?? null, sentAt: st.sentAt ?? null, livemode: !!st.livemode };
     });
   } catch (e) {
     const err = friendlyError(e);
@@ -286,7 +297,7 @@ async function sendEmail({ db, stripe, ref, stripeInvoiceId, email, made = false
     await stripe.invoices.update(stripeInvoiceId, { auto_advance: true });
   } catch (e) {
     const message = `${REMINDERS_OFF} ${friendlyError(e).message} Opening the invoice in the app tries again.`;
-    await ref.update({ 'stripe.error': message }).catch(() => {});
+    await updateIfSame(db, ref, { invoiceId: stripeInvoiceId, livemode: before.livemode }, { 'stripe.error': message }).catch(() => {});
     return message;
   }
   return null;
@@ -567,15 +578,15 @@ export async function voidStripeInvoice({ db, stripe, livemode, companyId, invoi
     if (s.livemode) throw new HttpsError('failed-precondition', 'That Stripe invoice is live, but the app is using a test key right now.');
     // Made with the test key: the live key can't see it, and nobody can pay it for real. Nothing on it
     // counts as paid any more (say test credit that Stripe used on it).
-    await ref.update({
+    const wrote = await updateIfSame(db, ref, s, {
       'stripe.status': 'void', 'stripe.voidedAt': new Date(), 'stripe.amountPaid': 0, 'stripe.paidOnline': 0, 'stripe.balanceApplied': 0, 'stripe.preCredited': 0,
     });
+    if (!wrote) throw new HttpsError('aborted', `Nothing was voided: ${SENT_AGAIN}`);
     return summary({ ...s, status: 'void' });
   }
+  let voided;
   try {
-    const voided = await stripe.invoices.voidInvoice(s.invoiceId);
-    await ref.update({ ...prefixed(fromStripe(voided)), 'stripe.voidedAt': new Date(), 'stripe.error': null });
-    return summary({ ...s, ...fromStripe(voided), error: null });
+    voided = await stripe.invoices.voidInvoice(s.invoiceId);
   } catch (e) {
     // Most likely the customer just paid it: record that instead.
     const current = await stripe.invoices.retrieve(s.invoiceId).catch(() => null);
@@ -585,6 +596,11 @@ export async function voidStripeInvoice({ db, stripe, livemode, companyId, invoi
     }
     throw friendlyError(e);
   }
+  // Its void notice may already be saved, and another device may have sent the bill with Stripe again since.
+  if (!(await updateIfSame(db, ref, s, { ...prefixed(fromStripe(voided)), 'stripe.voidedAt': new Date(), 'stripe.error': null }))) {
+    throw new HttpsError('aborted', `The Stripe invoice was voided, but ${SENT_AGAIN}`);
+  }
+  return summary({ ...s, ...fromStripe(voided), error: null });
 }
 
 // Asks Stripe for the current state of the bill's Stripe invoice and records it.
@@ -603,7 +619,7 @@ export async function syncStripeInvoice({ db, stripe, livemode, companyId, invoi
     let { error } = s;
     if (current.status === 'open' && String(error || '').startsWith(REMINDERS_OFF)) {
       await stripe.invoices.update(current.id, { auto_advance: true })
-        .then(() => ref.update({ 'stripe.error': null }))
+        .then(() => updateIfSame(db, ref, s, { 'stripe.error': null }))
         .then(() => { error = null; }, () => {});
     }
     return summary({ ...s, ...fromStripe(current), error });

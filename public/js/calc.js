@@ -92,9 +92,13 @@ export function g703Row(line, retainagePct, storedRetainagePct = retainagePct) {
 // G702 application summary from the G703 rows.
 //   previousCertificates: total earned less retainage on the prior application (its line 6).
 //   deposit: what invoices made from the contract's proposal billed (its deposit). It comes off the
-//   current payment due as work is earned, until it's used up (depositApplied), so the pay apps and
-//   the deposit together never bill more than the work.
-export function g702(payApp, contract, changeOrders = [], previousCertificates = 0, deposit = 0) {
+//   current payment due as work is earned, until it's used up (depositApplied, line 7a), so the pay apps
+//   and the deposit together never bill more than the work.
+//   depositBefore: what the earlier applications took off (their line 7a), as they were billed. If the
+//   deposit has shrunk since (refunded or credited), this application adds back what they took beyond
+//   it (a negative 7a). Left out, they're taken as covered by the deposit as it is now.
+//   depositFixed: this application's own 7a once it was billed, kept as it was.
+export function g702(payApp, contract, changeOrders = [], previousCertificates = 0, deposit = 0, depositBefore = null, depositFixed = null) {
   const pct = num(payApp.retainagePct);
   const storedPct = payApp.storedRetainagePct == null || payApp.storedRetainagePct === '' ? pct : num(payApp.storedRetainagePct);
   const rows = (payApp.lines || []).map((l) => g703Row(l, pct, storedPct));
@@ -106,10 +110,11 @@ export function g702(payApp, contract, changeOrders = [], previousCertificates =
   const totalRetainage = round2(workRetainage + storedRetainage); // 5
   const earnedLessRetainage = round2(totalCompleted - totalRetainage); // 6
   const prev = round2(previousCertificates); // 7
-  // The deposit covers the first earnings: what it covers to date, less what it covered by the last app.
+  // The deposit covers the first earnings: what it covers to date, less what earlier apps took off.
   const dep = Math.max(0, round2(deposit));
   const covered = (earned) => Math.min(dep, Math.max(0, earned));
-  const depositApplied = round2(covered(earnedLessRetainage) - covered(prev)); // 7a
+  const before = depositBefore == null ? covered(prev) : round2(depositBefore);
+  const depositApplied = depositFixed == null ? round2(covered(earnedLessRetainage) - before) : round2(depositFixed); // 7a
   const currentDue = round2(earnedLessRetainage - prev - depositApplied); // 8
   const balanceToFinish = round2(cs.toDate - earnedLessRetainage); // 9
   return {
@@ -121,7 +126,7 @@ export function g702(payApp, contract, changeOrders = [], previousCertificates =
     },
     originalSum: cs.original, netChange: cs.netChange, additions: cs.additions, deductions: cs.deductions,
     contractSumToDate: cs.toDate, totalCompleted, workRetainage, storedRetainage, totalRetainage,
-    earnedLessRetainage, previousCertificates: prev, deposit: dep, depositApplied, currentDue, balanceToFinish,
+    earnedLessRetainage, previousCertificates: prev, deposit: dep, depositBefore: before, depositApplied, currentDue, balanceToFinish,
   };
 }
 
@@ -271,12 +276,25 @@ export function proposalTerms(est) {
   return [depositSentence(est), String(est.terms || '').trim()].filter(Boolean).join('\n');
 }
 
-// The deposit invoice line: the proposal's deposit, as one line that isn't taxed again.
-export function depositLine(est) {
+// The deposit invoice line: the proposal's deposit, as one line that isn't taxed again. on: once the
+// proposal is a contract, the deposit is figured on the contract sum instead ({ price, label }).
+export function depositLine(est, on = null) {
   const { opts, opt } = acceptedOption(est);
-  const d = proposalDeposit(est, opt);
+  const d = proposalDeposit(est, on ? { ...opt, price: on.price } : opt);
   const pct = d.type === 'percent' ? ` (${qtyText(d.value)}%)` : '';
-  return { desc: `Deposit${pct} on proposal ${est.number}${opts.length > 1 ? `, ${optionLabel(opt)}` : ''}`, qty: 1, price: d.amount, taxable: false };
+  const of = on ? on.label : `proposal ${est.number}${opts.length > 1 ? `, ${optionLabel(opt)}` : ''}`;
+  return { desc: `Deposit${pct} on ${of}`, qty: 1, price: d.amount, taxable: false };
+}
+
+// What another deposit invoice from a proposal bills: its deposit, but never more than the proposal's
+// invoices haven't billed yet (billed: what they bill now), so deposits can't bill past the price. Once the
+// proposal is a contract (contract: { sum, label }), it's on the contract sum, since editing the proposal
+// afterwards doesn't change the contract. full: the deposit before that limit.
+export function nextDeposit(est, billed, contract = null) {
+  const sum = contract ? round2(contract.sum) : estimateAmount(est);
+  const line = depositLine(est, contract && { price: sum, label: contract.label });
+  const left = Math.max(0, round2(sum - billed));
+  return { line: { ...line, price: Math.min(line.price, left) }, full: line.price, left, sum };
 }
 
 // Payments recorded on a bill by hand: cash, check or other, each with its amount and date.
