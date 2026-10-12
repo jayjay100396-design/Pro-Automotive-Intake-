@@ -25,6 +25,7 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 | `public/quote.html`, `js/site.js`, `css/site.css` | The public quote request page; `js/requests.js` is the Requests screen in the app and `js/website.js` the Website photos page |
 | `public/js/files.js`, `drive.js` | Job files (Cloud Storage) and the Google Drive copies |
 | `public/js/parts.js`, `suppliers.js`, `supplier-plugins.js`, `parts-email.js` | Parts orders and their tracking, Suppliers, the supplier plugins, and the parts lists and supplier emails (shared with the server) |
+| `public/js/call-errors.js` | What a failed call to a server function means, in words people see (unit tested) |
 | `public/js/schedule.js`, `when.js`, `gcal.js` | The Schedule, its dates and repeats (unit tested), and the Google Calendar panel |
 | `functions-calendar/` | Cloud Functions: copying the schedule to Google Calendar (codebase `calendar`); setup in `CALENDAR_SETUP.md` |
 | `public/js/takeoff/` | Drawing takeoffs: `reader.js` reads a PDF page (text, lines, tags, views, grid lines), `takeoff.js` turns pages into types, sizes and counts, `markups.js` reads markups, `measure.js` the measuring math, `gemini.js` and `vision.js` the Gemini reading (close-ups, counting what it saw), `page.js` the screen (unit tested with made-up drawings) |
