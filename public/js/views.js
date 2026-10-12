@@ -1,12 +1,17 @@
 // Screens: dashboard, customers, jobs, estimates, contracts (with change orders), pay apps, invoices, settings.
 // Each view returns { html, mount(root), live }. Live views re-render when data changes;
 // editors render once so typing isn't interrupted.
-import { state, add, update, remove, get, where, nextNumber, can, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
+import { state, add, update, updateWith, remove, get, where, nextNumber, newId, putOnce, transact, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
-  proposalOptions, estimateAmount,
+  proposalOptions, estimateAmount, proposalDeposit, depositSentence, termsWithoutDeposit, proposalTerms, proposalPayment, paidOn,
+  billedOn, dueOn,
 } from './calc.js';
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
+import {
+  proposalBilling, mountProposalBilling, stripeCard, mountStripeCard, settleStripeFirst, paymentsSettings, mountPaymentsSettings,
+  paymentsCard, mountPaymentsCard, paidFields, frozen, lockNote, firstPayAppId, startGuard, nextProposalId,
+} from './billing.js';
 import { fileBrowser, countJobFiles } from './files.js';
 import { alertEmails, parseEmails, lastAlertNote, MAX_ALERT_EMAILS } from './requests.js';
 import { jobParts, openPartsCount, latePartsCount, dueSoonCount } from './parts.js';
@@ -38,7 +43,12 @@ const coForContract = (cid) => where('changeOrders', 'contractId', cid);
 const contractTotal = (c) => contractSum(c, coForContract(c.id)).toDate;
 
 async function attempt(fn, ok) {
-  try { const r = await fn(); if (ok) toast(ok); return r; } catch (e) { console.error(e); toast(e.code === 'permission-denied' ? 'Your role can\'t make that change.' : e.message, true); return null; }
+  try { const r = await fn(); if (ok) toast(ok); return r; } catch (e) {
+    console.error(e);
+    toast(e.code === 'permission-denied' ? 'Your role can\'t make that change.'
+      : e.code === 'unavailable' ? 'You\'re offline. Connect to the internet, then try again.' : e.message, true);
+    return null;
+  }
 }
 const confirmDelete = (what) => confirm(`Delete this ${what}? This can't be undone.`);
 
@@ -63,7 +73,9 @@ export function dashboard() {
   const estValue = est.reduce((s, e) => s + estimateAmount(e), 0);
   const active = D().jobs.filter((j) => ['contracted', 'in progress'].includes(j.status));
   const unpaid = D().invoices.filter((i) => i.status === 'unpaid');
-  const owed = unpaid.reduce((s, i) => s + invoiceTotals(i).total, 0);
+  // Less what's been paid on them (payments recorded, part paid online, or credit Stripe used on it) and
+  // credit notes in Stripe.
+  const owed = unpaid.reduce((s, i) => s + dueOn(i), 0);
   const overdue = unpaid.filter((i) => i.dueDate && i.dueDate < today());
   const pending = D().payApps.filter((p) => ['submitted', 'approved'].includes(p.status));
   const pendingDue = pending.reduce((s, p) => s + payAppSummary(p).currentDue, 0);
@@ -279,7 +291,10 @@ const PROPOSAL_DEFAULTS = {
   intro: 'We propose to supply and install the following in prepared openings:',
   priceNote: '*Prices subject to change due to volatility of pricing in the marketplace.',
   exclusions: 'Cleaning; Protection; brake metal flashing.',
-  terms: 'A 50% deposit is required before materials can be ordered.',
+  terms: '',
+  // The deposit sentence is printed from these (calc.js depositSentence).
+  depositType: 'percent',
+  depositValue: 50,
 };
 const OPTION_SPECS = {
   storefront: 'Aluminum Framing- Clear anodized; non-thermal; non-impact resistant\nGlass: 1" Clear Low E Tempered Insulated',
@@ -331,8 +346,11 @@ export function estimates() {
   return {
     live: true,
     html: `${header('Estimates', can.edit() ? '<a class="btn primary" href="#/estimates/new">New proposal</a>' : '')}
-    <div class="card">${rows.length ? `<table class="list"><thead><tr><th>#</th><th>Job</th><th>Customer</th><th>Date</th><th>Status</th><th class="num">Total</th></tr></thead><tbody>
-    ${rows.map((e) => `<tr data-href="#/estimates/${esc(e.id)}"><td>${esc(e.number)}</td><td>${esc(jobName(e.jobId))}</td><td>${esc(customerName(get('jobs', e.jobId)?.customerId))}</td><td>${fmtDate(e.date)}</td><td>${badge(e.status)}</td><td class="num">${money(estimateAmount(e))}</td></tr>`).join('')}
+    <div class="card">${rows.length ? `<table class="list"><thead><tr><th>#</th><th>Job</th><th>Customer</th><th>Date</th><th>Status</th><th>Payment</th><th class="num">Total</th></tr></thead><tbody>
+    ${rows.map((e) => {
+    const pay = proposalPayment(e, where('invoices', 'estimateId', e.id)).status;
+    return `<tr data-href="#/estimates/${esc(e.id)}"><td>${esc(e.number)}</td><td>${esc(jobName(e.jobId))}</td><td>${esc(customerName(get('jobs', e.jobId)?.customerId))}</td><td>${fmtDate(e.date)}</td><td>${badge(e.status)}</td><td>${pay === 'not billed' ? '' : badge(pay)}</td><td class="num">${money(estimateAmount(e))}</td></tr>`;
+  }).join('')}
     </tbody></table>` : empty('No estimates yet.')}</div>`,
   };
 }
@@ -374,6 +392,9 @@ export function estimateEdit(id, params) {
   const lines = e.lines?.length ? e.lines : PRESETS[e.template] || PRESETS.storefront;
   const hasContract = !isNew && where('contracts', 'estimateId', id).length;
   const ro = can.edit() ? '' : 'disabled';
+  // Proposals saved before the deposit field: the field takes over their typed deposit sentence.
+  const dep = proposalDeposit(e);
+  const terms = e.depositType == null ? termsWithoutDeposit(e.terms) : e.terms;
 
   return {
     html: `${header(isNew ? 'New proposal' : `Proposal ${esc(e.number)}`, `
@@ -428,7 +449,10 @@ export function estimateEdit(id, params) {
         <h2 class="span4">Terms</h2>
         <label class="span4">Price note <input name="priceNote" value="${esc(e.priceNote ?? PROPOSAL_DEFAULTS.priceNote)}"></label>
         <label class="span4">Exclude <input name="exclusions" value="${esc(e.exclusions ?? '')}" placeholder="Cleaning; Protection; brake metal flashing."></label>
-        <label class="span4">Payment terms <textarea name="terms" rows="2">${esc(e.terms)}</textarea></label>
+        <label>Deposit <input name="depositValue" type="number" step="any" min="0" value="${esc(dep.value)}"></label>
+        <label>Deposit is <select name="depositType">${options([['percent', '% of the price'], ['amount', 'a dollar amount']], dep.type)}</select></label>
+        <p class="span2 hint" id="depnote"></p>
+        <label class="span4">Other payment terms <textarea name="terms" rows="2" placeholder="e.g. Balance due on completion.">${esc(terms)}</textarea></label>
         <h2 class="span4 top-gap">Proposal prepared by</h2>
         <label>Name <input name="preparedName" value="${esc(e.preparedName)}"></label>
         <label>Title <input name="preparedTitle" value="${esc(e.preparedTitle)}"></label>
@@ -436,7 +460,8 @@ export function estimateEdit(id, params) {
         <label>Email <input name="preparedEmail" type="email" value="${esc(e.preparedEmail)}"></label>
       </fieldset>
       <div class="row"><button class="btn primary" ${ro}>Save proposal</button></div>
-    </form>`,
+    </form>
+    ${isNew ? '' : proposalBilling(id)}`,
     mount(root) {
       const body = root.querySelector('#lines');
       const form = root.querySelector('#f');
@@ -467,6 +492,10 @@ export function estimateEdit(id, params) {
           <div class="tr"><span>Tax</span><span>${money(t.tax)}</span></div>
           <div class="tr"><span>Line-item total</span><span>${money(t.total)}</span></div>
           ${proposalOptions(cur).map((o) => `<div class="tr ${o.number - 1 === acceptedIndex() ? 'grand' : ''}"><span>Price ${o.number}${o.name ? ` (${esc(o.name)})` : ''}</span><span>${money(o.price)}</span></div>`).join('')}`;
+        const sentence = depositSentence({ ...cur, acceptedOption: acceptedIndex() });
+        root.querySelector('#depnote').textContent = sentence ? `Printed on the proposal: "${sentence}"` : 'No deposit.';
+        if (cur.depositType === 'percent') form.elements.depositValue.max = 100;
+        else form.elements.depositValue.removeAttribute('max');
       };
       form.addEventListener('input', recalc);
       form.addEventListener('change', recalc);
@@ -490,6 +519,7 @@ export function estimateEdit(id, params) {
         body.innerHTML = PRESETS[t].map(estLineRow).join(''); recalc();
       });
       recalc();
+      if (!isNew) mountProposalBilling(root, id, () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price), options: readOptions(optBox), acceptedOption: acceptedIndex() }));
 
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
@@ -526,15 +556,24 @@ export function estimateEdit(id, params) {
           const spec = (opt.specs || '').split('\n').map((x) => x.trim()).filter(Boolean).join('; ');
           sov = [{ item: 1, desc: `Supply and install per proposal ${cur.number}, Price ${opt.number}${opt.name ? ` (${opt.name})` : ''}${spec ? ': ' + spec : ''}`, value: opt.price }];
         }
-        const terms = [cur.terms, cur.exclusions ? `Exclude: ${cur.exclusions}` : ''].filter(Boolean).join('\n');
-        const r = await attempt(() => add('contracts', {
-          number: nextNumber('contracts'), jobId: cur.jobId, customerId: cur.customerId || '', estimateId: id, date: today(),
-          amount: opt.price, retainagePct: 10, status: 'draft', sov, terms,
+        const terms = [proposalTerms(cur), cur.exclusions ? `Exclude: ${cur.exclusions}` : ''].filter(Boolean).join('\n');
+        // The proposal notes its contract in the same transaction, which first checks it isn't a contract
+        // already (made on another device, say). An invoice made from the proposal reads that note as it's
+        // saved, so it can't miss that it's a contract now (billing.js).
+        const cid = newId('contracts');
+        const r = await attempt(() => transact(async ({ read, update: change, create }) => {
+          const was = (await read('estimates', id)).data()?.contractId;
+          const other = was && (await read('contracts', was)).data();
+          if (other) throw new Error(`This proposal is already contract ${other.number}.`);
+          change('estimates', id, { status: 'accepted', contractId: cid });
+          return create('contracts', {
+            number: nextNumber('contracts'), jobId: cur.jobId, customerId: cur.customerId || '', estimateId: id, date: today(),
+            amount: opt.price, retainagePct: 10, status: 'draft', sov, terms,
+          }, cid);
         }), 'Contract created');
         if (r) {
-          update('estimates', id, { status: 'accepted' }).catch(() => {});
           if (get('jobs', cur.jobId)) update('jobs', cur.jobId, { status: 'contracted' }).catch(() => {});
-          go(`#/contracts/${r.id}`);
+          go(`#/contracts/${r}`);
         }
       });
     },
@@ -651,12 +690,29 @@ export function contractEdit(id) {
         const prior = where('payApps', 'contractId', id).sort(sortNum)[0];
         const approved = coForContract(id).filter((x) => x.status === 'approved').sort((a, b) => a.number - b.number);
         const sov = [...(cur.sov || []), ...approved.map((x) => ({ item: `CO${x.number}`, desc: `Change order ${x.number}: ${x.desc}`, value: Number(x.amount) || 0 }))];
-        const r = await attempt(() => add('payApps', {
+        const data = {
           contractId: id, jobId: cur.jobId, customerId: cur.customerId || '', number: prior ? (Number(prior.number) || 0) + 1 : 1,
           date: today(), periodTo: today(), retainagePct: cur.retainagePct ?? 10, storedRetainagePct: cur.retainagePct ?? 10,
           status: 'draft', lines: nextPayAppLines(sov, prior),
-        }), 'Pay app created');
-        if (r) go(`#/payapps/${r.id}`);
+        };
+        if (prior) {
+          const r = await attempt(() => add('payApps', data), 'Pay app created');
+          if (r) go(`#/payapps/${r.id}`);
+          return;
+        }
+        // The first one takes a set id, so a deposit invoice from the proposal can check, as it's saved, that
+        // the pay apps haven't started; and it checks the proposal has no invoice this device hasn't seen yet
+        // (billing.js startGuard).
+        const first = firstPayAppId(id);
+        try {
+          if (!(await putOnce('payApps', first, data, startGuard(cur)))) return toast('Someone just started this contract\'s pay apps. Open it from the list below.', true);
+          toast('Pay app created');
+          go(`#/payapps/${first}`);
+        } catch (e) {
+          console.error(e);
+          toast(e.code === 'permission-denied' ? 'Your role can\'t make that change.'
+            : e.code === 'unavailable' ? 'You\'re offline. Connect to the internet, then start the pay app.' : e.message, true);
+        }
       });
       root.querySelector('#del')?.addEventListener('click', async () => {
         if (confirmDelete('contract') && await attempt(() => remove('contracts', id), 'Contract deleted') !== null) go('#/contracts');
@@ -673,14 +729,84 @@ function rerender() {
 }
 
 // ---------- Pay apps (AIA G702 / G703) ----------
+// Invoices made from the contract's proposal (a deposit, say) billed part of the job before its pay apps,
+// so the pay apps take that off (G702 line 7a) until it's used up. Each app keeps what it took off
+// (depositApplied) once it's billed: past draft, or invoiced (depositSnapshot, saveBilled). So a deposit refunded or
+// credited later doesn't change what earlier apps billed; the next app adds back what they took beyond it.
+const earlierApps = (p) => where('payApps', 'contractId', p.contractId).filter((x) => (Number(x.number) || 0) < (Number(p.number) || 0));
+const billedApp = (id, status) => status !== 'draft' || where('invoices', 'payAppId', id).some((i) => i.status !== 'void');
+
+// override: the app as its page has it, unsaved changes included.
 export function payAppSummary(p, override) {
+  const a = override || p;
   const c = get('contracts', p.contractId) || { amount: 0 };
-  const prior = where('payApps', 'contractId', p.contractId)
-    .filter((x) => (Number(x.number) || 0) < (Number(p.number) || 0))
-    .sort(sortNum)[0];
-  const prevCert = prior ? payAppSummary(prior).earnedLessRetainage : 0;
-  return g702(override || p, c, coForContract(p.contractId), prevCert);
+  const prior = earlierApps(p).sort(sortNum)[0];
+  const ps = prior ? payAppSummary(prior) : null;
+  const deposits = c.estimateId ? where('invoices', 'estimateId', c.estimateId).filter((i) => i.status !== 'void' && billedOn(i) > 0).sort(sortNum) : [];
+  const s = g702(a, c, coForContract(p.contractId), ps ? ps.earnedLessRetainage : 0, deposits.reduce((t, i) => t + billedOn(i), 0),
+    ps ? round2(ps.depositBefore + ps.depositApplied) : 0, typeof a.depositApplied === 'number' ? a.depositApplied : null);
+  return { ...s, depositFrom: deposits.map((i) => i.number) };
 }
+
+// JSON with object keys in order, to compare a record as saved with how this device has it.
+const canon = (v) => JSON.stringify(v ?? null, (k, x) => (x && typeof x === 'object' && !Array.isArray(x)
+  ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
+// What an app's deposit offset is figured from, as a record has it: what this app has kept, the earlier
+// apps' work and what they kept, and the proposal's invoices ('gone': the record isn't there).
+const keptSig = (x) => (x ? canon(x.depositApplied) : 'gone');
+const earlierSig = (x) => (x ? canon([x.number, x.retainagePct, x.storedRetainagePct, x.lines, x.depositApplied]) : 'gone');
+const depositSig = (i) => (i ? canon([i.status, billedOn(i)]) : 'gone');
+
+// What a billed app keeps off the deposit, all figured at once from what this device has now (cur: the app
+// as its page has it): the summary (s), what to save on this app (mine; nothing if it has it already) and on
+// the earlier apps that don't have theirs yet (earlier), and what that was figured from (checks), for
+// saveBilled to make sure it's still what's saved. A contract that wasn't made from a proposal has no
+// deposit to keep.
+function depositSnapshot(p, cur) {
+  const s = payAppSummary(p, cur);
+  const c = get('contracts', p.contractId);
+  if (!c?.estimateId) return { s, mine: {}, earlier: [], checks: [] };
+  const apps = earlierApps(p);
+  const check = (col, id, sig) => ({ col, id, sig, was: sig(get(col, id)) });
+  return {
+    s,
+    mine: typeof cur.depositApplied === 'number' ? {} : { depositApplied: s.depositApplied },
+    earlier: apps.filter((x) => typeof x.depositApplied !== 'number').map((x) => ({ id: x.id, depositApplied: payAppSummary(x).depositApplied })),
+    checks: [
+      check('payApps', p.id, keptSig),
+      ...apps.map((x) => check('payApps', x.id, earlierSig)),
+      ...where('invoices', 'estimateId', c.estimateId).map((i) => check('invoices', i.id, depositSig)),
+      // No invoice from the proposal that this device hasn't seen yet.
+      check('invoices', nextProposalId(c.estimateId), (x) => (x ? 'made' : 'none')),
+    ],
+  };
+}
+
+// A transaction's changes reach this device's copy when the server sends them back: waits for that (done()
+// tells; a few seconds at most).
+const arrived = (done) => new Promise((resolve) => {
+  if (done()) return resolve();
+  const timer = setTimeout(() => { off(); resolve(); }, 4000);
+  const off = onChange(() => { if (done()) { clearTimeout(timer); off(); resolve(); } });
+});
+
+const CHANGED = 'An earlier pay app or the proposal\'s invoices just changed on another device, so nothing was saved. Check this pay app\'s figures, then try again.';
+// Saves what the apps keep off the deposit (snap: depositSnapshot) with this app's changes (data) and its
+// invoice, if any, in one transaction that first checks what they were figured from is still what's saved.
+// So what's kept and what's billed always match each other and what's saved. Returns the invoice's id.
+const saveBilled = (id, snap, data, invoice = null) => transact(async ({ read, update: change, create }) => {
+  const saved = await Promise.all(snap.checks.map((k) => read(k.col, k.id)));
+  if (snap.checks.some((k, i) => k.sig(saved[i].data()) !== k.was)) throw new Error(CHANGED);
+  for (const x of snap.earlier) change('payApps', x.id, { depositApplied: x.depositApplied });
+  if (Object.keys(data).length) change('payApps', id, data);
+  return invoice ? create('invoices', invoice) : null;
+});
+
+// What the pay app page edits, to tell when it has changes that aren't saved.
+const payAppSig = (x) => JSON.stringify([
+  ['number', 'date', 'periodTo', 'status', 'retainagePct', 'storedRetainagePct'].map((k) => String(x[k] ?? '')),
+  (x.lines || []).map((l) => [String(l.desc ?? ''), ...['value', 'prevWork', 'thisWork', 'stored'].map((k) => Number(l[k]) || 0)]),
+]);
 
 export function payApps() {
   const rows = [...D().payApps].sort((a, b) => (a.jobId || '').localeCompare(b.jobId || '') || sortNum(a, b));
@@ -740,7 +866,8 @@ export function payAppEdit(id) {
     mount(root) {
       const body = root.querySelector('#lines');
       const form = root.querySelector('#f');
-      const current = () => ({ ...p, ...formData(form), lines: readLines(body) });
+      // The saved app under the page's changes: what it keeps off the deposit may have been saved since it opened.
+      const current = () => ({ ...(get('payApps', id) || p), ...formData(form), lines: readLines(body) });
       const recalc = () => {
         const s = payAppSummary(p, current());
         body.querySelectorAll('tr[data-row]').forEach((tr, i) => {
@@ -766,20 +893,45 @@ export function payAppEdit(id) {
       });
       form.addEventListener('input', recalc);
       recalc();
+      // The figures from other records (the deposit, the earlier apps) follow them as they change.
+      const off = onChange(() => { if (!form.isConnected) return off(); recalc(); });
+      const initial = payAppSig(current());
+      const unsaved = () => { const now = payAppSig(current()); return now !== initial && now !== payAppSig(get('payApps', id) || {}); };
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
         const cur = current();
-        const s = payAppSummary(p, cur);
-        await attempt(() => update('payApps', id, { ...formData(form), lines: cur.lines, currentDue: s.currentDue }), 'Pay app saved');
+        // Once it's billed, what it takes off the deposit is kept from now on. A draft with no invoice
+        // figures it afresh.
+        const snap = billedApp(id, cur.status) ? depositSnapshot(p, cur) : null;
+        const dep = snap ? snap.mine : typeof cur.depositApplied === 'number' ? { depositApplied: null } : {};
+        const s = snap ? snap.s : payAppSummary(p, { ...cur, ...dep });
+        const data = { ...formData(form), lines: cur.lines, currentDue: s.currentDue, ...dep };
+        // Keeping it the first time is checked against what's saved; otherwise it's a plain save (offline too).
+        const kept = snap ? [...snap.earlier, ...('depositApplied' in dep ? [{ id, depositApplied: dep.depositApplied }] : [])] : [];
+        await attempt(async () => {
+          if (!kept.length) return update('payApps', id, data);
+          await saveBilled(id, snap, data);
+          // So the page, and an invoice made next, see it.
+          return arrived(() => kept.every((x) => get('payApps', x.id)?.depositApplied === x.depositApplied));
+        }, 'Pay app saved');
+        recalc();
       });
       root.querySelector('#toinvoice')?.addEventListener('click', async () => {
-        const s = payAppSummary(p, current());
-        const r = await attempt(() => add('invoices', {
+        if (unsaved()) return toast('Save the pay app first, then make the invoice.', true);
+        const cur = current();
+        const snap = depositSnapshot(p, cur);
+        const { s } = snap;
+        if (s.depositApplied > 0 && s.currentDue <= 0) return toast('The proposal\'s deposit covers this application, so there\'s nothing to invoice.', true);
+        const less = s.depositApplied > 0 ? `, less ${money(s.depositApplied)} of the deposit`
+          : s.depositApplied < 0 ? `, plus ${money(-s.depositApplied)} of the deposit earlier applications took off, since refunded or credited` : '';
+        // Billed now: the invoice and what the apps keep off the deposit are saved together, from the same figures.
+        const made = await attempt(() => saveBilled(id, snap, snap.mine, {
           number: nextNumber('invoices'), jobId: p.jobId, customerId: p.customerId || get('jobs', p.jobId)?.customerId || '', payAppId: id,
           date: today(), dueDate: addDays(today(), 30), status: 'unpaid', taxPct: 0,
-          lines: [{ desc: `Application for payment #${p.number}, period to ${p.periodTo} (net of retainage)`, qty: 1, price: s.currentDue }],
+          lines: [{ desc: `Application for payment #${cur.number}, period to ${cur.periodTo} (net of retainage${less})`, qty: 1, price: s.currentDue }],
         }), 'Invoice created');
-        if (r) go(`#/invoices/${r.id}`);
+        if (made) go(`#/invoices/${made}`);
+        else recalc();
       });
       root.querySelector('#del')?.addEventListener('click', async () => {
         if (confirmDelete('pay app') && await attempt(() => remove('payApps', id), 'Pay app deleted') !== null) go('#/payapps');
@@ -790,6 +942,12 @@ export function payAppEdit(id) {
 
 export function g702Table(s) {
   const r = (n, label, v, cls = '') => `<div class="tr ${cls}"><span><b>${n}</b> ${label}</span><span>${money(v)}</span></div>`;
+  // The deposit as it is now. Refunded or credited after applications took it off, an earlier application
+  // still shows what it took, and the next one adds back what's no longer covered (a negative 7a).
+  const has7a = s.deposit > 0 || s.depositApplied;
+  const dep = s.deposit > 0
+    ? `${money(s.deposit)} billed on proposal invoice ${(s.depositFrom || []).join(', ')}${round2(s.depositBefore + s.depositApplied) > s.deposit ? ' after a refund or credit' : ''}`
+    : 'the deposit has since been refunded or credited';
   return `
     ${r('1.', 'Original contract sum', s.originalSum)}
     ${r('2.', 'Net change by change orders', s.netChange)}
@@ -800,7 +958,8 @@ export function g702Table(s) {
     ${r('5.', 'Total retainage', s.totalRetainage)}
     ${r('6.', 'Total earned less retainage (4 − 5)', s.earnedLessRetainage)}
     ${r('7.', 'Less previous certificates for payment', s.previousCertificates)}
-    ${r('8.', 'Current payment due', s.currentDue, 'grand')}
+    ${has7a ? r('7a.', `Less deposit applied (${dep}${s.depositApplied < 0 ? `; earlier applications took off ${money(s.depositBefore)}, so the rest is added back` : ''})`, s.depositApplied) : ''}
+    ${r('8.', `Current payment due (6 − 7${has7a ? ' − 7a' : ''})`, s.currentDue, 'grand')}
     ${r('9.', 'Balance to finish, including retainage (3 − 6)', s.balanceToFinish)}`;
 }
 
@@ -811,15 +970,25 @@ export function invoices() {
     live: true,
     html: `${header('Invoices', can.bill() ? '<a class="btn primary" href="#/invoices/new">New invoice</a>' : '')}
     <div class="card">${rows.length ? `<table class="list"><thead><tr><th>#</th><th>Job</th><th>Customer</th><th>Date</th><th>Due</th><th>Status</th><th class="num">Total</th></tr></thead><tbody>
-    ${rows.map((i) => { const late = i.status === 'unpaid' && i.dueDate && i.dueDate < today(); return `<tr data-href="#/invoices/${esc(i.id)}"><td>${esc(i.number)}</td><td>${esc(jobName(i.jobId))}</td><td>${esc(customerName(i.customerId))}</td><td>${fmtDate(i.date)}</td><td class="${late ? 'warn' : ''}">${fmtDate(i.dueDate)}${late ? ' (overdue)' : ''}</td><td>${badge(i.status)}</td><td class="num">${money(invoiceTotals(i).total)}</td></tr>`; }).join('')}
+    ${rows.map((i) => { const late = i.status === 'unpaid' && i.dueDate && i.dueDate < today(); return `<tr data-href="#/invoices/${esc(i.id)}"><td>${esc(i.number)}</td><td>${esc(jobName(i.jobId))}</td><td>${esc(customerName(i.customerId))}</td><td>${fmtDate(i.date)}</td><td class="${late ? 'warn' : ''}">${fmtDate(i.dueDate)}${late ? ' (overdue)' : ''}</td><td>${badge(i.status === 'unpaid' && paidOn(i) > 0 ? 'partly paid' : i.status)}</td><td class="num">${money(invoiceTotals(i).total)}</td></tr>`; }).join('')}
     </tbody></table>` : empty('No invoices yet.')}</div>`,
   };
+}
+
+// "From proposal 1005", with how much of the proposal has been paid.
+function proposalLink(inv) {
+  const e = get('estimates', inv.estimateId);
+  if (!e) return '';
+  const pay = proposalPayment(e, where('invoices', 'estimateId', inv.estimateId));
+  return `${inv.kind === 'deposit' ? 'Deposit on' : 'From'} <a href="#/estimates/${esc(inv.estimateId)}">proposal ${esc(e.number)}</a>:
+    ${badge(pay.status)} ${money(pay.paid)} of ${money(pay.price)} paid`;
 }
 
 const invRow = (l = {}) => `<tr data-row>
   <td><input name="desc" value="${esc(l.desc)}" placeholder="Description"></td>
   <td><input name="qty" type="number" step="any" value="${esc(l.qty ?? 1)}" class="n"></td>
   <td><input name="price" type="number" step="0.01" value="${esc(l.price ?? 0)}" class="n"></td>
+  <td class="c"><input name="taxable" type="checkbox" ${l.taxable === false ? '' : 'checked'} title="Charge sales tax on this line"></td>
   <td class="num" data-total></td>
   <td><button type="button" class="icon" data-del>✕</button></td></tr>`;
 
@@ -830,13 +999,19 @@ export function invoiceEdit(id, params) {
     ? { number: nextNumber('invoices'), jobId: job?.id || '', date: today(), dueDate: addDays(today(), 30), status: 'unpaid', taxPct: 7, lines: [{ desc: '', qty: 1, price: 0 }] }
     : get('invoices', id);
   if (!inv) return { waiting: true, html: '<p class="muted">Loading…</p>' };
-  const ro = can.bill() ? '' : 'disabled';
+  // Paid through Stripe for real (it stays as it was paid, like Stripe's receipt), or out for payment on a
+  // live Stripe invoice (it can't change while the customer can pay it). firestore.rules too. The Online
+  // payment card locks or unlocks the form if that changes while it's open.
+  const locked = frozen(inv.stripe);
+  const ro = can.bill() && !locked ? '' : 'disabled';
   return {
     html: `${header(isNew ? 'New invoice' : `Invoice ${esc(inv.number)}`, `
       ${!isNew ? `<a class="btn" href="#/invoices/${esc(id)}/print">Print / PDF</a>` : ''}
-      ${!isNew && can.bill() && inv.status === 'unpaid' ? '<button class="btn primary" id="paid">Mark paid</button>' : ''}
+      ${!isNew && can.bill() ? `<button class="btn primary" id="paid" ${inv.status === 'unpaid' ? '' : 'hidden'}>Record payment</button>` : ''}
       ${!isNew && can.remove() ? '<button class="btn danger" id="del">Delete</button>' : ''}`)}
     ${inv.payAppId ? `<p class="muted">From <a href="#/payapps/${esc(inv.payAppId)}">pay app ${esc(get('payApps', inv.payAppId)?.number || '')}</a></p>` : ''}
+    ${inv.estimateId ? `<p class="muted" id="proposal-link">${proposalLink(inv)}</p>` : ''}
+    <p class="muted" id="locknote" ${locked ? '' : 'hidden'}>${esc(lockNote(inv.stripe))}</p>
     <form id="f" class="stack">
       <fieldset class="card grid4" ${ro}>
         <label class="span2">Job <select name="jobId" required>${jobOptions(inv.jobId)}</select></label>
@@ -848,8 +1023,8 @@ export function invoiceEdit(id, params) {
         <label>Sales tax % <input name="taxPct" type="number" step="any" value="${esc(inv.taxPct)}"></label>
       </fieldset>
       <fieldset class="card" ${ro}>
-        <table class="lines" data-lines><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th class="num">Amount</th><th></th></tr></thead>
-        <tbody id="lines">${(inv.lines || []).map(invRow).join('')}</tbody></table>
+        <div class="scroll"><table class="lines" data-lines><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Tax</th><th class="num">Amount</th><th></th></tr></thead>
+        <tbody id="lines">${(inv.lines || []).map(invRow).join('')}</tbody></table></div>
         <button type="button" class="btn small" id="addline">+ Add line</button>
       </fieldset>
       <div class="cols">
@@ -857,7 +1032,8 @@ export function invoiceEdit(id, params) {
         <div class="card totals" id="totals"></div>
       </div>
       <div class="row"><button class="btn primary" ${ro}>Save invoice</button></div>
-    </form>`,
+    </form>
+    ${isNew ? '' : `${paymentsCard()}${stripeCard(inv)}`}`,
     mount(root) {
       const body = root.querySelector('#lines');
       const form = root.querySelector('#f');
@@ -871,23 +1047,56 @@ export function invoiceEdit(id, params) {
       body.addEventListener('click', (ev) => { if (ev.target.closest('[data-del]')) { ev.target.closest('tr').remove(); recalc(); } });
       root.querySelector('#addline').addEventListener('click', () => { body.insertAdjacentHTML('beforeend', invRow()); recalc(); });
       recalc();
-      const save = async (extra = {}) => {
-        const data = { ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price), ...extra };
+      const save = async () => {
+        const data = { ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price) };
         data.customerId = get('jobs', data.jobId)?.customerId || inv.customerId || '';
         data.total = invoiceTotals(data).total;
         if (isNew) {
-          const r = await attempt(() => add('invoices', { ...data, payAppId: inv.payAppId || '' }), 'Invoice saved');
+          // Saved as paid: that's a payment for the whole invoice (paidFields).
+          const r = await attempt(() => add('invoices', { ...paidFields({}, data).data, payAppId: inv.payAppId || '' }), 'Invoice saved');
           if (r) go(`#/invoices/${r.id}`);
         } else {
-          const done = attempt(() => update('invoices', id, data), 'Invoice saved');
-          if (extra.status) rerender(); else await done;
+          if (!(await settleStripeFirst(id, data.status))) return;
+          // Paid goes with the payments recorded on it (paidFields), worked out from what's saved right now,
+          // so a payment recorded on another device meanwhile isn't lost.
+          let note = '';
+          const saved = await attempt(() => updateWith('invoices', id, (cur) => {
+            const r = paidFields(cur, data);
+            note = r.note || '';
+            return r.data;
+          }), 'Invoice saved');
+          if (!saved) return;
+          if (note) toast(note, true);
+          form.elements.status.value = saved.status;
+          form.elements.paidDate.value = saved.paidDate || '';
         }
       };
       form.addEventListener('submit', (ev) => { ev.preventDefault(); save(); });
-      root.querySelector('#paid')?.addEventListener('click', () => save({ status: 'paid', paidDate: today() }));
+      // Record payment: the Payments card's form, below.
+      root.querySelector('#paid')?.addEventListener('click', () => {
+        const pay = root.querySelector('#payform');
+        if (!pay) return;
+        pay.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        pay.elements.amount.focus({ preventScroll: true });
+      });
       root.querySelector('#del')?.addEventListener('click', async () => {
         if (confirmDelete('invoice') && await attempt(() => remove('invoices', id), 'Invoice deleted') !== null) go('#/invoices');
       });
+      if (!isNew) {
+        const current = () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price) });
+        mountPaymentsCard(root, id, current);
+        mountStripeCard(root, id, current);
+      }
+      // What's been paid on the proposal changes as payments come in.
+      const link = root.querySelector('#proposal-link');
+      if (link) {
+        let shown = proposalLink(inv);
+        const off = onChange(() => {
+          if (!link.isConnected) return off();
+          const html = proposalLink(get('invoices', id) || inv);
+          if (html !== shown) link.innerHTML = shown = html;
+        });
+      }
     },
   };
 }
@@ -1037,6 +1246,7 @@ export function settings() {
       <p class="hint">Each link works once and expires in 7 days. Send it by text or email; they open it, sign in any way they like, and tap Join.</p>
       <div id="invites"></div>` : ''}
     </div>
+    ${paymentsSettings()}
     ${can.manage() ? `<div class="card"><h2>Transfer ownership</h2>
       <p class="small">Hand the business to another team member. They become the owner and you become an admin.</p>
       <div id="transfer"><p class="muted small">Loading team…</p></div></div>` : ''}`,
@@ -1054,6 +1264,7 @@ export function settings() {
         if (await attempt(() => updateCompany({ requestAlertEmails: emails }), ok) !== null) e.target.emails.value = emails.join(', ');
       });
       mountTeam(root);
+      mountPaymentsSettings(root);
       mountSite(root.querySelector('#site'));
       offCalendar = mountCalendarPanel(root.querySelector('#gcal'));
       const box = root.querySelector('#transfer');

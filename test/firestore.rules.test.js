@@ -4,7 +4,7 @@ const path = require('path');
 const {
   initializeTestEnvironment, assertSucceeds, assertFails,
 } = require('@firebase/rules-unit-testing');
-const { doc, getDoc, getDocs, collection, setDoc, updateDoc, deleteDoc, writeBatch, Timestamp } = require('firebase/firestore');
+const { doc, getDoc, getDocs, collection, setDoc, updateDoc, deleteDoc, writeBatch, Timestamp, serverTimestamp } = require('firebase/firestore');
 
 let env;
 const db = (uid) => env.authenticatedContext(uid).firestore();
@@ -80,6 +80,105 @@ describe('Firestore rules', function () {
     await assertFails(updateDoc(doc(f, 'companies/stellar/members/cpa'), { role: 'admin' }));
     await assertFails(updateDoc(doc(f, 'companies/stellar'), { name: 'x' }));
     await assertFails(setDoc(doc(f, 'companies/other/invoices/x'), { total: 1 }));
+  });
+
+  it('keeps the Stripe fields for the server', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const f = ctx.firestore();
+      await setDoc(doc(f, 'companies/stellar/invoices/i1'), { number: 1001, status: 'unpaid', stripe: { status: 'open', invoiceId: 'in_1' } });
+      await setDoc(doc(f, 'companies/stellar/customers/c1'), { name: 'GC', stripeCustomerIds: { test: 'cus_1' } });
+    });
+    for (const uid of ['wes', 'cpa']) {
+      const f = db(uid);
+      // Normal edits still work, and leave the Stripe fields alone.
+      await assertSucceeds(updateDoc(doc(f, 'companies/stellar/invoices/i1'), { notes: 'Thanks', status: 'paid' }));
+      await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/i1'), { 'stripe.status': 'paid' }));
+      await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/i1'), { stripe: null }));
+      await assertFails(setDoc(doc(f, `companies/stellar/invoices/new-${uid}`), { number: 1002, stripe: { status: 'paid' } }));
+      await assertSucceeds(setDoc(doc(f, `companies/stellar/invoices/ok-${uid}`), { number: 1003 }));
+    }
+    await assertSucceeds(updateDoc(doc(db('crew'), 'companies/stellar/customers/c1'), { email: 'gc@example.com' }));
+    await assertFails(updateDoc(doc(db('crew'), 'companies/stellar/customers/c1'), { 'stripeCustomerIds.test': 'cus_2' }));
+    await assertFails(setDoc(doc(db('crew'), 'companies/stellar/customers/c2'), { name: 'X', stripeCustomerIds: { live: 'cus_3' } }));
+  });
+
+  it('keeps an invoice paid through Stripe as it was paid, and keeps it', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const f = ctx.firestore();
+      await setDoc(doc(f, 'companies/stellar/invoices/live'), { number: 1001, status: 'paid', stripe: { status: 'paid', livemode: true } });
+      await setDoc(doc(f, 'companies/stellar/invoices/test'), { number: 1002, status: 'paid', stripe: { status: 'paid', livemode: false } });
+      await setDoc(doc(f, 'companies/stellar/invoices/check'), { number: 1003, status: 'paid', stripe: { status: 'void', livemode: true } });
+    });
+    for (const uid of ['wes', 'cpa']) {
+      const f = db(uid);
+      // A save that changes nothing goes through (data.js stamps updatedAt); the bill stays as it was paid.
+      await assertSucceeds(updateDoc(doc(f, 'companies/stellar/invoices/live'), { number: 1001, status: 'paid', updatedAt: serverTimestamp() }));
+      for (const change of [{ status: 'unpaid' }, { status: 'void' }, { notes: 'Thanks' }, { number: 1009 }, { lines: [{ desc: 'Glass', qty: 1, price: 5 }] }]) {
+        await assertFails(updateDoc(doc(f, 'companies/stellar/invoices/live'), change));
+      }
+    }
+    await assertFails(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/live')));
+    await assertFails(deleteDoc(doc(db('admin1'), 'companies/stellar/invoices/live')));
+    // Paid in test mode, or paid by check after its Stripe invoice was voided: those can change.
+    await assertSucceeds(updateDoc(doc(db('wes'), 'companies/stellar/invoices/test'), { notes: 'Thanks', status: 'void' }));
+    await assertSucceeds(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/test')));
+    await assertSucceeds(updateDoc(doc(db('cpa'), 'companies/stellar/invoices/check'), { status: 'unpaid' }));
+    await assertSucceeds(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/check')));
+  });
+
+  it('keeps an invoice with a payable live Stripe invoice as it is until that is voided', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const f = ctx.firestore();
+      await setDoc(doc(f, 'companies/stellar/invoices/out'), { number: 1004, status: 'unpaid', stripe: { status: 'open', livemode: true } });
+      await setDoc(doc(f, 'companies/stellar/invoices/testout'), { number: 1005, status: 'unpaid', stripe: { status: 'open', livemode: false } });
+      // Marked uncollectible in Stripe after $500 was paid on it: Stripe still takes payment on it.
+      await setDoc(doc(f, 'companies/stellar/invoices/written'), { number: 1006, status: 'unpaid', stripe: { status: 'uncollectible', livemode: true, amountPaid: 500 } });
+    });
+    // Say from a tab that was offline when the Stripe invoice went out: the customer is paying the Stripe
+    // invoice made from the bill, so the bill can't change under it (a payment would mark a different bill paid).
+    for (const uid of ['wes', 'cpa']) {
+      const f = db(uid);
+      for (const id of ['out', 'written']) {
+        const r = doc(f, `companies/stellar/invoices/${id}`);
+        await assertSucceeds(updateDoc(r, { status: 'unpaid', updatedAt: serverTimestamp() })); // a save that changes nothing
+        await assertFails(updateDoc(r, { notes: 'Thanks' }));
+        await assertFails(updateDoc(r, { lines: [{ desc: 'More glass', qty: 1, price: 900 }] }));
+        await assertFails(updateDoc(r, { payments: [{ id: 'p1', method: 'check', amount: 500, date: '2026-10-12' }] }));
+        await assertFails(updateDoc(r, { status: 'paid' }));
+        await assertFails(updateDoc(r, { status: 'void' }));
+      }
+    }
+    await assertFails(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/out')));
+    await assertFails(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/written')));
+    // Once the Cloud Function has voided it, the bill can change.
+    await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'companies/stellar/invoices/out'), { 'stripe.status': 'void' }));
+    await assertSucceeds(updateDoc(doc(db('cpa'), 'companies/stellar/invoices/out'), { status: 'paid' }));
+    // A test-mode payment link isn't real money.
+    await assertSucceeds(updateDoc(doc(db('wes'), 'companies/stellar/invoices/testout'), { status: 'void' }));
+    await assertSucceeds(deleteDoc(doc(db('wes'), 'companies/stellar/invoices/testout')));
+  });
+
+  it('lets only the owner and admins take a recorded payment off an invoice', async () => {
+    await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'companies/stellar/invoices/bypay'), {
+      number: 1010, status: 'unpaid', lines: [{ desc: 'Glass', qty: 1, price: 1000 }],
+    }));
+    const p1 = { id: 'p1', method: 'check', amount: 400, date: '2026-10-01', ref: '1201', note: '', by: 'cpa', at: '2026-10-01T15:00:00Z' };
+    const p2 = { ...p1, id: 'p2', amount: 600, ref: '1202' };
+    const r = (uid) => doc(db(uid), 'companies/stellar/invoices/bypay');
+    // Anyone who bills can add one, on its own or with the status it makes.
+    await assertSucceeds(updateDoc(r('cpa'), { payments: [p1] }));
+    await assertSucceeds(updateDoc(r('crew'), { payments: [p1, p2], status: 'paid', paidDate: '2026-10-05' }));
+    await assertSucceeds(updateDoc(r('cpa'), { notes: 'Thank you', payments: [p1, p2] }));
+    // Only the owner and admins can take one off or change one.
+    await assertFails(updateDoc(r('cpa'), { payments: [p1], status: 'unpaid', paidDate: '' }));
+    await assertFails(updateDoc(r('crew'), { payments: [p1, { ...p2, amount: 6000 }] }));
+    await assertFails(updateDoc(r('cpa'), { payments: [p2, p1] }));
+    await assertFails(updateDoc(r('cpa'), { payments: [] }));
+    await assertFails(updateDoc(r('cpa'), { payments: 'none' }));
+    await assertSucceeds(updateDoc(r('admin1'), { payments: [p1], status: 'unpaid', paidDate: '' }));
+    await assertSucceeds(updateDoc(r('wes'), { payments: [] }));
+    // A new invoice can come with payments (one saved as paid).
+    await assertSucceeds(setDoc(doc(db('cpa'), 'companies/stellar/invoices/paidnew'), { number: 1011, status: 'paid', payments: [p1] }));
   });
 
   it('lets the owner invite an accountant', async () => {

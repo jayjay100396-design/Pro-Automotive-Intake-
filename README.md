@@ -7,7 +7,8 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 - **Contracts:** created from an accepted estimate, with a schedule of values that feeds the pay apps.
 - **Change orders:** add or deduct scope; approved ones update the contract sum.
 - **Pay apps:** G703 continuation sheet (previous, this period, stored, %, balance, retainage) and G702 summary, printable with a notary block.
-- **Invoices:** simple invoices or one click from a pay app; paid and unpaid tracking.
+- **Invoices:** simple invoices, one click from a pay app, or deposit and final invoices from a proposal; paid and unpaid tracking.
+- **Online payments (Stripe):** email an itemized Stripe invoice with a Pay button (card or bank), or copy its payment link; it turns Paid when the customer pays. See `STRIPE_SETUP.md`.
 - **Files:** photos, plans, contracts, permits and forms on each job, sorted by category and searchable, with an optional copy in each person's Google Drive (`Stellar Glass Jobs / customer / job`).
 - **Takeoffs:** from a PDF drawing set or photo in a job's files: reads the window type tags, each type's size from its type elevation and how many there are (an opening shown on two elevations counts once), or the mark and quantity boxes on shop drawings, and sizes typed into Bluebeam or Acrobat markups. Measure by clicking (the scale comes from the sheet, or set it on a known length), then **Create proposal** starts an estimate with the openings. Runs in the browser with pdf.js, no fees. Scans, photos and handwriting (field notes, pen marks on a print, a shower sketch) can be read with **Gemini** instead, a few cents a sheet (`FIREBASE_SETUP.md` section 7).
 - **Quote requests:** a public page at `/quote` (no sign-in) where customers send a request with photos or plans; it lands under Requests, and one click turns it into a customer and a lead job. The **Website** page lets the owner or an admin upload the page's photos and gallery.
@@ -31,10 +32,12 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 | `public/js/takeoff/` | Drawing takeoffs: `reader.js` reads a PDF page (text, lines, tags, views, grid lines), `takeoff.js` turns pages into types, sizes and counts, `markups.js` reads markups, `measure.js` the measuring math, `gemini.js` and `vision.js` the Gemini reading (close-ups, counting what it saw), `page.js` the screen (unit tested with made-up drawings) |
 | `prompts/` | The Gemini reading prompt, deployed as a Firebase AI Logic server template (`FIREBASE_CLI_EXPERIMENTS=ailogic firebase deploy --only ailogic`) |
 | `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
+| `functions/` | Cloud Functions: Stripe invoices and the Stripe webhook |
 | `functions-alerts/` | Cloud Functions: the quote request emails (their own codebase, `alerts`) |
 | `functions-parts/` | Cloud Functions: parts requests sent to suppliers from the app (their own codebase, `parts`) |
-| `test/`, `functions-calendar/test/`, `functions-alerts/test/`, `functions-parts/test/` | Rules tests (emulator), money-math tests, takeoff tests (`npm run test:takeoff`, including the Gemini plumbing), calendar and email tests, and parts list tests |
+| `test/`, `functions/test/`, `functions-calendar/test/`, `functions-alerts/test/`, `functions-parts/test/` | Rules tests (emulator), money-math tests, takeoff tests (`npm run test:takeoff`, including the Gemini plumbing), Stripe, calendar and email tests, and parts list tests |
 | `FIREBASE_SETUP.md` | Console steps, deploy and local dev |
+| `STRIPE_SETUP.md` | Connecting Stripe for online payments |
 | `EMAIL_ALERTS.md` | Turning on the quote request emails, and sending parts requests from the app |
 
 `npm run dev` runs it locally against emulators; `npm test` runs the tests; `npm run deploy` publishes.

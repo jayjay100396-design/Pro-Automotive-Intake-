@@ -77,6 +77,43 @@ service cloud.firestore {
       return request.resource.data[field] == resource.data[field];
     }
 
+    // Stripe state on invoices and Stripe customer ids on customers. Only the Cloud Functions
+    // (functions/stripe-invoices.js) write these, so the app can't fake a payment.
+    function keepsServerFields() {
+      return (resource == null && !request.resource.data.keys().hasAny(['stripe', 'stripeCustomerIds']))
+        || (resource != null && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['stripe', 'stripeCustomerIds']));
+    }
+
+    // An invoice paid through Stripe for real (live mode) stays as it was paid (only the app's
+    // updatedAt stamp changes) and isn't deleted: it's the record of money that came in, like the
+    // Stripe receipt, and refunds are credit notes in Stripe. Test-mode payments aren't real.
+    function paidThroughStripe(collection) {
+      return collection == 'invoices' && resource != null
+        && resource.data.get('stripe', {}).get('status', '') == 'paid'
+        && resource.data.get('stripe', {}).get('livemode', false) == true;
+    }
+
+    // While its live Stripe invoice can still be paid (open, or marked uncollectible, which Stripe
+    // still takes payment on), an invoice stays as it is (only updatedAt changes) and isn't deleted:
+    // the customer is paying the Stripe invoice made from it, so a payment mustn't mark a different bill
+    // paid. To change it, the app has the Cloud Function void the Stripe invoice first; this stops a
+    // stale or offline tab. One with a payment on it can't be voided, so it stays: it's the record of
+    // that payment.
+    function payableThroughStripe(collection) {
+      return collection == 'invoices' && resource != null
+        && resource.data.get('stripe', {}).get('status', '') in ['open', 'uncollectible']
+        && resource.data.get('stripe', {}).get('livemode', false) == true;
+    }
+
+    // Payments recorded on an invoice (cash, check or other) are the record of money that came in. The
+    // owner and admins can remove one (say it was entered by mistake); others can only add them.
+    function keepsPayments(companyId, collection) {
+      let before = resource == null ? [] : resource.data.get('payments', []);
+      let after = request.resource.data.get('payments', []);
+      return collection != 'invoices' || canManage(companyId)
+        || (after is list && (before.size() == 0 || (after.size() >= before.size() && after[0:before.size()] == before)));
+    }
+
     // ---------- Job files ----------
     //
     // companies/{companyId}/files/{fileId}: one job file's record. The file itself is in Cloud Storage.
@@ -537,8 +574,12 @@ service cloud.firestore {
 
       match /{collection}/{docId} {
         allow read: if isRecord(collection) && isMember(companyId);
-        allow create, update: if isRecord(collection) && canEditCollection(companyId, collection);
-        allow delete: if isRecord(collection) && canManage(companyId);
+        allow create, update: if isRecord(collection) && canEditCollection(companyId, collection)
+          && keepsServerFields()
+          && keepsPayments(companyId, collection)
+          && (!paidThroughStripe(collection) || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']))
+          && (!payableThroughStripe(collection) || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']));
+        allow delete: if isRecord(collection) && canManage(companyId) && !paidThroughStripe(collection) && !payableThroughStripe(collection);
       }
 
       // Line items (e.g. G703 continuation lines), attachment metadata and other nested records.
