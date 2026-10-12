@@ -295,6 +295,6 @@ describe('Supplier plugins', () => {
 
 describe('The server\'s copy of the email code', () => {
   it('matches the app\'s (npm run sync:email copies it)', () => {
-    assert.equal(fs.readFileSync(here('../functions-alerts/parts-email.js'), 'utf8'), fs.readFileSync(here('../public/js/parts-email.js'), 'utf8'));
+    assert.equal(fs.readFileSync(here('../functions-parts/parts-email.js'), 'utf8'), fs.readFileSync(here('../public/js/parts-email.js'), 'utf8'));
   });
 });

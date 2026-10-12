@@ -6,7 +6,7 @@
 //   status (PARTS_STATUS in parts-email.js), requestedOn, quotedOn, quoteRef, quoteTotal, orderedOn, orderRef,
 //   confirmedOn, expectedOn, shippedOn, tracking, receivedOn, lastEmail { what, via, at },
 //   events [{ at, status, note, by }] (the history), and appEmail, which only the server writes when the app sends
-//   an email (functions-alerts/parts-request.js). Suppliers: suppliers.js. The emails: parts-email.js.
+//   an email (functions-parts/parts-request.js). Suppliers: suppliers.js. The emails: parts-email.js.
 import { db, callFunction } from './firebase.js';
 import { collection, query, where as fwhere, getDocs, arrayUnion } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { state, add, update, remove, get, where, nextNumber, can, onChange } from './data.js';
@@ -97,7 +97,7 @@ async function markSent(id, what, via) {
   if (await attempt(() => update('partsRequests', id, fields), 'Noted') !== null) go(`#/parts/${id}`);
 }
 
-// Asks the server to email the supplier (functions-alerts/parts-request.js). It sends to the supplier's saved
+// Asks the server to email the supplier (functions-parts/parts-request.js). It sends to the supplier's saved
 // addresses only, and notes it on the request.
 async function sendFromApp(id, what, button, note = '') {
   const r = get('partsRequests', id);

@@ -30,8 +30,9 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 | `public/js/takeoff/` | Drawing takeoffs: `reader.js` reads a PDF page (text, lines, tags, views, grid lines), `takeoff.js` turns pages into types, sizes and counts, `markups.js` reads markups, `measure.js` the measuring math, `gemini.js` and `vision.js` the Gemini reading (close-ups, counting what it saw), `page.js` the screen (unit tested with made-up drawings) |
 | `prompts/` | The Gemini reading prompt, deployed as a Firebase AI Logic server template (`FIREBASE_CLI_EXPERIMENTS=ailogic firebase deploy --only ailogic`) |
 | `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
-| `functions-alerts/` | Cloud Functions: the quote request emails and parts requests sent from the app (their own codebase, `alerts`) |
-| `test/`, `functions-calendar/test/`, `functions-alerts/test/` | Rules tests (emulator), money-math tests, takeoff tests (`npm run test:takeoff`, including the Gemini plumbing), calendar and email tests, and parts list tests |
+| `functions-alerts/` | Cloud Functions: the quote request emails (their own codebase, `alerts`) |
+| `functions-parts/` | Cloud Functions: parts requests sent to suppliers from the app (their own codebase, `parts`) |
+| `test/`, `functions-calendar/test/`, `functions-alerts/test/`, `functions-parts/test/` | Rules tests (emulator), money-math tests, takeoff tests (`npm run test:takeoff`, including the Gemini plumbing), calendar and email tests, and parts list tests |
 | `FIREBASE_SETUP.md` | Console steps, deploy and local dev |
 | `EMAIL_ALERTS.md` | Turning on the quote request emails, and sending parts requests from the app |
 

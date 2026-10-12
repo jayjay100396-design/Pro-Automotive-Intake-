@@ -1,7 +1,7 @@
 // Parts from suppliers: the parts list, sizes in inches and fractions, where an order stands, and the emails that go
 // to the supplier (the quote request or order, placing the order from a quote, and asking for an update).
 // Plain functions with no Firebase, so the app (public/js/parts.js) and the server that sends the emails
-// (functions-alerts/parts-request.js) build exactly the same email. functions-alerts/parts-email.js is a copy of
+// (functions-parts/parts-request.js) build exactly the same email. functions-parts/parts-email.js is a copy of
 // this file: after changing it, run `npm run sync:email` (npm test fails while the two differ).
 
 export const LIST_TYPES = [

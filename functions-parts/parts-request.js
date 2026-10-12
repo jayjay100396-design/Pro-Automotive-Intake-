@@ -10,7 +10,7 @@
 // to, cc, attached, error }, with a line in its history, and sending the request or the order moves it along.
 import { FieldValue } from 'firebase-admin/firestore';
 import { buildPartsEmail, recipients, requestProblems, fromName, MESSAGES, MAX_ATTACHMENTS, MAX_ATTACH_BYTES, MAX_NOTE } from './parts-email.js';
-import { isPermanent } from './request-alert.js';
+import { isPermanent } from './mailer.js';
 
 export const DAILY_LIMIT = 40;
 // A send that has been 'sending' this long died (the function stops at 2 minutes), so another may go.

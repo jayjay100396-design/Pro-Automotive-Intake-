@@ -18,7 +18,7 @@ if (useEmulators) {
   connectStorageEmulator(storage, '127.0.0.1', 9199);
 }
 
-// Server functions (functions-alerts), loaded the first time one is called: callFunction('sendPartsEmail', {...}).
+// Server functions (functions-parts), loaded the first time one is called: callFunction('sendPartsEmail', {...}).
 let functions;
 export async function callFunction(name, data) {
   if (!functions) {

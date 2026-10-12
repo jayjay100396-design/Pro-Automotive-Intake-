@@ -10,3 +10,7 @@ functions-alerts/.env.local
 functions-alerts/test/mail/
 # The live project's sending address (EMAIL_USER): this repo is public, so it stays on the computer that deploys
 functions-alerts/.env.stellar-glass-jobs
+# The parts orders functions' local emulator secrets, and the live project's supplier sending address (EMAIL_ALERTS.md)
+functions-parts/.secret.local
+functions-parts/.env.local
+functions-parts/.env.stellar-glass-jobs

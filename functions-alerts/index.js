@@ -1,9 +1,7 @@
-// Cloud Functions for the Stellar Glass app: emails. Setup steps are in EMAIL_ALERTS.md.
+// Cloud Functions for the Stellar Glass app: quote request emails. Setup steps are in EMAIL_ALERTS.md.
 // Its own codebase ("alerts" in firebase.json), so it deploys on its own: npm run deploy:alerts.
-//   requestAlert     emails the team each quote request from the website (who gets it: Settings > Website quote requests)
-//   sendPartsEmail   emails a parts request to its supplier when someone presses Send from the app (Parts orders)
+//   requestAlert   emails the team each quote request from the website (who gets it: Settings > Website quote requests)
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
-import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import { defineSecret, defineString } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
@@ -11,7 +9,6 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { handleNewRequest, createMailer } from './request-alert.js';
-import { handlePartsEmail, SendError } from './parts-request.js';
 
 initializeApp();
 const db = getFirestore();
@@ -26,14 +23,6 @@ const EMAIL_USER = defineString('EMAIL_USER', {
 });
 const EMAIL_PASSWORD = defineSecret('EMAIL_PASSWORD');
 
-// The account supplier emails come from (Parts orders > Send from the app). Suppliers see its address, so it's best
-// as Wes's own. It's kept apart from the alerts' account because the alerts go to Wes, and Gmail can file an email an
-// account sends to itself under Sent instead of the inbox. Saved and stored the same way as the alerts' account.
-const SUPPLIER_EMAIL_USER = defineString('SUPPLIER_EMAIL_USER', {
-  description: 'Email address supplier emails (Parts orders) are sent from, which suppliers see: ideally Wes\'s own, with an app password.',
-});
-const SUPPLIER_EMAIL_PASSWORD = defineSecret('SUPPLIER_EMAIL_PASSWORD');
-
 const emulated = process.env.FUNCTIONS_EMULATOR === 'true';
 
 // The app's address, for the link in the email: the project's Firebase Hosting site unless APP_URL says otherwise.
@@ -41,17 +30,14 @@ const appUrl = () => process.env.APP_URL || (emulated ? 'http://127.0.0.1:5000' 
 
 // Made on first use, when the secret can be read. Gmail's mail server unless SMTP_HOST and SMTP_PORT in
 // functions-alerts/.env.<project id> name another (the emulator uses a fake one: test/smtp-sink.js).
-const makeMailer = (user, password) => createMailer({
+let send;
+const mailer = () => send || (send = createMailer({
   host: process.env.SMTP_HOST || undefined,
   port: Number(process.env.SMTP_PORT) || undefined,
-  user: user.value(),
+  user: EMAIL_USER.value(),
   // Google shows app passwords in groups of four letters; the spaces aren't part of it.
-  pass: password.value().replace(/\s+/g, ''),
-});
-let alertSend;
-let supplierSend;
-const alertMailer = () => alertSend || (alertSend = makeMailer(EMAIL_USER, EMAIL_PASSWORD));
-const supplierMailer = () => supplierSend || (supplierSend = makeMailer(SUPPLIER_EMAIL_USER, SUPPLIER_EMAIL_PASSWORD));
+  pass: EMAIL_PASSWORD.value().replace(/\s+/g, ''),
+}));
 
 export const requestAlert = onDocumentCreated({
   document: 'companies/{companyId}/requests/{requestId}',
@@ -73,36 +59,7 @@ export const requestAlert = onDocumentCreated({
     companyId,
     requestId,
     appUrl: appUrl(),
-    send: (message) => alertMailer()(message),
+    send: (message) => mailer()(message),
   });
   logger.info('Quote request alert', { companyId, requestId, ...result });
-});
-
-// Called by the app (public/js/parts.js) with { companyId, requestId, what, sendId }. Only signed-in members of that
-// business with an editing role get anything sent, and only to the supplier's saved addresses (parts-request.js).
-export const sendPartsEmail = onCall({
-  secrets: [SUPPLIER_EMAIL_PASSWORD],
-  // Room for attachments: up to 15 MB of the job's files go along.
-  timeoutSeconds: 120,
-  memory: '512MiB',
-}, async (request) => {
-  try {
-    const result = await handlePartsEmail({
-      db,
-      bucket: getStorage().bucket(),
-      send: (message) => supplierMailer()(message),
-      uid: request.auth?.uid,
-      token: request.auth?.token,
-      data: request.data,
-    });
-    logger.info('Parts request email', { companyId: request.data?.companyId, requestId: request.data?.requestId, what: request.data?.what, status: result.status });
-    return result;
-  } catch (e) {
-    if (e instanceof SendError) {
-      if (e.cause) logger.warn('Parts request email failed', { requestId: request.data?.requestId, error: e.cause.message });
-      throw new HttpsError(e.code, e.message);
-    }
-    logger.error('Parts request email', e);
-    throw new HttpsError('internal', 'The email didn\'t go out. Try again, or use Open in Gmail.');
-  }
 });

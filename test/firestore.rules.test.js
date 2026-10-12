@@ -423,7 +423,7 @@ describe('Firestore rules', function () {
       await assertFails(setDoc(pr(crew, 'p3'), parts('wes')));
       await assertFails(updateDoc(pr(crew), { createdBy: 'crew2' }));
       await assertFails(updateDoc(pr(crew), { createdAt: serverTimestamp() }));
-      // How the app's email went is the server's to say (functions-alerts/parts-request.js).
+      // How the app's email went is the server's to say (functions-parts/parts-request.js).
       await assertFails(setDoc(pr(crew, 'p4'), parts('crew', { appEmail: { status: 'sent', sendId: 'x', to: ['a@b.co'] } })));
       await assertFails(updateDoc(pr(crew), { appEmail: { status: 'sent' } }));
       await assertFails(updateDoc(pr(db('wes')), { 'appEmail.status': 'failed' }));

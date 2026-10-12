@@ -6,8 +6,9 @@ import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { handlePartsEmail, problemText, floridaDay, SendError, DAILY_LIMIT } from '../parts-request.js';
 import { buildPartsEmail, MAX_ATTACH_BYTES } from '../parts-email.js';
-import { createMailer } from '../request-alert.js';
-import { startSmtpSink } from './smtp-sink.js';
+import { createMailer, isPermanent } from '../mailer.js';
+import * as alerts from '../../functions-alerts/request-alert.js';
+import { startSmtpSink } from '../../functions-alerts/test/smtp-sink.js';
 
 const company = { name: 'Stellar Glass LLC', email: 'wes@stellarglassllc.com', phone: '(863) 255-5731' };
 const supplier = (over = {}) => ({
@@ -28,6 +29,11 @@ describe('Parts request emails', () => {
     assert.equal(floridaDay(new Date('2026-10-12T14:00:00Z')), '2026-10-12');
     assert.equal(floridaDay(new Date('2026-10-12T03:30:00Z')), '2026-10-11', '11:30 PM the night before in Lakeland');
     assert.equal(floridaDay(new Date('2026-01-15T04:30:00Z')), '2026-01-14', 'in winter too');
+  });
+
+  it('sends mail the same way as the quote request alerts (mailer.js is a copy of theirs)', () => {
+    assert.equal(createMailer.toString(), alerts.createMailer.toString());
+    assert.equal(isPermanent.toString(), alerts.isPermanent.toString());
   });
 
   it('says what went wrong in words Wes can act on', () => {
