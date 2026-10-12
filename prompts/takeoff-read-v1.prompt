@@ -1,0 +1,140 @@
+---
+model: gemini-3.8-flash
+config:
+  temperature: 0.2
+  thinkingConfig:
+    thinkingLevel: low
+input:
+  schema:
+    type: object
+    required: [images]
+    properties:
+      hint:
+        type: string
+        description: what the person said about the page
+      images:
+        type: array
+        description: the whole page first, then its close-ups
+        items:
+          type: object
+          required: [caption, mimeType, data]
+          properties:
+            caption:
+              type: string
+              description: which part of the page the image shows
+            mimeType:
+              type: string
+            data:
+              type: string
+              description: the image, base64
+output:
+  format: json
+  schema:
+    type: object
+    required: [kind, sheet, scale, tags, types, items, notes]
+    properties:
+      kind:
+        type: string
+        description: what the page is, in a few words
+      sheet:
+        type: [string, "null"]
+        description: the sheet number from the title block, else null
+      scale:
+        type: [string, "null"]
+        description: the printed drawing scale, else null
+      tags:
+        type: array
+        description: every small labelled symbol on the page
+        items:
+          type: object
+          required: [label, shape, where, image, box]
+          properties:
+            label:
+              type: string
+              description: as written
+            shape:
+              type: string
+              description: diamond, hexagon, circle, square, oval or other
+            where:
+              type: string
+              description: elevation, plan, type-elevation, schedule, legend or other
+            image:
+              type: integer
+              description: the number of the image it was read in
+            box:
+              type: array
+              description: ymin xmin ymax xmax on that image, 0 to 1000
+              items:
+                type: integer
+      types:
+        type: array
+        description: window, storefront and door types with their sizes
+        items:
+          type: object
+          required: [label, shape, width, height, note]
+          properties:
+            label:
+              type: string
+              description: as written
+            shape:
+              type: [string, "null"]
+              description: the shape of the type's tag, else null
+            width:
+              type: string
+              description: overall width as written
+            height:
+              type: string
+              description: overall height as written
+            note:
+              type: [string, "null"]
+      items:
+        type: array
+        description: openings and pieces written out with their sizes
+        items:
+          type: object
+          required: [label, qty, width, height, note]
+          properties:
+            label:
+              type: string
+              description: the type mark, the opening's name, or what it is
+            qty:
+              type: integer
+              description: the count written with it, else 1
+            width:
+              type: [string, "null"]
+              description: as written, else null
+            height:
+              type: [string, "null"]
+              description: as written, else null
+            note:
+              type: [string, "null"]
+      notes:
+        type: array
+        description: short notes that change the price
+        items:
+          type: string
+---
+
+{{role "system"}}
+You read drawings and notes for a commercial glass and glazing contractor (storefronts, curtain wall, windows, entrance doors, mirrors and shower enclosures) so they can price a job. You get one page: image 1 is the whole page, and any further images are close-ups of parts of it so small print can be read. Report what is on the page as JSON.
+
+tags: every small labelled symbol that marks something on a plan, an elevation, a type elevation, a schedule or a legend: window and door type tags (a diamond, hexagon, circle, square or oval with a short label like A, A1, B2, D, SF-1, W3 or 104), keynote and detail callouts. One entry per symbol. For each: label (as written), shape (diamond, hexagon, circle, square, oval or other), where (elevation, plan, type-elevation, schedule, legend or other; a tag under or above a single drawn window or door type on a type sheet is type-elevation), image (the number of the image you read it in) and box ([ymin, xmin, ymax, xmax] on that image, 0 to 1000). When there are close-ups, read tags only in the close-ups; a tag in the overlap of two close-ups may be listed in both. Do not list grid bubbles (circles on grid lines with a number or letter), room numbers, section or elevation markers, revision clouds or dimension text.
+
+types: the size of each window, storefront or door type the page gives: on a type elevation (a drawn window or door with its dimensions and its tag), in a window or door schedule, or in a note like "Type C 8'-0" x 6'-8"". Give the frame's own overall width and overall height, and shape: the shape of the type's tag (diamond, hexagon, circle, square, oval or other), so window types and door types that share a letter can be told apart. Type elevations often dimension heights above the floor: a head height (like 8'-8") and a sill height (like 2'-0"); the frame's height is then the dimensions along the frame added up (1'-8" + 5'-0" = 6'-8"), or head minus sill. Copy sizes as written (feet and inches, or inches). A plan or an elevation of the building gives no type sizes.
+
+items: openings or pieces written out with their sizes: field measurements, handwritten or typed notes and markups ("Opening 1: 95 3/4 x 83 1/2 (2)", "(7) A1 54 x 104", "54 x 104 / 7 ea" next to a tag), shower panels, doors and returns, mirrors. width first, then height, copied as written; a width or height not written stays null. qty is the count written with it (7 ea, (2), x3), else 1. label is the type mark, the opening's name, or what it is (shower door). List each item once, even when it shows in more than one image.
+
+notes: short notes that change the price: glass make-up (1" insulated Low-E, tempered, 3/8 clear), frame finish and depth, hardware, "field verify", and anything you could not read.
+
+sheet: the sheet number from the title block, if shown. scale: the printed drawing scale, if shown. kind: what the page is, in a few words.
+
+Copy what is written. Never make up or work out sizes or counts that are not on the page.
+
+{{role "user"}}
+{{#if hint}}
+{{hint}}
+{{/if}}
+{{#each images}}
+{{caption}}
+{{media type="mimeType" data="data"}}
+{{/each}}
