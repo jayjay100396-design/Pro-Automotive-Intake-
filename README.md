@@ -25,7 +25,7 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 | `public/js/schedule.js`, `when.js`, `gcal.js` | The Schedule, its dates and repeats (unit tested), and the Google Calendar panel |
 | `functions-calendar/` | Cloud Functions: copying the schedule to Google Calendar (codebase `calendar`); setup in `CALENDAR_SETUP.md` |
 | `public/js/takeoff/` | Drawing takeoffs: `reader.js` reads a PDF page (text, lines, tags, views, grid lines), `takeoff.js` turns pages into types, sizes and counts, `markups.js` reads markups, `measure.js` the measuring math, `gemini.js` and `vision.js` the Gemini reading (close-ups, counting what it saw), `page.js` the screen (unit tested with made-up drawings) |
-| `prompts/` | The Gemini reading prompt, deployed as a Firebase AI Logic server template (`firebase deploy --only ailogic`) |
+| `prompts/` | The Gemini reading prompt, deployed as a Firebase AI Logic server template (`FIREBASE_CLI_EXPERIMENTS=ailogic firebase deploy --only ailogic`) |
 | `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
 | `test/` | Rules tests (emulator), money-math tests and takeoff tests (`npm run test:takeoff`, including the Gemini plumbing) |
 | `FIREBASE_SETUP.md` | Console steps, deploy and local dev |
