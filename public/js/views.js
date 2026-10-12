@@ -695,17 +695,28 @@ export function contractEdit(id) {
           date: today(), periodTo: today(), retainagePct: cur.retainagePct ?? 10, storedRetainagePct: cur.retainagePct ?? 10,
           status: 'draft', lines: nextPayAppLines(sov, prior),
         };
+        // Each one notes on the contract that its pay apps have started, so a deposit invoice from the proposal
+        // stays refused as it's saved (billing.js), even if the first one is deleted later.
         if (prior) {
-          const r = await attempt(() => add('payApps', data), 'Pay app created');
-          if (r) go(`#/payapps/${r.id}`);
+          const made = await attempt(() => transact(async ({ update: change, create }) => {
+            change('contracts', id, { payAppsStarted: true });
+            return create('payApps', data);
+          }), 'Pay app created');
+          if (made) go(`#/payapps/${made}`);
           return;
         }
-        // The first one takes a set id, so a deposit invoice from the proposal can check, as it's saved, that
-        // the pay apps haven't started; and it checks the proposal has no invoice this device hasn't seen yet
+        // The first one takes a set id too, and checks the proposal has no invoice this device hasn't seen yet
         // (billing.js startGuard).
         const first = firstPayAppId(id);
         try {
-          if (!(await putOnce('payApps', first, data, startGuard(cur)))) return toast('Someone just started this contract\'s pay apps. Open it from the list below.', true);
+          const made = await transact(async ({ read, update: change, create }) => {
+            await startGuard(cur)(read);
+            if ((await read('payApps', first)).exists()) return false;
+            change('contracts', id, { payAppsStarted: true });
+            create('payApps', data, first);
+            return true;
+          });
+          if (!made) return toast('Someone just started this contract\'s pay apps. Open it from the list below.', true);
           toast('Pay app created');
           go(`#/payapps/${first}`);
         } catch (e) {
@@ -934,7 +945,16 @@ export function payAppEdit(id) {
         else recalc();
       });
       root.querySelector('#del')?.addEventListener('click', async () => {
-        if (confirmDelete('pay app') && await attempt(() => remove('payApps', id), 'Pay app deleted') !== null) go('#/payapps');
+        if (!confirmDelete('pay app')) return;
+        // Its contract keeps the note that its pay apps have started (contractEdit), so a deposit invoice from
+        // the proposal stays refused once this one is gone, even if it was the first. A contract whose pay apps
+        // were made before there was that note gets it here.
+        const done = await attempt(() => transact(async ({ read, update: change, remove: drop }) => {
+          if (p.contractId && (await read('contracts', p.contractId)).exists()) change('contracts', p.contractId, { payAppsStarted: true });
+          drop('payApps', id);
+          return true;
+        }), 'Pay app deleted');
+        if (done) go('#/payapps');
       });
     },
   };

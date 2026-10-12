@@ -44,7 +44,8 @@ export const nextProposalId = (estimateId) => {
 
 // A contract's first pay app takes a set id, and is made only if the proposal has no invoice this device
 // hasn't seen yet (the next id in its series is free: startGuard). A deposit or final invoice from the
-// proposal is made only if that pay app doesn't exist (make, below). Both are checked as they're saved, so
+// proposal is made only if that pay app doesn't exist and the contract doesn't note that its pay apps have
+// started (each pay app notes it, and it stays: make, below). Both are checked as they're saved, so
 // whichever comes second sees the other: no deposit after the pay apps start, and none they miss.
 export const firstPayAppId = (contractId) => `${contractId}-1`;
 export const startGuard = (contract) => async (read) => {
@@ -93,7 +94,8 @@ function invoiceNote(inv) {
 // so there's no final invoice from the proposal then, and no deposit invoice once a pay app exists.
 function contractOf(estimateId) {
   const contract = where('contracts', 'estimateId', estimateId)[0] || null;
-  return { contract, billing: !!contract && where('payApps', 'contractId', contract.id).length > 0 };
+  // The contract notes when its pay apps start (views.js), so that holds even if its first one was deleted since.
+  return { contract, billing: !!contract && (contract.payAppsStarted === true || where('payApps', 'contractId', contract.id).length > 0) };
 }
 
 // What a deposit invoice from this proposal bills now (nextDeposit): on the contract sum once it's a contract,
@@ -157,6 +159,8 @@ export function mountProposalBilling(root, estimateId, current) {
     if (billing) return toast(`Contract ${contract.number}'s pay apps have started, so bill this on them.`, true);
     if (kind === 'final' && contract) return toast(`This proposal became contract ${contract.number}, so its pay apps bill the rest.`, true);
     const earlier = fromProposal(estimateId).filter((i) => i.status !== 'void');
+    // The proposal's invoices (void ones too) as this is figured from them, to check again as it's saved.
+    const checks = fromProposal(estimateId).map((i) => ({ id: i.id, was: priorSig(i) }));
     const same = earlier.filter((i) => i.kind === kind);
     const base = {
       number: nextNumber('invoices'), jobId: e.jobId, customerId: e.customerId || get('jobs', e.jobId)?.customerId || '',
@@ -195,14 +199,21 @@ export function mountProposalBilling(root, estimateId, current) {
     const more = kind === 'final' || inv.total < depositNow(e, contract, earlier).full ? ` for the ${money(inv.total)} left` : ` for ${money(inv.total)}`;
     if (same.length && !confirm(`This proposal already has ${kind} invoice ${same.map((i) => i.number).join(', ')}. Make another one${more}?`)) return;
     // Checked again as it's saved (it may have just become a contract, or its pay apps started, on another
-    // device): the proposal notes its contract when it becomes one (views.js).
+    // device): the proposal notes its contract when it becomes one, and the contract notes when its pay apps
+    // start, which stays even if the first one is deleted later (views.js). And one of the proposal's invoices
+    // paid, refunded, credited, voided or edited meanwhile (checks) stops it, since the amount came from them.
     const guard = async (read) => {
       const cid = (await read('estimates', estimateId)).data()?.contractId;
       if (cid && cid !== contract?.id && (await read('contracts', cid)).exists()) {
         throw new Error('This proposal just became a contract. Once its Billing card shows that, try again.');
       }
-      if (contract && (await read('payApps', firstPayAppId(contract.id))).exists()) {
+      if (contract && ((await read('contracts', contract.id)).data()?.payAppsStarted === true
+        || (await read('payApps', firstPayAppId(contract.id))).exists())) {
         throw new Error(`Contract ${contract.number}'s pay apps have started, so bill this on them.`);
+      }
+      const saved = await Promise.all(checks.map((k) => read('invoices', k.id)));
+      if (checks.some((k, x) => priorSig(saved[x].exists() ? { id: k.id, ...saved[x].data() } : null) !== k.was)) {
+        throw new Error('An invoice from this proposal just changed on another device, so nothing was made. Check the Billing card, then try again.');
       }
     };
     try {
@@ -254,6 +265,9 @@ const GIVE_BACK = 'To give money back, open the invoice in Stripe and issue a cr
 // What a Stripe invoice bills: what it asks for, plus credit on the customer's Stripe account that Stripe
 // used on it (less a balance they owed that it added) and what credit notes took off before payment.
 const stripeBilled = (st) => n(st.amountDue) + n(st.balanceApplied) + n(st.preCredited);
+
+// What a deposit or final invoice from a proposal is figured from, for each of the proposal's earlier invoices.
+const priorSig = (i) => (i ? JSON.stringify([s(i.status), s(i.kind), billedOn(i), invoiceTotals(i).total, payable(i.stripe), stripeBilled(i.stripe || {})]) : 'gone');
 
 // Paid through Stripe for real, or out for payment on a live Stripe invoice: the bill stays as it is
 // (firestore.rules), so its form is locked. A test-mode one isn't real money.

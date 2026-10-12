@@ -1124,6 +1124,134 @@ describe('Stripe invoices (server)', function () {
     assert.equal([...stripe.invoices.values()].at(-1).status, 'void'); // the new one was cancelled
   });
 
+  it('ignores a late void notice for the Stripe invoice before while a new one is being made', async () => {
+    const { invoiceId: a } = await create();
+    await voidStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' });
+    const voided = await stripe.invoices.retrieve(a);
+    // While the bill is sent again, Stripe's notice that the first one was voided comes (again). The bill
+    // still names that one then, but the notice mustn't end the claim, or another device could make a
+    // second new Stripe invoice meanwhile.
+    const finalize = stripe.invoices.finalizeInvoice;
+    stripe.invoices.finalizeInvoice = async (...args) => {
+      stripe.invoices.finalizeInvoice = finalize;
+      assert.equal(await handleStripeEvent({ db, stripe, event: { type: 'invoice.voided', data: { object: voided } }, allowed: C }), 'ignored');
+      await syncStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' }); // nor does a check
+      const { stripe: claim } = await data();
+      assert.deepEqual([claim.status, claim.invoiceId], ['creating', a]);
+      await assert.rejects(create(), { code: 'aborted', message: /already being made/ });
+      return finalize(...args);
+    };
+    const r = await create();
+    assert.deepEqual([r.status, r.number], ['open', '1003-2']);
+    assert.equal(stripe.called('invoices.create').length, 2);
+    const { stripe: st } = await data();
+    assert.deepEqual([st.invoiceId, st.status, st.claimedAt], [r.invoiceId, 'open', null]);
+  });
+
+  // A try that stalls past its claim (as if it started long ago), so another try can take the bill over.
+  const stalled = () => create({ now: new Date(Date.now() - 600e3) });
+  const SUPERSEDED = { code: 'aborted', message: /^Nothing was sent: this invoice was sent with Stripe again meanwhile\./ };
+
+  it('leaves its Stripe invoice to a try that took the bill over and used it', async () => {
+    // The other try finds the stalled one's Stripe invoice pending and saves it. Then the stalled one goes on.
+    const finalize = stripe.invoices.finalizeInvoice;
+    let other;
+    stripe.invoices.finalizeInvoice = async (...args) => {
+      stripe.invoices.finalizeInvoice = finalize;
+      const si = await finalize(...args);
+      other = await create();
+      return si;
+    };
+    await assert.rejects(stalled(), SUPERSEDED);
+    assert.equal(stripe.called('invoices.create').length, 1);
+    assert.equal(stripe.called('invoices.voidInvoice').length, 0);
+    assert.equal(stripe.invoices.get(other.invoiceId).status, 'open');
+    const { stripe: st } = await data();
+    assert.deepEqual([st.invoiceId, st.status, st.claimedAt, st.error, st.pending], [other.invoiceId, 'open', null, null, undefined]);
+  });
+
+  it('leaves its Stripe invoice that credit paid to a try that took the bill over and used it', async () => {
+    // Credit on the customer's Stripe account pays the stalled try's Stripe invoice as it's finalized. The other
+    // try records that payment; the stalled one doesn't cancel it, which would give the credit back.
+    const cus = await stripe.customers.create({ name: 'Lakeland Builders', balance: -200000 });
+    await db.doc(`companies/${C}/customers/c1`).update({ 'stripeCustomerIds.test': cus.id });
+    const finalize = stripe.invoices.finalizeInvoice;
+    let other;
+    stripe.invoices.finalizeInvoice = async (...args) => {
+      stripe.invoices.finalizeInvoice = finalize;
+      const si = await finalize(...args);
+      other = await create();
+      return si;
+    };
+    await assert.rejects(stalled(), SUPERSEDED);
+    assert.equal(stripe.called('creditNotes.create').length, 0);
+    assert.equal(stripe.customers.get(cus.id).balance, -11000);
+    const d = await data();
+    assert.deepEqual([d.status, d.stripe.status, d.stripe.invoiceId, d.stripe.amountPaid], ['paid', 'paid', other.invoiceId, 1890]);
+  });
+
+  it('leaves its Stripe invoice to a try that took the bill over and made another', async () => {
+    // The bill changed before the other try, so that try cancels the stalled one's Stripe invoice and makes
+    // its own. The stalled one doesn't save over it.
+    const finalize = stripe.invoices.finalizeInvoice;
+    let first;
+    let other;
+    stripe.invoices.finalizeInvoice = async (...args) => {
+      stripe.invoices.finalizeInvoice = finalize;
+      first = await finalize(...args);
+      await inv().update({ notes: 'Net 15.' });
+      other = await create();
+      return first;
+    };
+    await assert.rejects(stalled(), SUPERSEDED);
+    assert.equal(stripe.invoices.get(first.id).status, 'void');
+    assert.deepEqual(stripe.called('invoices.voidInvoice').map(([, id]) => id), [first.id]);
+    assert.equal(other.number, '1003-2');
+    const { stripe: st } = await data();
+    assert.deepEqual([st.invoiceId, st.status, st.sent.notes], [other.invoiceId, 'open', 'Net 15.']);
+  });
+
+  it('drops its draft when another try took the bill over before it was noted', async () => {
+    // Taken over between making the draft and noting it on the bill: the other try never sees it, so the
+    // stalled one deletes it rather than save it over the other's.
+    const make = stripe.invoices.create;
+    let draft;
+    let other;
+    stripe.invoices.create = async (p) => {
+      stripe.invoices.create = make;
+      draft = await make(p);
+      other = await create({ send: true });
+      return draft;
+    };
+    await assert.rejects(stalled(), SUPERSEDED);
+    assert.equal(stripe.invoices.has(draft.id), false);
+    assert.equal(stripe.called('invoiceItems.create').filter(([, p]) => p.invoice === draft.id).length, 0);
+    const { stripe: st } = await data();
+    assert.deepEqual([st.invoiceId, st.status, st.sentTo, st.pending], [other.invoiceId, 'open', 'pat@example.com', undefined]);
+  });
+
+  it('stops making a new Stripe invoice once the one before is paid', async () => {
+    const { invoiceId: old } = await create();
+    Object.assign(stripe.invoices.get(old), { status: 'uncollectible' });
+    await syncStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' });
+    // The live key is in, so a test-mode one doesn't hold up a new live invoice; the old one is paid before
+    // the new one's draft is noted on the bill.
+    stripe.livemode = true;
+    const make = stripe.invoices.create;
+    let draft;
+    stripe.invoices.create = async (p) => {
+      stripe.invoices.create = make;
+      draft = await make(p);
+      stripe.pay(old);
+      await applyStripeInvoice(db, stripe, await stripe.invoices.retrieve(old));
+      return draft;
+    };
+    await assert.rejects(create({ livemode: true }), { code: 'failed-precondition', message: 'This invoice is already paid.' });
+    assert.equal(stripe.invoices.has(draft.id), false);
+    const d = await data();
+    assert.deepEqual([d.status, d.stripe.status, d.stripe.invoiceId, d.stripe.amountPaid], ['paid', 'paid', old, 1890]);
+  });
+
   it('keeps what a check recorded when an older read of the same Stripe invoice lands after it', async () => {
     const { invoiceId } = await create();
     const check = () => syncStripeInvoice({ db, stripe, livemode: false, companyId: C, invoiceId: 'i1' });

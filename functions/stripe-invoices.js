@@ -17,6 +17,7 @@
 //               phone and email; the job's name, site, PO and architect), for the printed invoice once paid
 //   sentTo, sentAt, error
 //   sending     { token, at } while Stripe is being asked to email it, so another device doesn't email it too
+//   claimedAt   while 'creating': when the try making its Stripe invoice claimed the bill (createStripeInvoice)
 //   pending     ids of Stripe invoices a try made that aren't saved here yet, kept from before each is
 //               finalized until the try ends, so a later try can find one whatever happened
 // and the customer gets stripeCustomerIds: { test, live }. Only this server code writes those
@@ -124,6 +125,10 @@ const updateIfSame = (db, ref, s, fields) => db.runTransaction(async (tx) => {
   return true;
 });
 const SENT_AGAIN = 'this invoice was sent with Stripe again meanwhile. Reopen it to see its new Stripe invoice.';
+
+// Whether the bill is still claimed by the try that claimed it at `now` to make its Stripe invoice
+// (createStripeInvoice), rather than by a try that took it over after that claim ran out.
+const holdsClaim = (s, now) => s?.status === 'creating' && s.claimedAt?.toMillis?.() === now.getTime();
 
 const sameEmail = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
@@ -481,13 +486,18 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
         draft = await stripe.invoices.create({ ...params, ...numberField() });
       }
       draftId = draft.id;
-      // Its id goes on the bill before it's finalized, so a later try finds it whatever happens next.
-      try {
-        await ref.update({ 'stripe.pending': FieldValue.arrayUnion(draft.id) });
-      } catch (e) {
-        if (e?.code === 5) throw new HttpsError('not-found', 'That invoice no longer exists.'); // deleted meanwhile
-        throw e;
-      }
+      // Its id goes on the bill before it's finalized, so a later try finds it whatever happens next. Only
+      // while this try's claim stands, so a try that takes the bill over afterwards always finds it there.
+      const lost = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) throw new HttpsError('not-found', 'That invoice no longer exists.'); // deleted meanwhile
+        const cur = snap.data();
+        if (!holdsClaim(cur.stripe, now)) return cur.status === 'paid' || cur.stripe?.status === 'paid' ? 'paid' : 'taken';
+        tx.update(ref, { 'stripe.pending': FieldValue.arrayUnion(draft.id) });
+        return null;
+      });
+      if (lost === 'paid') throw new HttpsError('failed-precondition', 'This invoice is already paid.');
+      if (lost) throw new HttpsError('aborted', `Nothing was sent: ${SENT_AGAIN}`);
       // One at a time, so the lines keep the invoice's order.
       for (const item of items) {
         await stripe.invoiceItems.create({ customer, invoice: draft.id, currency: 'usd', ...item });
@@ -513,7 +523,13 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       const snap = await tx.get(ref);
       if (!snap.exists) return 'deleted';
       const cur = snap.data();
+      // A try that took the bill over after this one's claim ran out found this Stripe invoice pending and
+      // saved it already.
+      if (cur.stripe?.invoiceId === finalized.id) return 'saved';
       if (['paid', 'void'].includes(cur.status)) return `marked ${cur.status}`;
+      // Or it has the bill now. This Stripe invoice is pending on it from before (above), so that try uses
+      // or cancels it, and it's left alone here.
+      if (!holdsClaim(cur.stripe, now)) return 'taken';
       const read = async (path) => (await tx.get(db.doc(`companies/${companyId}${path}`))).data();
       const curJob = (cur.jobId && await read(`/jobs/${cur.jobId}`)) || {};
       const curCustomerId = cur.customerId || curJob.customerId || null;
@@ -531,6 +547,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
       });
       return null;
     });
+    if (changed === 'saved' || changed === 'taken') throw new HttpsError('aborted', `Nothing was sent: ${SENT_AGAIN}`);
     if (changed) {
       const what = changed === 'changed' ? 'This invoice, its job or its customer was changed' : `This invoice was ${changed}`;
       // If Stripe can't cancel it now, its id stays pending on the bill, so the next try does.
@@ -553,7 +570,7 @@ export async function createStripeInvoice({ db, stripe, livemode, companyId, inv
     const restored = { ...prev, status: prev.status === 'creating' ? null : (prev.status ?? null), claimedAt: null, error: err.message, errorAt: new Date() };
     await db.runTransaction(async (tx) => {
       const s = (await tx.get(ref)).data()?.stripe;
-      if (s?.status === 'creating' && s.claimedAt?.toMillis?.() === now.getTime()) {
+      if (holdsClaim(s, now)) {
         tx.update(ref, { stripe: { ...restored, pending: (s.pending || []).filter((id) => !settled.has(id)) } });
       }
     }).catch(() => {});
@@ -646,6 +663,10 @@ export async function applyStripeInvoice(db, stripe, found) {
     // Stripe never moves an invoice out of paid or void, so anything else is an older read.
     const was = inv.stripe.status;
     if ((was === 'paid' || was === 'void') && si.status !== was) return false;
+    // While a new Stripe invoice is being made for the bill, it still names the one before (say a voided
+    // one). Only a payment on that one is recorded then: a late notice that it was voided would end the
+    // claim, so another try could make a second new one meanwhile.
+    if (was === 'creating' && si.status !== 'paid') return false;
     const update = { ...prefixed(fromStripe(si)), 'stripe.updatedAt': new Date() };
     if (si.status === 'paid') {
       const paidAt = paidAtOf(si);

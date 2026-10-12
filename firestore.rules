@@ -105,6 +105,22 @@ service cloud.firestore {
         && resource.data.get('stripe', {}).get('livemode', false) == true;
     }
 
+    // A contract notes that its pay apps have started (payAppsStarted, saved with each new pay app by
+    // public/js/views.js), so a deposit invoice from its proposal stays refused (public/js/billing.js) even if
+    // its first pay app is deleted later. The accountant, who makes pay apps, can note that and change nothing
+    // else on a contract. Once noted, it stays.
+    function notesPayAppsStarted(companyId, collection) {
+      return collection == 'contracts' && resource != null && hasRole(companyId, ['accountant'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payAppsStarted', 'updatedAt'])
+        && request.resource.data.payAppsStarted == true;
+    }
+
+    function keepsPayAppsStarted(collection) {
+      return collection != 'contracts' || resource == null
+        || resource.data.get('payAppsStarted', false) != true
+        || request.resource.data.get('payAppsStarted', false) == true;
+    }
+
     // Payments recorded on an invoice (cash, check or other) are the record of money that came in. The
     // owner and admins can remove one (say it was entered by mistake); others can only add them.
     function keepsPayments(companyId, collection) {
@@ -574,9 +590,11 @@ service cloud.firestore {
 
       match /{collection}/{docId} {
         allow read: if isRecord(collection) && isMember(companyId);
-        allow create, update: if isRecord(collection) && canEditCollection(companyId, collection)
+        allow create, update: if isRecord(collection)
+          && (canEditCollection(companyId, collection) || notesPayAppsStarted(companyId, collection))
           && keepsServerFields()
           && keepsPayments(companyId, collection)
+          && keepsPayAppsStarted(collection)
           && (!paidThroughStripe(collection) || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']))
           && (!payableThroughStripe(collection) || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']));
         allow delete: if isRecord(collection) && canManage(companyId) && !paidThroughStripe(collection) && !payableThroughStripe(collection);
