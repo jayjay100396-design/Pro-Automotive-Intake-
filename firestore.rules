@@ -8,6 +8,8 @@ rules_version = '2';
 //   companies/{companyId}/{collection}/{docId} customers, jobs, estimates, contracts,
 //                                              changeOrders, payApps, invoices, files
 //   companies/{companyId}/requests/{requestId} quote requests sent from the public page (quote.html)
+//   companies/{companyId}/suppliers/{id}       who the business buys from (Suppliers)
+//   companies/{companyId}/partsRequests/{id}   quote requests and orders to suppliers, and where they stand
 //   companies/{companyId}/events/{eventId}     the schedule: appointments, installs, tasks, time off
 //   companies/{companyId}/calendarLinks/{id}   Google Calendar connections (only the server writes them)
 //   companies/{companyId}/calendarTokens/{id}  their Google access (server only, nobody else reads it)
@@ -58,9 +60,9 @@ service cloud.firestore {
         || (isBillingCollection(collection) && hasRole(companyId, ['accountant']));
     }
 
-    // Business records. members, invites, requests, files and the schedule have their own rules below.
+    // Business records. members, invites, requests, files, suppliers, partsRequests and the schedule have their own rules below.
     function isRecord(collection) {
-      return !(collection in ['members', 'invites', 'requests', 'files', 'events', 'calendarLinks', 'calendarTokens']);
+      return !(collection in ['members', 'invites', 'requests', 'files', 'suppliers', 'partsRequests', 'events', 'calendarLinks', 'calendarTokens']);
     }
 
     function invitePath(companyId, inviteId) {
@@ -245,6 +247,40 @@ service cloud.firestore {
 
     function isValidEmail(v) {
       return v.matches('^[^@\\s]+@[^@\\s]+[.][A-Za-z]{2,}$');
+    }
+
+    // ---------- Suppliers and parts orders ----------
+    //
+    // companies/{companyId}/suppliers/{supplierId}: who the business buys from (public/js/suppliers.js)
+    //   name (1-120), plugin, branch, branchAddress, branchPhone, contactName, emails and cc (up to 5 addresses
+    //   each), phone, account (0-40), website, kind, listType, delivery, notes (0-1000), createdAt, createdBy, updatedAt.
+    //   The app emails parts requests to these addresses and nobody else, so only owners and admins change them.
+    //
+    // companies/{companyId}/partsRequests/{requestId}: a quote request or order to a supplier and where it stands
+    //   (public/js/parts.js lists the fields). Owners, admins and staff write them, the accountant reads them, and
+    //   owners and admins delete them. appEmail (how the app's email went) is written only by the server that
+    //   sends it (functions-alerts/parts-request.js), which also keeps each business's daily count in
+    //   emailUsage/{companyId}, a collection no one else can reach.
+
+    function isValidSupplier(d) {
+      return d.keys().hasOnly(['name', 'plugin', 'branch', 'branchAddress', 'branchPhone', 'contactName', 'emails', 'cc',
+          'phone', 'account', 'website', 'kind', 'listType', 'delivery', 'notes', 'createdAt', 'createdBy', 'updatedAt'])
+        && isText(d.name, 1, 120)
+        && d.get('emails', []) is list && d.get('emails', []).size() <= 5
+        && d.get('cc', []) is list && d.get('cc', []).size() <= 5
+        && isText(d.get('account', ''), 0, 40)
+        && isText(d.get('notes', ''), 0, 1000);
+    }
+
+    function isValidPartsRequest(d) {
+      return d.status in ['draft', 'sent', 'quoted', 'ordered', 'confirmed', 'shipped', 'partial', 'received', 'cancelled']
+        && d.get('kind', 'quote') in ['quote', 'order']
+        && d.get('listType', 'parts') in ['parts', 'glass', 'general']
+        && d.get('items', []) is list && d.get('items', []).size() <= 200
+        && d.get('attachments', []) is list && d.get('attachments', []).size() <= 10
+        && d.get('events', []) is list && d.get('events', []).size() <= 500
+        && isText(d.get('jobId', ''), 0, 64)
+        && isText(d.get('supplierId', ''), 0, 64);
     }
 
     // Photos on the public page: the top photo, one per service, and the gallery.
@@ -443,6 +479,25 @@ service cloud.firestore {
           || (canEdit(companyId)
             && resource.data.createdBy == request.auth.uid
             && !resource.data.path.matches('companies/[^/]+/requests/.+'));
+      }
+
+      // Suppliers and parts orders (see the note with their checks above).
+      match /suppliers/{supplierId} {
+        allow read: if isMember(companyId);
+        allow create, update: if canManage(companyId) && isValidSupplier(request.resource.data);
+        allow delete: if canManage(companyId);
+      }
+
+      match /partsRequests/{requestId} {
+        allow read: if isMember(companyId);
+        allow create: if canEdit(companyId)
+          && isValidPartsRequest(request.resource.data)
+          && request.resource.data.createdBy == request.auth.uid
+          && !('appEmail' in request.resource.data);
+        allow update: if canEdit(companyId)
+          && isValidPartsRequest(request.resource.data)
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['appEmail', 'createdBy', 'createdAt']);
+        allow delete: if canManage(companyId);
       }
 
       // The schedule (see the note with the schedule checks above).

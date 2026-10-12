@@ -7,7 +7,7 @@ import {
 import { query, where as fwhere } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { addDays, nowIn } from './when.js';
 
-export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices', 'requests'];
+export const COLLECTIONS = ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices', 'requests', 'suppliers', 'partsRequests'];
 
 export const state = {
   user: null,
@@ -223,4 +223,6 @@ export const can = {
   bill: () => ['owner', 'admin', 'staff', 'accountant'].includes(state.role),
   remove: () => ['owner', 'admin'].includes(state.role),
   manage: () => state.role === 'owner',
+  // Who the app emails parts requests to is the owner's and admins' call (firestore.rules: suppliers).
+  suppliers: () => ['owner', 'admin'].includes(state.role),
 };
