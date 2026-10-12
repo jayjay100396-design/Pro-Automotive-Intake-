@@ -296,6 +296,21 @@ describe('Firestore rules', function () {
       await assertSucceeds(deleteDoc(r(db('admin1'))));
     });
 
+    it('keeps the email status for the server, and lets only the owner say who gets the emails', async () => {
+      await site({ companyId: 'stellar', open: true });
+      await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'companies/stellar/requests/r2'), {
+        ...form(), createdAt: Timestamp.now(), alert: { status: 'sent', to: ['wes@stellarglassllc.com'] },
+      }));
+      const r = (f) => doc(f, 'companies/stellar/requests/r2');
+      await assertSucceeds(updateDoc(r(db('crew')), { status: 'contacted', updatedAt: serverTimestamp() }));
+      await assertFails(updateDoc(r(db('crew')), { 'alert.status': 'failed', updatedAt: serverTimestamp() }));
+      await assertFails(updateDoc(r(db('wes')), { alert: null, updatedAt: serverTimestamp() }));
+      await assertFails(send(form({ alert: { status: 'sent' } })));
+      await assertSucceeds(updateDoc(doc(db('wes'), 'companies/stellar'), { requestAlertEmails: ['wes@stellarglassllc.com', 'office@example.com'] }));
+      await assertFails(updateDoc(doc(db('admin1'), 'companies/stellar'), { requestAlertEmails: ['admin@example.com'] }));
+      await assertFails(updateDoc(doc(db('crew'), 'companies/stellar'), { requestAlertEmails: [] }));
+    });
+
     it('lets only the owner connect the page to their business', async () => {
       const s = (f) => doc(f, 'sites/stellar-glass');
       const on = (companyId, open = true) => ({ companyId, open, updatedAt: serverTimestamp() });
