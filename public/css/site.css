@@ -86,6 +86,8 @@ h3 { font-size: 1.3rem; }
 .field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; }
 input, select, textarea { font: inherit; font-weight: 400; color: var(--ink); background: #fff; border: 1px solid #c4ccd6; border-radius: 4px; padding: .6rem .7rem; width: 100%; min-width: 0; }
 input:focus, select:focus, textarea:focus { outline: 2px solid rgba(1, 119, 193, .35); border-color: var(--blue); }
+/* The details box grows to fit what's typed (js/autosize.js), so there's no corner to drag. */
+textarea { resize: none; }
 [aria-invalid="true"] { border-color: var(--err); }
 .hint { margin: -.4rem 0 0; font-size: .85rem; color: var(--muted); }
 .hint.bad { color: var(--err); }

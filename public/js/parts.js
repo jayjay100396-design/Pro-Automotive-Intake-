@@ -302,8 +302,8 @@ export function partsEdit(id, params) {
         <p class="span2 small recips" id="recips"></p>
         <label class="span2">Subject <input name="subject" id="subject" value="${esc(r.subject)}" maxlength="200"></label>
         <label class="span2">Opening line <textarea name="intro" id="intro" rows="2" maxlength="1000">${esc(r.intro)}</textarea></label>
-        <label class="span2">Notes for the supplier <textarea name="notes" rows="3" maxlength="3000" placeholder="e.g. Can you quote the doors separately? We'll need those first.">${esc(r.notes)}</textarea></label>
-        <label class="span2">Signature <textarea name="signature" rows="4" maxlength="600">${esc(r.signature)}</textarea></label>
+        <label class="span2">Notes for the supplier <textarea name="notes" rows="4" maxlength="3000" placeholder="e.g. Can you quote the doors separately? We'll need those first.">${esc(r.notes)}</textarea></label>
+        <label class="span2">Signature <textarea name="signature" rows="5" maxlength="600">${esc(r.signature)}</textarea></label>
         <label class="inline"><span><input type="checkbox" name="ccMe" ${r.ccMe === false ? '' : 'checked'}> Copy me</span></label>
         <label class="inline"><span><input type="checkbox" name="ccOffice" ${r.ccOffice ? 'checked' : ''}> Copy the office${state.company?.email ? ` (${esc(state.company.email)})` : ''}</span></label>
         <div class="span2" data-lines><h3 class="sub-h">Attach job files</h3><div id="files" class="file-picks"><p class="muted small">Pick a job to see its files.</p></div>
@@ -431,7 +431,7 @@ function trackerHtml(r, today, edit) {
       <div class="card email-card"><h2>Email ${esc(supplierName(r.supplierId) || 'the supplier')}</h2>
         ${appNote}${last}
         <label>Email <select id="what">${options(whats, whats[0][0])}</select></label>
-        <label>Note for this email (optional) <textarea id="mnote" rows="2" maxlength="${PE.MAX_NOTE}" placeholder="e.g. Deliver before 10 AM, and call Mike at the site when you're close." ${edit ? '' : 'disabled'}></textarea></label>
+        <label>Note for this email (optional) <textarea id="mnote" rows="3" maxlength="${PE.MAX_NOTE}" placeholder="e.g. Deliver before 10 AM, and call Mike at the site when you're close." ${edit ? '' : 'disabled'}></textarea></label>
         <p class="small recips" id="mrecips"></p>
         <iframe id="mpreview" class="email-preview short" sandbox title="Email preview"></iframe>
         ${edit ? `<div class="row top-gap"><button type="button" class="btn primary" id="msendApp">Send from the app</button>

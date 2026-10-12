@@ -543,7 +543,7 @@ export function eventEdit(id, params) {
         <div class="rem-pick" data-rem></div>
         <p class="hint">Google Calendar sends these to the phone of each person on it.</p>
       </fieldset>
-      <label>Notes <textarea name="notes" rows="3" maxlength="4000" ${ro} placeholder="${esc(task ? 'e.g. Call the GC about the revised drawings' : 'e.g. Bring the 12 ft ladder; gate code 4321')}">${esc(data.notes)}</textarea></label>
+      <label>Notes <textarea name="notes" rows="5" maxlength="4000" ${ro} placeholder="${esc(task ? 'e.g. Call the GC about the revised drawings' : 'e.g. Bring the 12 ft ladder; gate code 4321')}">${esc(data.notes)}</textarea></label>
       ${!isNew ? `<div class="row status-row">
         <label class="inline"><input type="checkbox" name="done" ${data.done ? 'checked' : ''} ${edit && !(data.repeat && !data.done) ? '' : 'disabled'}> Done</label>
         <label class="inline"><input type="checkbox" name="canceled" ${data.canceled ? 'checked' : ''} ${ro}> Canceled</label>
