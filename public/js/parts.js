@@ -77,12 +77,13 @@ function sendProblem(e, waited = 0) {
   if (code === 'deadline-exceeded' || (noAnswer(e) && waited > 60000)) {
     return 'The app didn\'t hear back, so the email may have gone out. Check the request\'s History before you send it again.';
   }
-  if (noAnswer(e)) {
-    return navigator.onLine === false ? 'You\'re offline. Send it once you\'re connected.'
-      : 'Sending from the app isn\'t set up yet (EMAIL_ALERTS.md). Use Open in Gmail for now.';
-  }
+  // With no code the call never started: the library that makes it didn't load.
+  if ((!code || noAnswer(e)) && navigator.onLine === false) return 'You\'re offline. Send it once you\'re connected.';
+  // Online but no answer: not deployed yet, or the connection to it is down (DNS, a hotel Wi-Fi sign-in page). The
+  // browser can't tell which, so the words cover both.
+  if (noAnswer(e)) return 'The app couldn\'t reach its email sender: it isn\'t set up yet (EMAIL_ALERTS.md), or the connection is down. Try again, or use Open in Gmail.';
   if (code === 'unauthenticated') return 'Sign in again, then send it.';
-  return sentenceOf(e) || 'The email didn\'t go out. Try again, or use Open in Gmail.';
+  return (code && sentenceOf(e)) || 'The email didn\'t go out. Try again, or use Open in Gmail.';
 }
 
 // Notes on the request that it went out by Gmail, the email app or a copy (the server does this when the app
@@ -116,24 +117,26 @@ async function sendFromApp(id, what, button, note = '') {
     if (problems.length) return toast(problems[0], true);
   }
   if (!confirm(`Email ${what === 'followup' ? 'an update request' : `this ${what === 'order' || r.kind === 'order' ? 'order' : 'quote request'}`} to ${to.join(', ')}?`)) return;
+  const sendId = crypto.randomUUID();
   const label = button.textContent;
   button.disabled = true;
   button.textContent = 'Sending…';
   const started = Date.now();
+  let res;
   try {
-    const sendId = crypto.randomUUID();
-    const res = await callFunction('sendPartsEmail', { companyId: state.companyId, requestId: id, what, sendId, note });
-    toast(`Emailed to ${(res.to || to).join(', ')}`);
-    // Shows it once the server's note that it went is here.
-    await waitFor(() => get('partsRequests', id)?.appEmail?.sendId === sendId);
-    go(`#/parts/${id}`);
-    rerender();
+    res = await callFunction('sendPartsEmail', { companyId: state.companyId, requestId: id, what, sendId, note });
   } catch (e) {
     console.error(e);
     toast(sendProblem(e, Date.now() - started), true);
     button.disabled = false;
     button.textContent = label;
+    return;
   }
+  toast(`Emailed to ${(res.to || to).join(', ')}`);
+  // Shows it once the server's note that it went is here.
+  await waitFor(() => get('partsRequests', id)?.appEmail?.sendId === sendId);
+  go(`#/parts/${id}`);
+  rerender();
 }
 
 // ---------- The list: every request and where it stands ----------
