@@ -1,7 +1,7 @@
 // Screens: dashboard, customers, jobs, estimates, contracts (with change orders), pay apps, invoices, settings.
 // Each view returns { html, mount(root), live }. Live views re-render when data changes;
 // editors render once so typing isn't interrupted.
-import { state, add, update, updateWith, remove, get, where, nextNumber, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
+import { state, add, update, updateWith, remove, get, where, nextNumber, newId, putOnce, transact, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
   proposalOptions, estimateAmount, proposalDeposit, depositSentence, termsWithoutDeposit, proposalTerms, proposalPayment, paidOn,
@@ -10,7 +10,7 @@ import {
 import { esc, today, addDays, fmtDate, options, badge, formData, readLines, toast, empty } from './ui.js';
 import {
   proposalBilling, mountProposalBilling, stripeCard, mountStripeCard, settleStripeFirst, paymentsSettings, mountPaymentsSettings,
-  paymentsCard, mountPaymentsCard, paidFields, frozen, lockNote,
+  paymentsCard, mountPaymentsCard, paidFields, frozen, lockNote, firstPayAppId, startGuard, nextProposalId,
 } from './billing.js';
 import { fileBrowser, countJobFiles } from './files.js';
 import { alertEmails, parseEmails, lastAlertNote, MAX_ALERT_EMAILS } from './requests.js';
@@ -42,7 +42,12 @@ const coForContract = (cid) => where('changeOrders', 'contractId', cid);
 const contractTotal = (c) => contractSum(c, coForContract(c.id)).toDate;
 
 async function attempt(fn, ok) {
-  try { const r = await fn(); if (ok) toast(ok); return r; } catch (e) { console.error(e); toast(e.code === 'permission-denied' ? 'Your role can\'t make that change.' : e.message, true); return null; }
+  try { const r = await fn(); if (ok) toast(ok); return r; } catch (e) {
+    console.error(e);
+    toast(e.code === 'permission-denied' ? 'Your role can\'t make that change.'
+      : e.code === 'unavailable' ? 'You\'re offline. Connect to the internet, then try again.' : e.message, true);
+    return null;
+  }
 }
 const confirmDelete = (what) => confirm(`Delete this ${what}? This can't be undone.`);
 
@@ -540,14 +545,23 @@ export function estimateEdit(id, params) {
           sov = [{ item: 1, desc: `Supply and install per proposal ${cur.number}, Price ${opt.number}${opt.name ? ` (${opt.name})` : ''}${spec ? ': ' + spec : ''}`, value: opt.price }];
         }
         const terms = [proposalTerms(cur), cur.exclusions ? `Exclude: ${cur.exclusions}` : ''].filter(Boolean).join('\n');
-        const r = await attempt(() => add('contracts', {
-          number: nextNumber('contracts'), jobId: cur.jobId, customerId: cur.customerId || '', estimateId: id, date: today(),
-          amount: opt.price, retainagePct: 10, status: 'draft', sov, terms,
+        // The proposal notes its contract in the same transaction, which first checks it isn't a contract
+        // already (made on another device, say). An invoice made from the proposal reads that note as it's
+        // saved, so it can't miss that it's a contract now (billing.js).
+        const cid = newId('contracts');
+        const r = await attempt(() => transact(async ({ read, update: change, create }) => {
+          const was = (await read('estimates', id)).data()?.contractId;
+          const other = was && (await read('contracts', was)).data();
+          if (other) throw new Error(`This proposal is already contract ${other.number}.`);
+          change('estimates', id, { status: 'accepted', contractId: cid });
+          return create('contracts', {
+            number: nextNumber('contracts'), jobId: cur.jobId, customerId: cur.customerId || '', estimateId: id, date: today(),
+            amount: opt.price, retainagePct: 10, status: 'draft', sov, terms,
+          }, cid);
         }), 'Contract created');
         if (r) {
-          update('estimates', id, { status: 'accepted' }).catch(() => {});
           if (get('jobs', cur.jobId)) update('jobs', cur.jobId, { status: 'contracted' }).catch(() => {});
-          go(`#/contracts/${r.id}`);
+          go(`#/contracts/${r}`);
         }
       });
     },
@@ -664,12 +678,29 @@ export function contractEdit(id) {
         const prior = where('payApps', 'contractId', id).sort(sortNum)[0];
         const approved = coForContract(id).filter((x) => x.status === 'approved').sort((a, b) => a.number - b.number);
         const sov = [...(cur.sov || []), ...approved.map((x) => ({ item: `CO${x.number}`, desc: `Change order ${x.number}: ${x.desc}`, value: Number(x.amount) || 0 }))];
-        const r = await attempt(() => add('payApps', {
+        const data = {
           contractId: id, jobId: cur.jobId, customerId: cur.customerId || '', number: prior ? (Number(prior.number) || 0) + 1 : 1,
           date: today(), periodTo: today(), retainagePct: cur.retainagePct ?? 10, storedRetainagePct: cur.retainagePct ?? 10,
           status: 'draft', lines: nextPayAppLines(sov, prior),
-        }), 'Pay app created');
-        if (r) go(`#/payapps/${r.id}`);
+        };
+        if (prior) {
+          const r = await attempt(() => add('payApps', data), 'Pay app created');
+          if (r) go(`#/payapps/${r.id}`);
+          return;
+        }
+        // The first one takes a set id, so a deposit invoice from the proposal can check, as it's saved, that
+        // the pay apps haven't started; and it checks the proposal has no invoice this device hasn't seen yet
+        // (billing.js startGuard).
+        const first = firstPayAppId(id);
+        try {
+          if (!(await putOnce('payApps', first, data, startGuard(cur)))) return toast('Someone just started this contract\'s pay apps. Open it from the list below.', true);
+          toast('Pay app created');
+          go(`#/payapps/${first}`);
+        } catch (e) {
+          console.error(e);
+          toast(e.code === 'permission-denied' ? 'Your role can\'t make that change.'
+            : e.code === 'unavailable' ? 'You\'re offline. Connect to the internet, then start the pay app.' : e.message, true);
+        }
       });
       root.querySelector('#del')?.addEventListener('click', async () => {
         if (confirmDelete('contract') && await attempt(() => remove('contracts', id), 'Contract deleted') !== null) go('#/contracts');
@@ -688,7 +719,7 @@ function rerender() {
 // ---------- Pay apps (AIA G702 / G703) ----------
 // Invoices made from the contract's proposal (a deposit, say) billed part of the job before its pay apps,
 // so the pay apps take that off (G702 line 7a) until it's used up. Each app keeps what it took off
-// (depositApplied) once it's billed: past draft, or invoiced (fixDeposits). So a deposit refunded or
+// (depositApplied) once it's billed: past draft, or invoiced (depositSnapshot, saveBilled). So a deposit refunded or
 // credited later doesn't change what earlier apps billed; the next app adds back what they took beyond it.
 const earlierApps = (p) => where('payApps', 'contractId', p.contractId).filter((x) => (Number(x.number) || 0) < (Number(p.number) || 0));
 const billedApp = (id, status) => status !== 'draft' || where('invoices', 'payAppId', id).some((i) => i.status !== 'void');
@@ -705,15 +736,59 @@ export function payAppSummary(p, override) {
   return { ...s, depositFrom: deposits.map((i) => i.number) };
 }
 
-// Keeps what the earlier apps that don't have it yet take off the deposit, as they show now, and returns
-// what to save on this one (cur: as its page has it; nothing if it has it already). A contract that wasn't
-// made from a proposal has no deposit to keep.
-async function fixDeposits(p, cur) {
-  if (!get('contracts', p.contractId)?.estimateId) return {};
-  const earlier = earlierApps(p).filter((x) => typeof x.depositApplied !== 'number').map((x) => [x.id, payAppSummary(x).depositApplied]);
-  for (const [id, depositApplied] of earlier) await update('payApps', id, { depositApplied });
-  return typeof cur.depositApplied === 'number' ? {} : { depositApplied: payAppSummary(p, cur).depositApplied };
+// JSON with object keys in order, to compare a record as saved with how this device has it.
+const canon = (v) => JSON.stringify(v ?? null, (k, x) => (x && typeof x === 'object' && !Array.isArray(x)
+  ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
+// What an app's deposit offset is figured from, as a record has it: what this app has kept, the earlier
+// apps' work and what they kept, and the proposal's invoices ('gone': the record isn't there).
+const keptSig = (x) => (x ? canon(x.depositApplied) : 'gone');
+const earlierSig = (x) => (x ? canon([x.number, x.retainagePct, x.storedRetainagePct, x.lines, x.depositApplied]) : 'gone');
+const depositSig = (i) => (i ? canon([i.status, billedOn(i)]) : 'gone');
+
+// What a billed app keeps off the deposit, all figured at once from what this device has now (cur: the app
+// as its page has it): the summary (s), what to save on this app (mine; nothing if it has it already) and on
+// the earlier apps that don't have theirs yet (earlier), and what that was figured from (checks), for
+// saveBilled to make sure it's still what's saved. A contract that wasn't made from a proposal has no
+// deposit to keep.
+function depositSnapshot(p, cur) {
+  const s = payAppSummary(p, cur);
+  const c = get('contracts', p.contractId);
+  if (!c?.estimateId) return { s, mine: {}, earlier: [], checks: [] };
+  const apps = earlierApps(p);
+  const check = (col, id, sig) => ({ col, id, sig, was: sig(get(col, id)) });
+  return {
+    s,
+    mine: typeof cur.depositApplied === 'number' ? {} : { depositApplied: s.depositApplied },
+    earlier: apps.filter((x) => typeof x.depositApplied !== 'number').map((x) => ({ id: x.id, depositApplied: payAppSummary(x).depositApplied })),
+    checks: [
+      check('payApps', p.id, keptSig),
+      ...apps.map((x) => check('payApps', x.id, earlierSig)),
+      ...where('invoices', 'estimateId', c.estimateId).map((i) => check('invoices', i.id, depositSig)),
+      // No invoice from the proposal that this device hasn't seen yet.
+      check('invoices', nextProposalId(c.estimateId), (x) => (x ? 'made' : 'none')),
+    ],
+  };
 }
+
+// A transaction's changes reach this device's copy when the server sends them back: waits for that (done()
+// tells; a few seconds at most).
+const arrived = (done) => new Promise((resolve) => {
+  if (done()) return resolve();
+  const timer = setTimeout(() => { off(); resolve(); }, 4000);
+  const off = onChange(() => { if (done()) { clearTimeout(timer); off(); resolve(); } });
+});
+
+const CHANGED = 'An earlier pay app or the proposal\'s invoices just changed on another device, so nothing was saved. Check this pay app\'s figures, then try again.';
+// Saves what the apps keep off the deposit (snap: depositSnapshot) with this app's changes (data) and its
+// invoice, if any, in one transaction that first checks what they were figured from is still what's saved.
+// So what's kept and what's billed always match each other and what's saved. Returns the invoice's id.
+const saveBilled = (id, snap, data, invoice = null) => transact(async ({ read, update: change, create }) => {
+  const saved = await Promise.all(snap.checks.map((k) => read(k.col, k.id)));
+  if (snap.checks.some((k, i) => k.sig(saved[i].data()) !== k.was)) throw new Error(CHANGED);
+  for (const x of snap.earlier) change('payApps', x.id, { depositApplied: x.depositApplied });
+  if (Object.keys(data).length) change('payApps', id, data);
+  return invoice ? create('invoices', invoice) : null;
+});
 
 // What the pay app page edits, to tell when it has changes that aren't saved.
 const payAppSig = (x) => JSON.stringify([
@@ -806,6 +881,8 @@ export function payAppEdit(id) {
       });
       form.addEventListener('input', recalc);
       recalc();
+      // The figures from other records (the deposit, the earlier apps) follow them as they change.
+      const off = onChange(() => { if (!form.isConnected) return off(); recalc(); });
       const initial = payAppSig(current());
       const unsaved = () => { const now = payAppSig(current()); return now !== initial && now !== payAppSig(get('payApps', id) || {}); };
       form.addEventListener('submit', async (ev) => {
@@ -813,32 +890,36 @@ export function payAppEdit(id) {
         const cur = current();
         // Once it's billed, what it takes off the deposit is kept from now on. A draft with no invoice
         // figures it afresh.
+        const snap = billedApp(id, cur.status) ? depositSnapshot(p, cur) : null;
+        const dep = snap ? snap.mine : typeof cur.depositApplied === 'number' ? { depositApplied: null } : {};
+        const s = snap ? snap.s : payAppSummary(p, { ...cur, ...dep });
+        const data = { ...formData(form), lines: cur.lines, currentDue: s.currentDue, ...dep };
+        // Keeping it the first time is checked against what's saved; otherwise it's a plain save (offline too).
+        const kept = snap ? [...snap.earlier, ...('depositApplied' in dep ? [{ id, depositApplied: dep.depositApplied }] : [])] : [];
         await attempt(async () => {
-          const dep = billedApp(id, cur.status) ? await fixDeposits(p, cur) : typeof cur.depositApplied === 'number' ? { depositApplied: null } : {};
-          const s = payAppSummary(p, { ...cur, ...dep });
-          return update('payApps', id, { ...formData(form), lines: cur.lines, currentDue: s.currentDue, ...dep });
+          if (!kept.length) return update('payApps', id, data);
+          await saveBilled(id, snap, data);
+          // So the page, and an invoice made next, see it.
+          return arrived(() => kept.every((x) => get('payApps', x.id)?.depositApplied === x.depositApplied));
         }, 'Pay app saved');
         recalc();
       });
       root.querySelector('#toinvoice')?.addEventListener('click', async () => {
         if (unsaved()) return toast('Save the pay app first, then make the invoice.', true);
         const cur = current();
-        const s = payAppSummary(p, cur);
+        const snap = depositSnapshot(p, cur);
+        const { s } = snap;
         if (s.depositApplied > 0 && s.currentDue <= 0) return toast('The proposal\'s deposit covers this application, so there\'s nothing to invoice.', true);
-        // Billed now, so what it takes off the deposit is kept from here on.
-        const kept = await attempt(async () => {
-          const dep = await fixDeposits(p, cur);
-          if (Object.keys(dep).length) await update('payApps', id, dep);
-        });
-        if (kept === null) return;
         const less = s.depositApplied > 0 ? `, less ${money(s.depositApplied)} of the deposit`
           : s.depositApplied < 0 ? `, plus ${money(-s.depositApplied)} of the deposit earlier applications took off, since refunded or credited` : '';
-        const r = await attempt(() => add('invoices', {
+        // Billed now: the invoice and what the apps keep off the deposit are saved together, from the same figures.
+        const made = await attempt(() => saveBilled(id, snap, snap.mine, {
           number: nextNumber('invoices'), jobId: p.jobId, customerId: p.customerId || get('jobs', p.jobId)?.customerId || '', payAppId: id,
           date: today(), dueDate: addDays(today(), 30), status: 'unpaid', taxPct: 0,
           lines: [{ desc: `Application for payment #${cur.number}, period to ${cur.periodTo} (net of retainage${less})`, qty: 1, price: s.currentDue }],
         }), 'Invoice created');
-        if (r) go(`#/invoices/${r.id}`);
+        if (made) go(`#/invoices/${made}`);
+        else recalc();
       });
       root.querySelector('#del')?.addEventListener('click', async () => {
         if (confirmDelete('pay app') && await attempt(() => remove('payApps', id), 'Pay app deleted') !== null) go('#/payapps');

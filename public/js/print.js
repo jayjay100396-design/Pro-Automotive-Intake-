@@ -2,7 +2,7 @@
 import { state, get, where } from './data.js';
 import { estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, money, pctFmt, proposalOptions, proposalTerms, paidOn, creditedOn, round2 } from './calc.js';
 import { payAppSummary, g702Table } from './views.js';
-import { howPaid } from './billing.js';
+import { howPaid, frozen } from './billing.js';
 import { esc, fmtDate } from './ui.js';
 import { websiteUrl } from './brand.js';
 
@@ -201,8 +201,9 @@ export function invoiceDoc(id) {
     if (online > 0) rows.push([!credit ? 'Paid online' : Number(st.paidOnline) > 0 ? 'Paid and credited' : 'Credit applied', online]);
   }
   const due = inv.status === 'paid' ? 0 : Math.max(0, round2(t.total - rows.reduce((sum, [, amount]) => sum + amount, 0)));
-  // Paid through Stripe for real: billed to whoever it was billed to then.
-  const snap = st.status === 'paid' && st.livemode ? st.party : null;
+  // Paid through Stripe for real, or out for payment on a live Stripe invoice: billed to whoever the Stripe
+  // invoice was made out to, as it shows them.
+  const snap = frozen(st) ? st.party : null;
   return page(`Invoice ${inv.number}`, `
     ${letterhead('Invoice', `<div>No. ${esc(inv.number)}</div><div>${fmtDate(inv.date)}</div>${inv.dueDate ? `<div class="small">Due ${fmtDate(inv.dueDate)}</div>` : ''}${inv.status === 'paid' ? `<div class="paid-stamp">PAID ${fmtDate(inv.paidDate)}</div>` : ''}`)}
     ${party(inv.jobId, inv.customerId, snap)}

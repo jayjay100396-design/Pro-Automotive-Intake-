@@ -37,9 +37,20 @@ const fromProposal = (estimateId) => where('invoices', 'estimateId', estimateId)
 // Invoices made here take the next id in the proposal's own series (its id, then -1, -2, …),
 // and putOnce only makes one if that id is free. So two devices clicking at the same moment
 // can't both bill the same balance: the second finds its id taken.
-const nextProposalId = (estimateId) => {
+export const nextProposalId = (estimateId) => {
   const seq = (id) => (id.startsWith(`${estimateId}-`) && /^\d+$/.test(id.slice(estimateId.length + 1)) ? Number(id.slice(estimateId.length + 1)) : 0);
   return `${estimateId}-${Math.max(0, ...fromProposal(estimateId).map((i) => seq(i.id))) + 1}`;
+};
+
+// A contract's first pay app takes a set id, and is made only if the proposal has no invoice this device
+// hasn't seen yet (the next id in its series is free: startGuard). A deposit or final invoice from the
+// proposal is made only if that pay app doesn't exist (make, below). Both are checked as they're saved, so
+// whichever comes second sees the other: no deposit after the pay apps start, and none they miss.
+export const firstPayAppId = (contractId) => `${contractId}-1`;
+export const startGuard = (contract) => async (read) => {
+  if (contract.estimateId && (await read('invoices', nextProposalId(contract.estimateId))).exists()) {
+    throw new Error('An invoice was just made from this contract\'s proposal. Wait a moment for it to show, then start the pay app again.');
+  }
 };
 
 const proposalSig = (e) => {
@@ -183,9 +194,20 @@ export function mountProposalBilling(root, estimateId, current) {
     if (inv.total <= 0) return toast('There\'s nothing left to bill on this proposal.', true);
     const more = kind === 'final' || inv.total < depositNow(e, contract, earlier).full ? ` for the ${money(inv.total)} left` : ` for ${money(inv.total)}`;
     if (same.length && !confirm(`This proposal already has ${kind} invoice ${same.map((i) => i.number).join(', ')}. Make another one${more}?`)) return;
+    // Checked again as it's saved (it may have just become a contract, or its pay apps started, on another
+    // device): the proposal notes its contract when it becomes one (views.js).
+    const guard = async (read) => {
+      const cid = (await read('estimates', estimateId)).data()?.contractId;
+      if (cid && cid !== contract?.id && (await read('contracts', cid)).exists()) {
+        throw new Error('This proposal just became a contract. Once its Billing card shows that, try again.');
+      }
+      if (contract && (await read('payApps', firstPayAppId(contract.id))).exists()) {
+        throw new Error(`Contract ${contract.number}'s pay apps have started, so bill this on them.`);
+      }
+    };
     try {
       const id = nextProposalId(estimateId);
-      if (!(await putOnce('invoices', id, inv))) {
+      if (!(await putOnce('invoices', id, inv, guard))) {
         return toast('Someone just made an invoice from this proposal. It shows in the Billing card; make another only if it\'s still needed.', true);
       }
       toast(`${KIND[kind]} invoice ${inv.number} created`);

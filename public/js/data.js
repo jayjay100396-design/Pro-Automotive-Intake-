@@ -112,11 +112,25 @@ export const remove = (c, id) => deleteDoc(ref(c, id));
 // For records whose id is needed before they're written, e.g. a file's storage path.
 export const newId = (c) => doc(col(c)).id;
 export const put = (c, id, data) => setDoc(ref(c, id), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
+// Reads and changes several records in one transaction (it needs a connection): it all happens or none of
+// it does, and only if what it read is still what's saved when it's saved (otherwise it runs again). fn gets
+// read(c, id), a record as saved right now (reads come first), update(c, id, data) and create(c, data, id),
+// which returns the new record's id.
+export const transact = (fn) => runTransaction(db, (tx) => fn({
+  read: (c, id) => tx.get(ref(c, id)),
+  update: (c, id, data) => { tx.update(ref(c, id), { ...data, updatedAt: serverTimestamp() }); },
+  create: (c, data, id = newId(c)) => {
+    tx.set(ref(c, id), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
+    return id;
+  },
+}));
 // Creates the record only if no record has that id yet, so two devices can't both make it (a
-// transaction, so it needs a connection). False: the id was taken.
-export const putOnce = (c, id, data) => runTransaction(db, async (tx) => {
-  if ((await tx.get(ref(c, id))).exists()) return false;
-  tx.set(ref(c, id), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
+// transaction, so it needs a connection). False: the id was taken. guard(read) can check other records
+// as they're saved right now (read(collection, id) gets one) and throw to stop it.
+export const putOnce = (c, id, data, guard = null) => transact(async ({ read, create }) => {
+  if (guard) await guard(read);
+  if ((await read(c, id)).exists()) return false;
+  create(c, data, id);
   return true;
 });
 // Changes a record from what's saved right now (a transaction, so two devices changing it at once
