@@ -139,7 +139,7 @@ export function requestView(id) {
     <div class="cols">
       <form class="card stack" id="work"><h2>Follow-up</h2>
         <label>Status <select name="status" ${edit ? '' : 'disabled'}>${options(REQUEST_STATUS.map((s) => [s, s]), r.status)}</select></label>
-        <label>Notes <textarea name="notes" rows="4" maxlength="4000" ${edit ? '' : 'readonly'} placeholder="e.g. Called back, measuring Tuesday at 9">${esc(r.notes)}</textarea></label>
+        <label>Notes <textarea name="notes" rows="5" maxlength="4000" ${edit ? '' : 'readonly'} placeholder="e.g. Called back, measuring Tuesday at 9">${esc(r.notes)}</textarea></label>
         ${edit ? '<div><button class="btn primary">Save</button></div>' : ''}
       </form>
       <div class="card stack"><h2>Customer and job</h2>

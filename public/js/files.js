@@ -499,7 +499,7 @@ export function fileBrowser({ jobId = null, startJob = '' } = {}) {
       <div class="row between"><span class="muted small" data-count></span><button type="button" class="icon" data-close aria-label="Close">✕</button></div>
       <label>Name <input name="name" value="${esc(f.name)}" ${edit ? '' : 'readonly'}></label>
       <label>Category <select name="category" ${edit ? '' : 'disabled'}>${options(cats.map((c) => [c.key, c.label]), f.category)}</select></label>
-      <label>Note <textarea name="note" rows="3" ${edit ? '' : 'readonly'} placeholder="e.g. Before install, north elevation">${esc(f.note)}</textarea></label>
+      <label>Note <textarea name="note" rows="4" ${edit ? '' : 'readonly'} placeholder="e.g. Before install, north elevation">${esc(f.note)}</textarea></label>
       <p class="small muted">Added ${fmtWhen(f)}${f.createdByName ? ` by ${esc(f.createdByName)}` : ''} · ${fmtSize(f.size)}${jobId ? '' : `<br>Job: ${j ? `<a href="#/jobs/${esc(j.id)}?tab=files">${esc(j.name)}</a>` : 'deleted'}`}</p>
       <div class="row">
         ${url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener">Open</a>` : ''}

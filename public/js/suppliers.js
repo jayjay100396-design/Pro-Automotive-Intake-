@@ -92,7 +92,7 @@ export function supplierEdit(id, params) {
         <label>List <select name="listType">${options(LIST_TYPES, s.listType || 'parts')}</select></label>
         <label>Delivery <select name="delivery">${options(DELIVERY, s.delivery || 'site')}</select></label>
         <span></span>
-        <label class="span2">Tips for the team, shown on each new request <textarea name="notes" rows="3" maxlength="1000">${esc(s.notes)}</textarea></label>
+        <label class="span2">Tips for the team, shown on each new request <textarea name="notes" rows="4" maxlength="1000">${esc(s.notes)}</textarea></label>
       </fieldset>
       ${manage ? '<div class="span2 row"><button class="btn primary">Save supplier</button></div>' : ''}
     </form>

@@ -143,7 +143,7 @@ export function customerEdit(id) {
       <label>Phone <input name="phone" type="tel" value="${esc(c.phone)}"></label>
       <label>Email <input name="email" type="email" value="${esc(c.email)}"></label>
       <label class="span2">Billing address <input name="address" value="${esc(c.address)}"></label>
-      <label class="span2">Notes <textarea name="notes" rows="3">${esc(c.notes)}</textarea></label>
+      <label class="span2">Notes <textarea name="notes" rows="5">${esc(c.notes)}</textarea></label>
       <div class="span2 row"><button class="btn primary" ${can.edit() ? '' : 'disabled'}>Save customer</button>
       ${!isNew ? `<a class="btn" href="#/jobs/new?customer=${esc(id)}">New job for this customer</a>` : ''}</div>
     </form>
@@ -222,7 +222,7 @@ export function jobEdit(id, params) {
       <label>Status <select name="status">${options(JOB_STATUS.map((s) => [s, s]), j.status)}</select></label>
       <label>GC / Architect <input name="architect" value="${esc(j.architect)}"></label>
       <label>Customer PO / project # <input name="poNumber" value="${esc(j.poNumber)}"></label>
-      <label class="span2">Notes <textarea name="notes" rows="3">${esc(j.notes)}</textarea></label>
+      <label class="span2">Notes <textarea name="notes" rows="5">${esc(j.notes)}</textarea></label>
       <div class="span2 row"><button class="btn primary" ${can.edit() ? '' : 'disabled'}>Save job</button></div>
     </form>
     ${isNew ? '' : `
@@ -310,7 +310,7 @@ function optionCard(o = {}, i = 0, accepted = 0) {
       <label class="span2">Name (optional, e.g. a manufacturer) <input name="name" value="${esc(o.name)}" placeholder="e.g. Akela"></label>
       <label>Price <input name="price" type="number" step="0.01" value="${esc(o.fromLines ? '' : o.price ?? '')}" ${o.fromLines ? 'disabled' : ''}></label>
       <label class="inline">&nbsp;<span><input type="checkbox" name="fromLines" ${o.fromLines ? 'checked' : ''}> Use line-item total</span></label>
-      <label class="span4">Specs (one per line) <textarea name="specs" rows="3">${esc(o.specs)}</textarea></label>
+      <label class="span4">Specs (one per line) <textarea name="specs" rows="4">${esc(o.specs)}</textarea></label>
     </div>
   </div>`;
 }
@@ -418,7 +418,7 @@ export function estimateEdit(id, params) {
         <label class="span2">Project (as printed) <input name="projectTitle" value="${esc(e.projectTitle)}" placeholder="Job name, e.g. Lakeland Central Park Bldg 300 - Revised"></label>
         <label class="span2">Attn (contact at the customer) <input name="attn" value="${esc(e.attn)}" placeholder="Leave blank to use the customer's name"></label>
         <label class="span4">Opening line <input name="intro" value="${esc(e.intro ?? PROPOSAL_DEFAULTS.intro)}"></label>
-        <label class="span4">Openings / scope <textarea name="scope" rows="2" placeholder="(4) F2; (8) F3; (10) F4; (8) F5; (38) F8">${esc(e.scope)}</textarea></label>
+        <label class="span4">Openings / scope <textarea name="scope" rows="3" placeholder="(4) F2; (8) F3; (10) F4; (8) F5; (38) F8">${esc(e.scope)}</textarea></label>
       </fieldset>
       <fieldset class="card" ${ro}>
         <div class="row between"><h2>Prices</h2><button type="button" class="btn small" id="addopt">+ Add price option</button></div>
@@ -441,7 +441,7 @@ export function estimateEdit(id, params) {
           <label>Sales tax % <input name="taxPct" type="number" step="any" value="${esc(e.taxPct)}"></label>
           <span></span>
           <label class="span2 inline"><span><input type="checkbox" name="showLines" ${e.showLines ? 'checked' : ''}> Print the itemized line list on the proposal</span></label>
-          <label class="span2">Internal notes (not printed) <textarea name="notes" rows="2">${esc(e.notes)}</textarea></label>
+          <label class="span2">Internal notes (not printed) <textarea name="notes" rows="4">${esc(e.notes)}</textarea></label>
         </fieldset>
         <div class="card totals" id="totals"></div>
       </div>
@@ -452,7 +452,7 @@ export function estimateEdit(id, params) {
         <label>Deposit <input name="depositValue" type="number" step="any" min="0" value="${esc(dep.value)}"></label>
         <label>Deposit is <select name="depositType">${options([['percent', '% of the price'], ['amount', 'a dollar amount']], dep.type)}</select></label>
         <p class="span2 hint" id="depnote"></p>
-        <label class="span4">Other payment terms <textarea name="terms" rows="2" placeholder="e.g. Balance due on completion.">${esc(terms)}</textarea></label>
+        <label class="span4">Other payment terms <textarea name="terms" rows="3" placeholder="e.g. Balance due on completion.">${esc(terms)}</textarea></label>
         <h2 class="span4 top-gap">Proposal prepared by</h2>
         <label>Name <input name="preparedName" value="${esc(e.preparedName)}"></label>
         <label>Title <input name="preparedTitle" value="${esc(e.preparedTitle)}"></label>
@@ -626,7 +626,7 @@ export function contractEdit(id) {
         <label>Signed by <input name="signedBy" value="${esc(c.signedBy)}"></label>
         <label>Signed date <input name="signedDate" type="date" value="${esc(c.signedDate)}"></label>
         <span></span>
-        <label class="span4">Terms <textarea name="terms" rows="4">${esc(c.terms)}</textarea></label>
+        <label class="span4">Terms <textarea name="terms" rows="6">${esc(c.terms)}</textarea></label>
       </fieldset>
       <fieldset class="card" ${ro}>
         <h2>Schedule of values</h2>
@@ -1053,7 +1053,7 @@ export function invoiceEdit(id, params) {
         <button type="button" class="btn small" id="addline">+ Add line</button>
       </fieldset>
       <div class="cols">
-        <fieldset class="card" ${ro}><label>Notes printed on the invoice <textarea name="notes" rows="3">${esc(inv.notes ?? state.company?.invoiceNotes ?? '')}</textarea></label></fieldset>
+        <fieldset class="card" ${ro}><label>Notes printed on the invoice <textarea name="notes" rows="4">${esc(inv.notes ?? state.company?.invoiceNotes ?? '')}</textarea></label></fieldset>
         <div class="card totals" id="totals"></div>
       </div>
       <div class="row"><button class="btn primary" ${ro}>Save invoice</button></div>
@@ -1241,7 +1241,7 @@ export function settings() {
         <label>Email <input name="email" type="email" value="${esc(c.email)}"></label>
         <label>Website <input name="website" value="${esc(c.website)}"></label>
         <label class="span2">Address <input name="address" value="${esc(c.address)}"></label>
-        <label class="span2">Default invoice notes <textarea name="invoiceNotes" rows="2" placeholder="e.g. Make checks payable to Stellar Glass. Thank you!">${esc(c.invoiceNotes)}</textarea></label>
+        <label class="span2">Default invoice notes <textarea name="invoiceNotes" rows="3" placeholder="e.g. Make checks payable to Stellar Glass. Thank you!">${esc(c.invoiceNotes)}</textarea></label>
         <div class="span2"><button class="btn primary">Save company</button></div>
       </fieldset>
     </form>

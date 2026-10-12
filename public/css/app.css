@@ -55,6 +55,8 @@ input, select, textarea { font: inherit; font-size: .9rem; font-weight: 400; col
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 input[type=checkbox], input[type=radio] { width: auto; accent-color: var(--accent); }
 input:disabled, input[readonly] { background: color-mix(in srgb, var(--bg) 60%, var(--card)); color: var(--muted); }
+/* Text boxes grow to fit their text (js/autosize.js), so there's no corner to drag. */
+textarea { resize: none; }
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 fieldset.card { padding: 1.25rem; }
 
@@ -415,7 +417,8 @@ a.file-tile { text-decoration: none; }
 .chips.common { flex-wrap: wrap; align-items: center; margin: .2rem 0 .7rem; }
 .from-est { width: auto; padding: .3rem .5rem; font-size: .8rem; }
 .paste-box { margin-bottom: .8rem; display: flex; flex-direction: column; gap: .5rem; }
-.paste-box textarea { font-family: var(--mono); font-size: .85rem; }
+/* A long pasted list scrolls inside, so "Add these lines" stays in reach. */
+.paste-box textarea { font-family: var(--mono); font-size: .85rem; max-height: 50vh; }
 table.parts-lines input { min-width: 0; }
 table.parts-lines input.qty { width: 4.5rem; }
 table.parts-lines input.inches { width: 6.5rem; text-align: right; }

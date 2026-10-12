@@ -9,6 +9,7 @@ import {
 import { getStorage, connectStorageEmulator, ref, uploadBytesResumable } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js';
 import { useEmulators, loadConfig } from './config.js';
 import { SITE_ID, BRAND } from './brand.js';
+import { autosize } from './autosize.js';
 
 const MB = 1024 * 1024;
 const MAX_FILES = 8;
@@ -95,6 +96,9 @@ document.addEventListener('click', (e) => {
 
 // ---------- Small page behaviors ----------
 document.getElementById('year').textContent = new Date().getFullYear();
+
+// The project details box grows with what's typed.
+autosize();
 
 // "Ask about a shower" etc. picks that service on the form.
 document.addEventListener('click', (e) => {

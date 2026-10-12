@@ -13,8 +13,11 @@ import { websitePage } from './website.js';
 import { takeoffPage } from './takeoff/page.js';
 import { esc, toast } from './ui.js';
 import { BRAND, logoHtml } from './brand.js';
+import { autosize } from './autosize.js';
 
 const root = document.getElementById('app');
+// Note boxes grow with their text.
+autosize();
 
 const routes = [
   [/^$/, () => V.dashboard()],
