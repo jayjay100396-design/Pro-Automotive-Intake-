@@ -1,7 +1,7 @@
 // Screens: dashboard, customers, jobs, estimates, contracts (with change orders), pay apps, invoices, settings.
 // Each view returns { html, mount(root), live }. Live views re-render when data changes;
 // editors render once so typing isn't interrupted.
-import { state, add, update, updateWith, remove, get, where, nextNumber, newId, putOnce, transact, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
+import { state, add, update, updateWith, remove, get, where, nextNumber, newId, transact, can, onChange, updateCompany, savePreparedBy, listMembers, transferOwnership, createInvite, listInvites, revokeInvite, inviteLink, setMemberRole, removeMember, readSite, setSiteOpen, siteLink } from './data.js';
 import {
   estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, g702, nextPayAppLines, money, pctFmt, round2,
   proposalOptions, estimateAmount, proposalDeposit, depositSentence, termsWithoutDeposit, proposalTerms, proposalPayment, paidOn,
@@ -687,6 +687,7 @@ export function contractEdit(id) {
       }));
       root.querySelector('#newpay')?.addEventListener('click', async () => {
         const cur = get('contracts', id);
+        if (!cur) return toast('This contract was just deleted on another device.', true);
         const prior = where('payApps', 'contractId', id).sort(sortNum)[0];
         const approved = coForContract(id).filter((x) => x.status === 'approved').sort((a, b) => a.number - b.number);
         const sov = [...(cur.sov || []), ...approved.map((x) => ({ item: `CO${x.number}`, desc: `Change order ${x.number}: ${x.desc}`, value: Number(x.amount) || 0 }))];
@@ -695,17 +696,32 @@ export function contractEdit(id) {
           date: today(), periodTo: today(), retainagePct: cur.retainagePct ?? 10, storedRetainagePct: cur.retainagePct ?? 10,
           status: 'draft', lines: nextPayAppLines(sov, prior),
         };
+        // Each one notes on the contract that its pay apps have started, so a deposit invoice from the proposal
+        // stays refused as it's saved (billing.js), even if the first one is deleted later.
+        const noteStarted = async (read, change) => {
+          if (!(await read('contracts', id)).exists()) throw new Error('This contract was just deleted on another device.');
+          change('contracts', id, { payAppsStarted: true });
+        };
         if (prior) {
-          const r = await attempt(() => add('payApps', data), 'Pay app created');
-          if (r) go(`#/payapps/${r.id}`);
+          const made = await attempt(() => transact(async ({ read, update: change, create }) => {
+            await noteStarted(read, change);
+            return create('payApps', data);
+          }), 'Pay app created');
+          if (made) go(`#/payapps/${made}`);
           return;
         }
-        // The first one takes a set id, so a deposit invoice from the proposal can check, as it's saved, that
-        // the pay apps haven't started; and it checks the proposal has no invoice this device hasn't seen yet
+        // The first one takes a set id too, and checks the proposal has no invoice this device hasn't seen yet
         // (billing.js startGuard).
         const first = firstPayAppId(id);
         try {
-          if (!(await putOnce('payApps', first, data, startGuard(cur)))) return toast('Someone just started this contract\'s pay apps. Open it from the list below.', true);
+          const made = await transact(async ({ read, update: change, create }) => {
+            await startGuard(cur)(read);
+            if ((await read('payApps', first)).exists()) return false;
+            await noteStarted(read, change);
+            create('payApps', data, first);
+            return true;
+          });
+          if (!made) return toast('Someone just started this contract\'s pay apps. Open it from the list below.', true);
           toast('Pay app created');
           go(`#/payapps/${first}`);
         } catch (e) {
@@ -934,7 +950,16 @@ export function payAppEdit(id) {
         else recalc();
       });
       root.querySelector('#del')?.addEventListener('click', async () => {
-        if (confirmDelete('pay app') && await attempt(() => remove('payApps', id), 'Pay app deleted') !== null) go('#/payapps');
+        if (!confirmDelete('pay app')) return;
+        // Its contract keeps the note that its pay apps have started (contractEdit), so a deposit invoice from
+        // the proposal stays refused once this one is gone, even if it was the first. A contract whose pay apps
+        // were made before there was that note gets it here.
+        const done = await attempt(() => transact(async ({ read, update: change, remove: drop }) => {
+          if (p.contractId && (await read('contracts', p.contractId)).exists()) change('contracts', p.contractId, { payAppsStarted: true });
+          drop('payApps', id);
+          return true;
+        }), 'Pay app deleted');
+        if (done) go('#/payapps');
       });
     },
   };

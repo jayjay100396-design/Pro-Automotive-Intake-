@@ -4,7 +4,7 @@ const path = require('path');
 const {
   initializeTestEnvironment, assertSucceeds, assertFails,
 } = require('@firebase/rules-unit-testing');
-const { doc, getDoc, getDocs, collection, setDoc, updateDoc, deleteDoc, writeBatch, Timestamp, serverTimestamp } = require('firebase/firestore');
+const { doc, getDoc, getDocs, collection, setDoc, updateDoc, deleteDoc, deleteField, writeBatch, Timestamp, serverTimestamp } = require('firebase/firestore');
 
 let env;
 const db = (uid) => env.authenticatedContext(uid).firestore();
@@ -179,6 +179,36 @@ describe('Firestore rules', function () {
     await assertSucceeds(updateDoc(r('wes'), { payments: [] }));
     // A new invoice can come with payments (one saved as paid).
     await assertSucceeds(setDoc(doc(db('cpa'), 'companies/stellar/invoices/paidnew'), { number: 1011, status: 'paid', payments: [p1] }));
+  });
+
+  it('lets a new pay app note on its contract that the pay apps have started, and keeps that note', async () => {
+    const contract = { number: 3001, estimateId: 'e1', amount: 5000, status: 'draft' };
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'companies/stellar/contracts/k1'), contract);
+      await setDoc(doc(ctx.firestore(), 'companies/stellar/contracts/k2'), contract);
+    });
+    const k = (uid, id = 'k1') => doc(db(uid), `companies/stellar/contracts/${id}`);
+    // The accountant, who makes pay apps, notes it with each one, and changes nothing else on a contract.
+    const f = db('cpa');
+    const first = writeBatch(f);
+    first.update(doc(f, 'companies/stellar/contracts/k1'), { payAppsStarted: true, updatedAt: serverTimestamp() });
+    first.set(doc(f, 'companies/stellar/payApps/k1-1'), { contractId: 'k1', number: 1 });
+    await assertSucceeds(first.commit());
+    await assertSucceeds(updateDoc(k('cpa'), { payAppsStarted: true, updatedAt: serverTimestamp() }));
+    await assertFails(updateDoc(k('cpa', 'k2'), { payAppsStarted: true, amount: 1 }));
+    await assertFails(updateDoc(k('cpa', 'k2'), { payAppsStarted: false }));
+    await assertFails(updateDoc(k('cpa', 'k2'), { amount: 1 }));
+    await assertFails(setDoc(k('cpa', 'k3'), { ...contract, payAppsStarted: true }));
+    await assertSucceeds(updateDoc(k('crew', 'k2'), { payAppsStarted: true, updatedAt: serverTimestamp() }));
+    // Once noted, nobody takes it off; the contract can still be edited, and deleted by the owner or an admin.
+    for (const uid of ['wes', 'admin1', 'crew', 'cpa']) {
+      await assertFails(updateDoc(k(uid), { payAppsStarted: false }));
+      await assertFails(updateDoc(k(uid), { payAppsStarted: deleteField() }));
+      await assertFails(setDoc(k(uid), contract));
+    }
+    for (const uid of ['wes', 'admin1', 'crew']) await assertSucceeds(updateDoc(k(uid), { status: 'signed', updatedAt: serverTimestamp() }));
+    await assertSucceeds(getDoc(k('wes')).then((d) => { if (d.data().payAppsStarted !== true) throw new Error('note lost'); }));
+    await assertSucceeds(deleteDoc(k('wes')));
   });
 
   it('lets the owner invite an accountant', async () => {

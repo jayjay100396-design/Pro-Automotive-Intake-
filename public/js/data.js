@@ -114,8 +114,8 @@ export const newId = (c) => doc(col(c)).id;
 export const put = (c, id, data) => setDoc(ref(c, id), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
 // Reads and changes several records in one transaction (it needs a connection): it all happens or none of
 // it does, and only if what it read is still what's saved when it's saved (otherwise it runs again). fn gets
-// read(c, id), a record as saved right now (reads come first), update(c, id, data) and create(c, data, id),
-// which returns the new record's id.
+// read(c, id), a record as saved right now (reads come first), update(c, id, data), create(c, data, id),
+// which returns the new record's id, and remove(c, id).
 export const transact = (fn) => runTransaction(db, (tx) => fn({
   read: (c, id) => tx.get(ref(c, id)),
   update: (c, id, data) => { tx.update(ref(c, id), { ...data, updatedAt: serverTimestamp() }); },
@@ -123,6 +123,7 @@ export const transact = (fn) => runTransaction(db, (tx) => fn({
     tx.set(ref(c, id), { ...data, createdAt: serverTimestamp(), createdBy: state.user.uid });
     return id;
   },
+  remove: (c, id) => { tx.delete(ref(c, id)); },
 }));
 // Creates the record only if no record has that id yet, so two devices can't both make it (a
 // transaction, so it needs a connection). False: the id was taken. guard(read) can check other records
