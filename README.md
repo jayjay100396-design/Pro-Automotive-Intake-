@@ -2,7 +2,7 @@
 
 Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estimates, contracts, change orders, AIA G702/G703 pay apps and invoices. Runs on Firebase (Authentication + Firestore + Storage + Hosting), with no build step.
 
-- **Sign-in:** email and password, Google, or phone (SMS code).
+- **Sign-in:** email and password, or Google. Phone sign-in (SMS code) is built in but turned off: `PHONE_SIGN_IN` in `public/js/auth.js`.
 - **Estimates:** storefront and shower templates, glass billed by square foot with a per-lite minimum, markup, minimum charge, tax on taxable lines, printable quote.
 - **Contracts:** created from an accepted estimate, with a schedule of values that feeds the pay apps.
 - **Change orders:** add or deduct scope; approved ones update the contract sum.
@@ -11,6 +11,7 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 - **Files:** photos, plans, contracts, permits and forms on each job, sorted by category and searchable, with an optional copy in each person's Google Drive (`Stellar Glass Jobs / customer / job`).
 - **Takeoffs:** from a PDF drawing set or photo in a job's files: reads the window type tags, each type's size from its type elevation and how many there are (an opening shown on two elevations counts once), or the mark and quantity boxes on shop drawings, and sizes typed into Bluebeam or Acrobat markups. Measure by clicking (the scale comes from the sheet, or set it on a known length), then **Create proposal** starts an estimate with the openings. Runs in the browser with pdf.js, no fees.
 - **Quote requests:** a public page at `/quote` (no sign-in) where customers send a request with photos or plans; it lands under Requests, and one click turns it into a customer and a lead job. The **Website** page lets the owner or an admin upload the page's photos and gallery.
+- **Request emails:** each quote request is emailed to Wes (or whoever Settings names) with the customer's details and photos attached; replying answers the customer. See `EMAIL_ALERTS.md`.
 - **Team:** invite links for admin, staff or the accountant (reads everything, handles pay apps and invoices); change roles, remove people, transfer ownership.
 - **Schedule:** site measures, installs, meetings, deliveries, tasks with due dates, and time off, with who's on each one and reminders; agenda, month and team-week views. It's copied one way to Google Calendar: the owner picks the business calendar, and each person can get the events they're on in their own. See `CALENDAR_SETUP.md`.
 
@@ -26,7 +27,9 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 | `functions-calendar/` | Cloud Functions: copying the schedule to Google Calendar (codebase `calendar`); setup in `CALENDAR_SETUP.md` |
 | `public/js/takeoff/` | Drawing takeoffs: `reader.js` reads a PDF page (text, lines, tags, views, grid lines), `takeoff.js` turns pages into types, sizes and counts, `markups.js` reads markups, `measure.js` the measuring math, `page.js` the screen (unit tested with made-up drawings) |
 | `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
-| `test/` | Rules tests (emulator), money-math tests and takeoff tests (`npm run test:takeoff`) |
+| `functions-alerts/` | Cloud Functions: the quote request emails (their own codebase, `alerts`) |
+| `test/`, `functions-calendar/test/`, `functions-alerts/test/` | Rules tests (emulator), money-math tests, takeoff tests (`npm run test:takeoff`), calendar and email tests |
 | `FIREBASE_SETUP.md` | Console steps, deploy and local dev |
+| `EMAIL_ALERTS.md` | Turning on the quote request emails |
 
 `npm run dev` runs it locally against emulators; `npm test` runs the tests; `npm run deploy` publishes.

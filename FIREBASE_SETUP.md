@@ -14,7 +14,7 @@ The job tracker gets its own Firebase project, separate from the Pro Automotive 
 - **Authentication > Sign-in method** (<https://console.firebase.google.com/project/stellar-glass-jobs/authentication/providers>):
   - **Email/Password: Enable.** Leave "Email link" off.
   - **Google: Enable**, pick a support email, Save.
-  - **Phone: Enable.** Texting codes needs the Blaze plan. Then, under **Settings > SMS region policy**, choose **Allow** and select only **United States**, so nobody can run up SMS charges with foreign numbers.
+  - **Phone: not needed.** The app's Phone tab is off (`PHONE_SIGN_IN` in `public/js/auth.js`). To bring it back, enable Phone here (texting codes needs the Blaze plan), then under **Settings > SMS region policy** choose **Allow** and select only **United States**, so nobody can run up SMS charges with foreign numbers.
   - **Settings > Authorized domains** (<https://console.firebase.google.com/project/stellar-glass-jobs/authentication/settings>): keep `localhost`, `stellar-glass-jobs.web.app` and `stellar-glass-jobs.firebaseapp.com`. Add any custom domain here later.
 - **Build > Firestore Database > Create database**, location `nam5 (United States)`, start in **production mode** (everything denied until the rules below are deployed).
 - **Hosting** is set up by the deploy in step 4; nothing to click.
