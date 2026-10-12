@@ -9,7 +9,7 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 - **Pay apps:** G703 continuation sheet (previous, this period, stored, %, balance, retainage) and G702 summary, printable with a notary block.
 - **Invoices:** simple invoices or one click from a pay app; paid and unpaid tracking.
 - **Files:** photos, plans, contracts, permits and forms on each job, sorted by category and searchable, with an optional copy in each person's Google Drive (`Stellar Glass Jobs / customer / job`).
-- **Takeoffs:** from a PDF drawing set or photo in a job's files: reads the window type tags, each type's size from its type elevation and how many there are (an opening shown on two elevations counts once), or the mark and quantity boxes on shop drawings, and sizes typed into Bluebeam or Acrobat markups. Measure by clicking (the scale comes from the sheet, or set it on a known length), then **Create proposal** starts an estimate with the openings. Runs in the browser with pdf.js, no fees.
+- **Takeoffs:** from a PDF drawing set or photo in a job's files: reads the window type tags, each type's size from its type elevation and how many there are (an opening shown on two elevations counts once), or the mark and quantity boxes on shop drawings, and sizes typed into Bluebeam or Acrobat markups. Measure by clicking (the scale comes from the sheet, or set it on a known length), then **Create proposal** starts an estimate with the openings. Runs in the browser with pdf.js, no fees. Scans, photos and handwriting (field notes, pen marks on a print, a shower sketch) can be read with **Gemini** instead, a few cents a sheet (`FIREBASE_SETUP.md` section 7).
 - **Quote requests:** a public page at `/quote` (no sign-in) where customers send a request with photos or plans; it lands under Requests, and one click turns it into a customer and a lead job. The **Website** page lets the owner or an admin upload the page's photos and gallery.
 - **Request emails:** each quote request is emailed to Wes (or whoever Settings names) with the customer's details and photos attached; replying answers the customer. See `EMAIL_ALERTS.md`.
 - **Team:** invite links for admin, staff or the accountant (reads everything, handles pay apps and invoices); change roles, remove people, transfer ownership.
@@ -25,10 +25,11 @@ Job tracking and billing for Stellar Glass (Wes Stel): customers and jobs, estim
 | `public/js/files.js`, `drive.js` | Job files (Cloud Storage) and the Google Drive copies |
 | `public/js/schedule.js`, `when.js`, `gcal.js` | The Schedule, its dates and repeats (unit tested), and the Google Calendar panel |
 | `functions-calendar/` | Cloud Functions: copying the schedule to Google Calendar (codebase `calendar`); setup in `CALENDAR_SETUP.md` |
-| `public/js/takeoff/` | Drawing takeoffs: `reader.js` reads a PDF page (text, lines, tags, views, grid lines), `takeoff.js` turns pages into types, sizes and counts, `markups.js` reads markups, `measure.js` the measuring math, `page.js` the screen (unit tested with made-up drawings) |
+| `public/js/takeoff/` | Drawing takeoffs: `reader.js` reads a PDF page (text, lines, tags, views, grid lines), `takeoff.js` turns pages into types, sizes and counts, `markups.js` reads markups, `measure.js` the measuring math, `gemini.js` and `vision.js` the Gemini reading (close-ups, counting what it saw), `page.js` the screen (unit tested with made-up drawings) |
+| `prompts/` | The Gemini reading prompt, deployed as a Firebase AI Logic server template (`FIREBASE_CLI_EXPERIMENTS=ailogic firebase deploy --only ailogic`) |
 | `firestore.rules`, `storage.rules` | Security rules: company-scoped data, files and roles |
 | `functions-alerts/` | Cloud Functions: the quote request emails (their own codebase, `alerts`) |
-| `test/`, `functions-calendar/test/`, `functions-alerts/test/` | Rules tests (emulator), money-math tests, takeoff tests (`npm run test:takeoff`), calendar and email tests |
+| `test/`, `functions-calendar/test/`, `functions-alerts/test/` | Rules tests (emulator), money-math tests, takeoff tests (`npm run test:takeoff`, including the Gemini plumbing), calendar and email tests |
 | `FIREBASE_SETUP.md` | Console steps, deploy and local dev |
 | `EMAIL_ALERTS.md` | Turning on the quote request emails |
 

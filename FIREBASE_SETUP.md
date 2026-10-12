@@ -79,6 +79,21 @@ npm run dev                  # auth + Firestore + Storage + hosting emulators, n
 
 Open <http://127.0.0.1:5000>. On localhost the app uses the emulators automatically (add `?live` to the URL to use the real project). For phone sign-in on the emulator, the code is shown in the emulator log instead of being texted.
 
+## 7. Reading scans and handwriting with Gemini (optional, pay per use)
+
+The Takeoff page reads CAD-exported drawings for free. **Read with Gemini** is for scans, photos and hand-written notes: it sends the sheet (cut into close-ups) to Gemini through Firebase AI Logic and counts what it found. Tested on the Anchuca set scanned at 150 dpi, it counted the window tags exactly on every elevation sheet, read the type sheet's sizes, and read field notes, pen marks on a print and a shower sketch exactly.
+
+**Cost.** About 4¢ for a full-size (42") scanned sheet, about 1¢ for a photo or a page of notes, nothing monthly (Gemini 3 Flash through the Gemini Developer API: $0.75 per million input tokens and $3.75 per million output tokens through 2026, doubling on January 1, 2027). The app shows the estimate on each button. Only sheets you ask for are read.
+
+**One-time setup** (done for stellar-glass-jobs on 2026-10-12 by `node setup-gemini.cjs` in the `stellar-glass-ailogic` folder; the steps, for another project):
+
+1. Turn on Firebase AI Logic for the web app with the **Gemini Developer API** (Firebase console > AI Logic), and set it to **signed-in users only** (`FIREBASE_CLI_EXPERIMENTS=ailogic firebase ailogic:config:set security.auth-required true`): nobody can run up a bill without an account in the app.
+2. App Check: create a **reCAPTCHA Enterprise** key for `stellar-glass-jobs.web.app` and `stellar-glass-jobs.firebaseapp.com`, register it under App Check for the web app, and keep App Check **enforced** for AI Logic. The site key is in `public/js/takeoff/gemini.js`. The Firebase App Check API must be on in the project.
+3. Deploy the prompt: `FIREBASE_CLI_EXPERIMENTS=ailogic firebase deploy --only ailogic` (the `prompts/` folder in `firebase.json`; the file name is the template ID the app calls, `takeoff-read-v1`; the CLI's AI Logic commands sit behind that experiment flag, firebase-tools 15.33). Then turn on **template-only mode** (`FIREBASE_CLI_EXPERIMENTS=ailogic firebase ailogic:config:set security.template-only true`) so the app's key can only run that prompt.
+4. **Spend cap** (recommended): Firebase console > Project settings > Usage and billing > Details & settings > Service-level spend caps, about $10 a month for AI Logic. With a cap hit, reads fail until the next month; nothing else in the app is affected.
+
+To change the prompt or the model, edit `prompts/takeoff-read-v1.prompt` and deploy it again; the app needs no redeploy. Keep its schemas in the long form (`type: object`, `properties`, `required`, `items`): the server's shorthand does not take a list of objects (`tags(array):` with fields under it fails every call with "requires unspecified property 'tags'"), and a field that may be empty needs `type: [string, "null"]` and a place in `required`, or Gemini writes junk into it (`nullable: true` is rejected). Locally (`npm run dev`) the Gemini button is hidden, because the App Check key only works on the live addresses; the e2e test points it at a stand-in server instead.
+
 ## How the security rules work
 
 - Every record lives under a company: `companies/{companyId}/jobs/...`, `/estimates`, `/contracts`, `/changeOrders`, `/payApps`, `/invoices`, `/customers`, `/files`, `/events` (the schedule). Uploaded files are in Storage at `companies/{companyId}/{category}/{jobId}/{fileId}/{name}`.

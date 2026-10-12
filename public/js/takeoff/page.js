@@ -13,6 +13,8 @@ import { analyze, scopeLine, estimateLines, scaleFromDims, DRAFT_KEY } from './t
 import { readMarkups, markupOpenings, withMarkups } from './markups.js';
 import { ptsPerInchFromScale, calibrate, measure, snap, scaleLabel, snapScale } from './measure.js';
 import { parseDim, fmtFtIn, fmtIn } from './dims.js';
+import { readPage, geminiAvailable, imagesFor, estimateCents, usageCents, fmtCents, SHEET_PX } from './gemini.js';
+import { openingsFrom } from './vision.js';
 
 const MAX_CANVAS = 6000; // pixels on the long side; bigger sheets are drawn a little softer when zoomed in
 
@@ -42,6 +44,7 @@ export function takeoffPage(fileId, params) {
   let pendingCal = null; // two clicked points waiting for their real length
   let renderTask = null;
   let gone = false;
+  let gem = null; // what Gemini read: { pages: Map(page -> read), cents, busy, abort }
 
   const job = () => get('jobs', file?.jobId || jobId);
   const isPdf = () => !!pdf;
@@ -70,6 +73,7 @@ export function takeoffPage(fileId, params) {
     <aside class="tk-side stack">
       <div class="card" data-open></div>
       <div class="card" data-read></div>
+      <div class="card hidden" data-gemini></div>
       <div class="card" data-measure></div>
       <div class="card">
         <div class="row between"><h2>Openings</h2><button type="button" class="btn small" data-addrow>+ Add row</button></div>
@@ -112,6 +116,8 @@ export function takeoffPage(fileId, params) {
     pick = null;
     last = null;
     pendingCal = null;
+    gem?.abort?.abort();
+    gem = null;
   }
 
   const loadImage = (src) => new Promise((res, rej) => {
@@ -130,6 +136,7 @@ export function takeoffPage(fileId, params) {
     fillSheets();
     await fit();
     renderRead();
+    renderGemini();
     renderMeasure();
   }
 
@@ -142,6 +149,7 @@ export function takeoffPage(fileId, params) {
       fillSheets();
       await fit();
       renderRead();
+      renderGemini();
       renderMeasure();
       return;
     }
@@ -253,6 +261,14 @@ export function takeoffPage(fileId, params) {
       }
       for (const d of main.repeats || []) {
         if (d.page === pageNo) parts.push(`<circle cx="${d.x}" cy="${d.y}" r="${16 * u}" class="tk-dup"><title>Also shown on another elevation; counted once</title></circle>`);
+      }
+    }
+    const read = gem?.pages.get(pageNo);
+    if (read) {
+      const main = gemResult().main;
+      const { w, h } = pageSize();
+      for (const t of read.tags.filter((t) => main && t.shape === main.shape && !/type|schedule|legend/.test(t.where))) {
+        parts.push(`<circle cx="${(t.x * w) / read.w}" cy="${(t.y * h) / read.h}" r="${16 * u}" class="tk-hit"><title>${esc(t.label)} counted by Gemini</title></circle>`);
       }
     }
     for (const k of marks.filter((m) => m.page === pageNo)) {
@@ -387,13 +403,13 @@ export function takeoffPage(fileId, params) {
     const box = el.querySelector('[data-read]');
     if (!pdf && !img) { box.innerHTML = '<h2>Read the drawing</h2><p class="muted small">Open a drawing first.</p>'; return; }
     if (img) {
-      box.innerHTML = `<h2>Read the drawing</h2><p class="small">This is a picture, so it can't be read automatically yet. Set the scale on something you know the size of, then measure each opening.</p>`;
+      box.innerHTML = `<h2>Read the drawing</h2><p class="small">This is a picture, so the free reader can't read it.${geminiAvailable() ? ' Read it with Gemini below, or set' : ' Set'} the scale on something you know the size of, then measure each opening.</p>`;
       return;
     }
     if (progress) { box.innerHTML = `<h2>Reading…</h2><p class="small">${esc(progress)}</p>`; return; }
     if (!result) {
       box.innerHTML = `<h2>Read the drawing</h2>
-        <p class="small">Finds the window type tags, reads each type's size from its type elevation and counts the tags on the elevations. Also reads shop drawing mark boxes and sizes typed into markups. Works on drawings exported from CAD; scans and photos need measuring by hand.</p>
+        <p class="small">Finds the window type tags, reads each type's size from its type elevation and counts the tags on the elevations. Also reads shop drawing mark boxes and sizes typed into markups. Works on drawings exported from CAD, for free; scans and photos need Gemini${geminiAvailable() ? ' (below)' : ''} or measuring by hand.</p>
         <button type="button" class="btn primary" data-readall>Read all ${pageCount()} sheets</button>`;
       box.querySelector('[data-readall]').addEventListener('click', readAll);
       return;
@@ -495,6 +511,120 @@ export function takeoffPage(fileId, params) {
     }));
   }
 
+  // ---------- Reading with Gemini ----------
+
+  const gemResult = () => openingsFrom([...(gem?.pages.values() || [])], { prefer: gem?.family || '' });
+
+  // The page drawn at reading size: a sheet SHEET_PX wide at most, a photo as it is (capped the same).
+  async function pageCanvas(n) {
+    const c = document.createElement('canvas');
+    const g = c.getContext('2d');
+    if (img) {
+      const k = Math.min(1, SHEET_PX / Math.max(img.naturalWidth, img.naturalHeight));
+      c.width = Math.round(img.naturalWidth * k);
+      c.height = Math.round(img.naturalHeight * k);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      return c;
+    }
+    const page = await pdf.getPage(n);
+    const vp1 = page.getViewport({ scale: 1 });
+    const vp = page.getViewport({ scale: SHEET_PX / Math.max(vp1.width, vp1.height) });
+    c.width = Math.round(vp.width);
+    c.height = Math.round(vp.height);
+    g.fillStyle = '#fff';
+    g.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: g, viewport: vp }).promise;
+    page.cleanup();
+    return c;
+  }
+
+  function readingSize() {
+    const { w, h } = pageSize();
+    const k = SHEET_PX / Math.max(w, h);
+    return img ? { w: Math.min(w, Math.round(w * k)), h: Math.min(h, Math.round(h * k)) } : { w: Math.round(w * k), h: Math.round(h * k) };
+  }
+
+  async function readWithGemini(pageNos) {
+    if (gem?.busy) return;
+    const doc = pdf || img;
+    const stale = () => gone || (pdf || img) !== doc;
+    gem = gem || { pages: new Map(), cents: 0 };
+    gem.busy = true;
+    gem.abort = new AbortController();
+    let n = 0;
+    try {
+      for (const no of pageNos) {
+        n++;
+        gem.progress = pageNos.length > 1 ? `Reading ${sheetName(no)} with Gemini (${n} of ${pageNos.length})…` : `Reading ${img ? 'the picture' : sheetName(no)} with Gemini…`;
+        renderGemini();
+        const canvas = await pageCanvas(no);
+        if (stale()) return;
+        const read = await readPage(canvas, { hint: img ? '' : `Sheet ${no} of ${pageCount()} of "${file?.name || 'a drawing set'}".`, signal: gem.abort.signal });
+        if (stale()) return;
+        gem.pages.set(no, read);
+        gem.cents += usageCents(read.usage);
+      }
+    } catch (err) {
+      if (stale()) return;
+      if (gem.abort?.signal.aborted) toast('Stopped reading.');
+      else { console.error(err); toast(err.message, true); }
+    } finally {
+      if (!stale()) {
+        gem.busy = false;
+        gem.abort = null;
+        gem.progress = '';
+        renderGemini();
+        overlay();
+        if (gem.pages.size && !rows.some((r) => r.label || r.widthIn)) useOpenings(gemResult().openings.filter((o) => o.qty > 0), true);
+      }
+    }
+  }
+
+  function renderGemini() {
+    const box = el.querySelector('[data-gemini]');
+    if (!geminiAvailable() || (!pdf && !img)) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    const { w, h } = readingSize();
+    const perPage = estimateCents(imagesFor(w, h));
+    const count = pageCount();
+    if (gem?.busy) {
+      box.innerHTML = `<h2>Reading with Gemini…</h2><p class="small">${esc(gem.progress)}</p><button type="button" class="btn small" data-gstop>Stop</button>`;
+      box.querySelector('[data-gstop]').addEventListener('click', () => gem.abort?.abort());
+      return;
+    }
+    const r = gem?.pages.size ? gemResult() : null;
+    const readPages = [...(gem?.pages.keys() || [])].sort((a, b) => a - b);
+    const unread = Array.from({ length: count }, (_, i) => i + 1).filter((p) => !gem?.pages.has(p));
+    const buttons = `<div class="row">
+      <button type="button" class="btn ${r ? '' : 'primary'} small" data-gread="one">${gem?.pages.has(pageNo) ? 'Read this sheet again' : img ? 'Read the picture' : 'Read this sheet'} (${fmtCents(perPage)})</button>
+      ${count > 1 && unread.length ? `<button type="button" class="btn small" data-gread="all">Read ${unread.length === count ? `all ${count}` : `the other ${unread.length}`} sheets (${fmtCents(perPage * unread.length)})</button>` : ''}
+    </div>`;
+    if (!r) {
+      box.innerHTML = `<h2>Read with Gemini</h2>
+        <p class="small">For scans, photos and handwriting. Gemini counts the window tags, reads type sizes and written sizes and notes, a few cents a sheet. Always check its counts against the drawing.</p>
+        ${buttons}`;
+    } else {
+      const counted = r.openings.filter((o) => o.qty > 0);
+      const total = counted.reduce((s, o) => s + o.qty, 0);
+      const others = r.families.filter((f) => f !== r.main);
+      box.innerHTML = `<h2>What Gemini read</h2>
+        <p class="small">${esc(readPages.map((p) => (img ? 'the picture' : sheetName(p))).join(', '))} (${esc(fmtCents(gem.cents))}): ${r.main ? `${esc(r.main.shape)} tags counted, ${total} opening${total === 1 ? '' : 's'} of ${counted.length} type${counted.length === 1 ? '' : 's'}` : counted.length ? `${total} opening${total === 1 ? '' : 's'} written out` : 'no openings found'}. Check the counts and sizes before pricing.</p>
+        ${counted.length ? `<ul class="links tk-gem">${r.openings.map((o) => `<li><span class="small">${esc(o.label)}${o.qty ? ` ×${o.qty}` : ''}${o.widthIn || o.heightIn ? ` ${esc(o.widthIn ? fmtIn(o.widthIn) : '?')} x ${esc(o.heightIn ? fmtIn(o.heightIn) : '?')}` : ''}<br><span class="muted">${esc(o.how)}</span></span></li>`).join('')}</ul>` : ''}
+        ${others.length ? `<p class="small">Other tags: ${others.map((f) => `<b>${esc(f.shape)}</b> ${Object.entries(f.counts).map(([k, v]) => `${esc(k)} ×${v}`).join(', ')}`).join('; ')}.</p>
+        <div class="row">${others.map((f) => `<button type="button" class="btn small" data-gfam="${esc(f.shape)}">Count the ${esc(f.shape)} tags instead</button>`).join('')}</div>` : ''}
+        ${r.notes.length ? `<details class="small"><summary>${r.notes.length} note${r.notes.length === 1 ? '' : 's'} on the drawing</summary><ul>${r.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></details>` : ''}
+        <div class="row">${counted.length ? '<button type="button" class="btn small primary" data-guse>Put these in the openings table</button>' : ''}</div>
+        ${buttons}`;
+      box.querySelector('[data-guse]')?.addEventListener('click', () => useOpenings(counted));
+      box.querySelectorAll('[data-gfam]').forEach((b) => b.addEventListener('click', () => { gem.family = b.dataset.gfam; renderGemini(); overlay(); }));
+    }
+    box.querySelectorAll('[data-gread]').forEach((b) => b.addEventListener('click', () => {
+      const all = b.dataset.gread === 'all';
+      if (all && unread.length > 3 && !confirm(`Read ${unread.length} sheets with Gemini for ${fmtCents(perPage * unread.length)}?`)) return;
+      readWithGemini(all ? unread : [pageNo]);
+    }));
+  }
+
   // ---------- Openings table ----------
 
   function renderRows() {
@@ -562,6 +692,7 @@ export function takeoffPage(fileId, params) {
     renderRows();
     renderMeasure();
     renderRead();
+    renderGemini();
     el.querySelector('[data-overlay]').addEventListener('click', clickAt);
     el.querySelector('[data-rows]').addEventListener('change', onRowsChange);
     el.querySelector('[data-rows]').addEventListener('click', (e) => {
@@ -598,6 +729,7 @@ export function takeoffPage(fileId, params) {
       await fit();
       if (tool !== 'none') { await model(pageNo); tip(); }
       renderMeasure();
+      renderGemini();
     };
     el.querySelector('[data-prev]').addEventListener('click', () => go(pageNo - 1));
     el.querySelector('[data-next]').addEventListener('click', () => go(pageNo + 1));
