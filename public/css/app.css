@@ -635,3 +635,22 @@ table.tk-rows input[data-f="label"] { width: 3.3rem; }
   .takeoff { grid-template-columns: minmax(0, 1fr); }
   .tk-scroll { height: 62vh; }
 }
+
+/* Sending a proposal (proposal-send.js): the PDF, the email, and the ways to send them. */
+dialog.send-dlg { width: min(640px, 96vw); max-height: 92vh; padding: 1.25rem; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 10px 40px rgba(0, 0, 0, .35); overflow-y: auto; }
+dialog.send-dlg::backdrop { background: rgba(8, 18, 30, .7); }
+.send-dlg h2 { margin: 0; }
+.send-dlg .hint { margin: 0; }
+.send-dlg .warn { color: var(--warn); }
+.send-dlg textarea { max-height: 40vh; }
+.send-file { display: flex; align-items: center; gap: .75rem; padding: .6rem .75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+.pdf-ico { flex: none; width: 2.4rem; height: 2.4rem; border-radius: 6px; background: #c62828; color: #fff; font-size: .68rem; font-weight: 800; letter-spacing: .04em; display: flex; align-items: center; justify-content: center; }
+.send-file-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.send-file-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-ways { display: flex; flex-wrap: wrap; gap: .6rem; }
+.send-dlg .ask-bar { padding: .75rem; border: 1px solid var(--accent); border-radius: var(--radius-sm); }
+@media (max-width: 760px) {
+  dialog.send-dlg { width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; border: 0; border-radius: 0; padding: 1rem; }
+  .send-ways .btn { flex: 1 1 calc(50% - .6rem); }
+  .send-ways .btn.primary { flex-basis: 100%; }
+}
