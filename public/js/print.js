@@ -1,10 +1,11 @@
 // Printable documents. Each opens as a clean page; "Print / Save PDF" uses the browser's print dialog.
 import { state, get, where } from './data.js';
-import { estimateTotals, invoiceTotals, lineTotal, lineQty, contractSum, money, pctFmt, proposalOptions, proposalTerms, paidOn, creditedOn, round2 } from './calc.js';
+import { invoiceTotals, contractSum, money, pctFmt, paidOn, creditedOn, round2 } from './calc.js';
 import { payAppSummary, g702Table } from './views.js';
 import { howPaid, frozen } from './billing.js';
 import { esc, fmtDate } from './ui.js';
 import { websiteUrl } from './brand.js';
+import { proposalContent } from './proposal-doc.js';
 
 const nl = (s) => esc(s).replace(/\n/g, '<br>');
 
@@ -46,60 +47,51 @@ function page(title, inner, cls = '') {
 
 // The proposal, laid out like Stellar Glass's own (LCP Bldg 300): letterhead, To/Attn/Project,
 // openings, priced options with specs, price note, exclusions, deposit terms, and signatures.
+// What it says comes from proposal-doc.js, which makes the PDF that's emailed to the customer from the same content.
 export function estimateDoc(id) {
   const e = get('estimates', id);
   if (!e) return { waiting: true, html: '<p class="muted">Loading…</p>' };
-  const c = state.company || {};
   const j = get('jobs', e.jobId) || {};
-  const cu = get('customers', e.customerId || j.customerId) || {};
-  const t = estimateTotals(e);
-  const factor = t.subtotal ? t.beforeTax / t.subtotal : 1;
-  const to = cu.company || cu.name || '';
-  const attn = e.attn || (cu.company ? cu.name : '');
-  const star = (e.priceNote ?? '').trim().startsWith('*') ? '*' : '';
-  const specLines = (text) => String(text || '').split('\n').filter((l) => l.trim())
-    .map((l) => `<div class="${/^\s/.test(l) ? 'indent' : ''}">${esc(l.trim())}</div>`).join('');
-  const addr = String(c.address || '').replace(/,\s*(?=[^,]+,\s*[A-Z]{2}\b)/, '<br>');
-  const phones = [c.phone && `Office ${esc(c.phone)}`, c.cell && `Cell ${esc(c.cell)}`].filter(Boolean).join(' · ');
-  const opts = proposalOptions(e);
-  const terms = proposalTerms(e);
+  const p = proposalContent({ estimate: e, company: state.company || {}, job: j, customer: get('customers', e.customerId || j.customerId) || {} });
+  const c = p.company;
+  const pp = p.prepared;
 
-  return page(`Proposal ${e.number}`, `
+  return page(`Proposal ${p.number}`, `
     <header class="prop-band">
-      <img src="img/logo.png" alt="${esc(c.name || 'Stellar Glass')}" class="prop-logo">
-      <div class="prop-title"><h1>Proposal</h1><div>No. ${esc(e.number)}</div></div>
+      <img src="img/logo.png" alt="${esc(c.name)}" class="prop-logo">
+      <div class="prop-title"><h1>Proposal</h1><div>No. ${esc(p.number)}</div></div>
     </header>
     <section class="prop-meta">
-      <div class="prop-co">${addr}${phones ? '<br>' + phones : ''}${c.email ? '<br>' + esc(c.email) : ''}${c.website ? '<br>' + esc(c.website) : ''}${c.license ? '<br>License ' + esc(c.license) : ''}</div>
-      <div class="prop-date"><div><span class="label">Date</span> ${fmtDate(e.date)}</div>${e.validUntil ? `<div class="small">Valid through ${fmtDate(e.validUntil)}</div>` : ''}</div>
+      <div class="prop-co">${[c.address.map(esc).join('<br>'), esc(c.phones), esc(c.email), esc(c.website), c.license && `License ${esc(c.license)}`].filter(Boolean).join('<br>')}</div>
+      <div class="prop-date"><div><span class="label">Date</span> ${fmtDate(p.date)}</div>${p.validUntil ? `<div class="small">Valid through ${fmtDate(p.validUntil)}</div>` : ''}</div>
     </section>
     <section class="prop-to">
-      <div><span class="label">To</span> ${esc(to)}</div>
-      ${attn ? `<div><span class="label">Attn</span> ${esc(attn)}</div>` : ''}
-      <div class="prop-project"><span class="label">Project</span> ${esc(e.projectTitle || j.name || '')}${j.siteAddress ? `<span class="small">, ${esc(j.siteAddress)}</span>` : ''}</div>
+      <div><span class="label">To</span> ${esc(p.to)}</div>
+      ${p.attn ? `<div><span class="label">Attn</span> ${esc(p.attn)}</div>` : ''}
+      <div class="prop-project"><span class="label">Project</span> ${esc(p.project)}${p.site ? `<span class="small">, ${esc(p.site)}</span>` : ''}</div>
     </section>
-    <p class="prop-intro">${esc(e.intro ?? 'We propose to supply and install the following in prepared openings:')}</p>
-    ${e.scope ? `<p class="prop-scope">${esc(e.scope).replace(/\n/g, '<br>')}</p>` : ''}
-    ${e.showLines ? `<table class="doc-table"><thead><tr><th>Description</th><th class="num">Qty</th><th>Size</th><th class="num">Amount</th></tr></thead><tbody>
-      ${(e.lines || []).map((l) => `<tr><td>${esc(l.desc)}</td><td class="num">${l.unit === 'sqft' ? `${esc(l.qty)} lite${Number(l.qty) === 1 ? '' : 's'}<br><span class="small">${lineQty(l).toFixed(1)} sq ft</span>` : `${esc(l.qty)} ${esc(l.unit === 'each' ? '' : l.unit)}`}</td><td>${l.unit === 'sqft' ? `${esc(l.widthIn)}" × ${esc(l.heightIn)}"` : ''}</td><td class="num">${money(lineTotal(l) * factor)}</td></tr>`).join('')}
-      ${t.tax ? `<tr><td colspan="3">Sales tax</td><td class="num">${money(t.tax)}</td></tr>` : ''}
+    <p class="prop-intro">${esc(p.intro)}</p>
+    ${p.scope ? `<p class="prop-scope">${nl(p.scope)}</p>` : ''}
+    ${p.lines ? `<table class="doc-table"><thead><tr><th>Description</th><th class="num">Qty</th><th>Size</th><th class="num">Amount</th></tr></thead><tbody>
+      ${p.lines.map((l) => `<tr><td>${esc(l.desc)}</td><td class="num">${l.sqft ? `${esc(l.qty)} lite${Number(l.qty) === 1 ? '' : 's'}<br><span class="small">${l.area} sq ft</span>` : `${esc(l.qty)} ${esc(l.unit)}`}</td><td>${l.sqft ? `${esc(l.width)}" × ${esc(l.height)}"` : ''}</td><td class="num">${l.amount}</td></tr>`).join('')}
+      ${p.tax ? `<tr><td colspan="3">Sales tax</td><td class="num">${money(p.tax)}</td></tr>` : ''}
     </tbody></table>` : ''}
-    ${opts.map((o) => `<div class="prop-option">
+    ${p.options.map((o) => `<div class="prop-option">
       ${o.name ? `<div class="prop-opt-name">${esc(o.name)}</div>` : ''}
-      <div class="prop-price">Price ${o.number}: ${money(o.price)}${star}</div>
-      <div class="prop-specs">${specLines(o.specs)}</div>
+      <div class="prop-price">Price ${o.number}: ${money(o.price)}${p.star}</div>
+      <div class="prop-specs">${o.specs.map((l) => `<div class="${l.indent ? 'indent' : ''}">${esc(l.text)}</div>`).join('')}</div>
     </div>`).join('')}
-    ${e.priceNote ? `<p class="prop-note">${esc(e.priceNote)}</p>` : ''}
-    ${e.exclusions ? `<p class="prop-excl"><b>Exclude:</b> ${esc(e.exclusions)}</p>` : ''}
-    ${terms ? `<div class="prop-terms">${esc(terms).replace(/\n/g, '<br>')}</div>` : ''}
+    ${p.priceNote ? `<p class="prop-note">${esc(p.priceNote)}</p>` : ''}
+    ${p.exclusions ? `<p class="prop-excl"><b>Exclude:</b> ${esc(p.exclusions)}</p>` : ''}
+    ${p.terms ? `<div class="prop-terms">${nl(p.terms)}</div>` : ''}
     <section class="prop-sign">
       <div>
         <div class="label">Proposal prepared by</div>
         <div class="sig-line"></div>
-        ${esc(e.preparedName || c.contactName || '')}${e.preparedTitle || (!e.preparedName && c.contactTitle) ? `<br>${esc(e.preparedTitle || c.contactTitle)}` : ''}
-        <br>${esc(c.name || 'Stellar Glass')}
-        ${e.preparedPhone || c.cell ? `<br>${esc(e.preparedPhone || c.cell)}` : ''}
-        ${e.preparedEmail || c.email ? `<br>${esc(e.preparedEmail || c.email)}` : ''}
+        ${esc(pp.name)}${pp.title ? `<br>${esc(pp.title)}` : ''}
+        <br>${esc(pp.company)}
+        ${pp.phone ? `<br>${esc(pp.phone)}` : ''}
+        ${pp.email ? `<br>${esc(pp.email)}` : ''}
       </div>
       <div>
         <div class="label">Proposal accepted by</div>
@@ -107,7 +99,7 @@ export function estimateDoc(id) {
         <div class="sig-row"><span>Printed name</span><span class="blank"></span></div>
         <div class="sig-row"><span>Title</span><span class="blank"></span></div>
         <div class="sig-row"><span>Date</span><span class="blank"></span></div>
-        ${opts.length > 1 ? '<div class="sig-row"><span>Option accepted</span><span class="blank"></span></div>' : ''}
+        ${p.pickOption ? '<div class="sig-row"><span>Option accepted</span><span class="blank"></span></div>' : ''}
       </div>
     </section>
     <footer class="prop-foot">Thank you for your business.</footer>`, 'proposal');

@@ -16,6 +16,7 @@ import { fileBrowser, countJobFiles } from './files.js';
 import { alertEmails, parseEmails, lastAlertNote, MAX_ALERT_EMAILS } from './requests.js';
 import { jobParts, openPartsCount, latePartsCount, dueSoonCount } from './parts.js';
 import { DRAFT_KEY } from './takeoff/takeoff.js';
+import { sendProposal, sentNote } from './proposal-send.js';
 
 // The schedule's cards on the dashboard and job pages, and the Google Calendar panel in Settings.
 import { scheduleSummary, comingUpHtml, mountJobSchedule } from './schedule.js';
@@ -398,6 +399,7 @@ export function estimateEdit(id, params) {
 
   return {
     html: `${header(isNew ? 'New proposal' : `Proposal ${esc(e.number)}`, `
+      ${!isNew && can.edit() ? '<button type="button" class="btn primary" data-send>Send to customer</button>' : ''}
       ${!isNew ? `<a class="btn" href="#/estimates/${esc(id)}/print">Print proposal / PDF</a>` : ''}
       ${!isNew && can.edit() && e.jobId ? `<a class="btn" href="#/parts/new?job=${esc(e.jobId)}&estimate=${esc(id)}">Request parts</a>` : ''}
       ${!isNew && can.edit() && !hasContract ? '<button class="btn" id="tocontract">Convert to contract</button>' : ''}
@@ -412,6 +414,7 @@ export function estimateEdit(id, params) {
         <label>Valid until <input name="validUntil" type="date" value="${esc(e.validUntil)}"></label>
         <label>Template <select name="template" id="template">${options([['storefront', 'Storefront'], ['shower', 'Shower']], e.template)}</select></label>
         <label>&nbsp;<button type="button" class="btn" id="preset">Load template lines</button></label>
+        ${isNew ? '' : `<p class="span4 hint ${e.sentOn ? '' : 'hidden'}" id="sentNote">${esc(sentNote(e))}</p>`}
       </fieldset>
       <fieldset class="card grid4" ${ro}>
         <h2 class="span4">Proposal</h2>
@@ -459,7 +462,7 @@ export function estimateEdit(id, params) {
         <label>Phone <input name="preparedPhone" type="tel" value="${esc(e.preparedPhone)}"></label>
         <label>Email <input name="preparedEmail" type="email" value="${esc(e.preparedEmail)}"></label>
       </fieldset>
-      <div class="row"><button class="btn primary" ${ro}>Save proposal</button></div>
+      <div class="row"><button class="btn primary" ${ro}>Save proposal</button>${!isNew && can.edit() ? '<button type="button" class="btn" data-send>Send to customer</button>' : ''}</div>
     </form>
     ${isNew ? '' : proposalBilling(id)}`,
     mount(root) {
@@ -519,11 +522,16 @@ export function estimateEdit(id, params) {
         body.innerHTML = PRESETS[t].map(estLineRow).join(''); recalc();
       });
       recalc();
-      if (!isNew) mountProposalBilling(root, id, () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price), options: readOptions(optBox), acceptedOption: acceptedIndex() }));
+      // The proposal as it stands in the form.
+      const collect = () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price), options: readOptions(optBox), acceptedOption: acceptedIndex() });
+      if (!isNew) mountProposalBilling(root, id, collect);
 
-      form.addEventListener('submit', async (ev) => {
-        ev.preventDefault();
-        const data = { ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price), options: readOptions(optBox), acceptedOption: acceptedIndex() };
+      // What's saved, to tell whether the form has changes that aren't.
+      let saved = JSON.stringify(collect());
+      // Saves the form; returns what was saved, or null if it wasn't.
+      const save = async () => {
+        const data = collect();
+        const snap = JSON.stringify(data);
         data.total = estimateTotals(data).total;
         data.amount = estimateAmount(data);
         data.customerId = get('jobs', data.jobId)?.customerId || '';
@@ -536,8 +544,32 @@ export function estimateEdit(id, params) {
             if (j && j.status === 'lead') update('jobs', j.id, { status: 'estimating' }).catch(() => {});
             go(`#/estimates/${r.id}`);
           }
-        } else await attempt(() => update('estimates', id, data), 'Proposal saved');
-      });
+          return null;
+        }
+        if (await attempt(() => update('estimates', id, data), 'Proposal saved') === null) return null;
+        saved = snap;
+        return data;
+      };
+      form.addEventListener('submit', (ev) => { ev.preventDefault(); save(); });
+
+      // Sending: changes in the form are saved first, so the customer gets what's on the screen.
+      const sent = (fields) => {
+        if (fields.status) form.elements.status.value = fields.status;
+        saved = JSON.stringify(collect());
+        const note = root.querySelector('#sentNote');
+        note.textContent = sentNote({ ...get('estimates', id), ...fields });
+        note.classList.remove('hidden');
+      };
+      root.querySelectorAll('[data-send]').forEach((b) => b.addEventListener('click', async () => {
+        if (!form.reportValidity()) return;
+        let est = get('estimates', id);
+        if (JSON.stringify(collect()) !== saved) {
+          const data = await save();
+          if (!data) return;
+          est = { ...est, ...data };
+        }
+        sendProposal(id, est, { onSent: sent });
+      }));
       root.querySelector('#del')?.addEventListener('click', async () => {
         if (confirmDelete('proposal') && await attempt(() => remove('estimates', id), 'Proposal deleted') !== null) go('#/estimates');
       });
