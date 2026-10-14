@@ -1,7 +1,7 @@
 // App shell: auth state, company onboarding, hash router.
 import { auth } from './firebase.js';
 import { onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import { state, loadCompany, createCompany, stopWatching, onChange, readInvite, joinCompany } from './data.js';
+import { state, can, loadCompany, createCompany, stopWatching, onChange, readInvite, joinCompany } from './data.js';
 import { renderSignIn, signOut } from './auth.js';
 import * as V from './views.js';
 import * as P from './print.js';
@@ -11,6 +11,7 @@ import * as SP from './suppliers.js';
 import * as S from './schedule.js';
 import { websitePage } from './website.js';
 import { takeoffPage } from './takeoff/page.js';
+import { openTutorialModal } from './takeoff/tutorial.js';
 import { esc, toast } from './ui.js';
 import { BRAND, logoHtml } from './brand.js';
 import { autosize } from './autosize.js';
@@ -118,20 +119,97 @@ function setCurrent(view) {
   current = view;
 }
 
+function openQuickJumpModal() {
+  let dlg = document.querySelector('dialog.quick-dlg');
+  if (dlg) dlg.remove();
+  dlg = document.createElement('dialog');
+  dlg.className = 'quick-dlg';
+  dlg.setAttribute('aria-label', 'Quick search and shortcuts');
+  const d = state.data || {};
+  const shortcuts = [
+    ['#/', '🏠 Dashboard', 'Overview, open bids, schedule & money owed'],
+    ...(can.edit() ? [
+      ['#/takeoff/local', '📐 CAD & 3D Drawing Takeoff', 'Open .DXF, .DWG, or .PDF plans at 1:1 scale & model in 3D'],
+      ['#/jobs/new', '＋ New Job', 'Start a commercial storefront or shower job'],
+      ['#/estimates/new', '📄 New Proposal / Estimate', 'Build a multi-option proposal with deposit terms'],
+      ['#/parts/new', '📦 New Glass / Parts Order', 'Order cut-to-size glass or Trulite extrusions'],
+      ['#/customers/new', '👤 New Customer', 'Add a GC, property owner, or homeowner'],
+    ] : []),
+    ['#/schedule', '📅 Schedule & Calendar', 'Site measures, installs, deliveries & Google Calendar'],
+    ['#/files', '📁 Drawings & Job Files', 'All CAD files, PDFs, photos & Google Drive sync'],
+    ['#/requests', '📥 Website Quote Requests', 'Incoming leads from the public quote page'],
+    ['#/contracts', '✍️ Contracts & Change Orders', 'Signed contracts, SOV & change orders'],
+    ['#/payapps', '🏗️ AIA G702 / G703 Pay Apps', 'Commercial progress billing & retainage'],
+    ['#/invoices', '💵 Invoices & Online Payments', 'Customer invoices & Stripe online payments'],
+    ['#/website', '🌐 Website Photos & Quote Page', 'Manage high-res photos on your public quote page'],
+    ['#/settings', '⚙️ Settings & Team Members', 'Company profile, team invites & Google Calendar'],
+  ];
+
+  dlg.innerHTML = `<div class="stack">
+    <div class="row between"><h2>⚡ Quick Jump &amp; Shortcuts</h2><button type="button" class="icon" data-qclose aria-label="Close">✕</button></div>
+    <input type="search" id="qSearch" aria-label="Search jobs, customers, proposals, or shortcuts" placeholder="Search jobs, customers, proposals, or type a screen name…" autocomplete="off">
+    <div class="quick-list" id="qList" role="region" aria-live="polite"></div>
+  </div>`;
+  document.body.append(dlg);
+  const listEl = dlg.querySelector('#qList');
+  const inputEl = dlg.querySelector('#qSearch');
+
+  const renderList = (q = '') => {
+    const s = q.trim().toLowerCase();
+    const matchedShortcuts = shortcuts.filter(([, title, sub]) => !s || title.toLowerCase().includes(s) || sub.toLowerCase().includes(s));
+    const matchedJobs = (d.jobs || []).filter((j) => s && (j.name || '').toLowerCase().includes(s)).slice(0, 6);
+    const matchedCust = (d.customers || []).filter((c) => s && ((c.name || '').toLowerCase().includes(s) || (c.company || '').toLowerCase().includes(s))).slice(0, 5);
+    const matchedEst = (d.estimates || []).filter((e) => s && (String(e.number || '').includes(s) || (e.projectTitle || '').toLowerCase().includes(s))).slice(0, 5);
+
+    let html = '';
+    if (matchedJobs.length) {
+      html += `<div class="q-group">Jobs</div>` + matchedJobs.map((j) => `<a class="q-item" href="#/jobs/${esc(j.id)}"><strong>💼 ${esc(j.name)}</strong><small>${esc(j.status || '')}</small></a>`).join('');
+    }
+    if (matchedEst.length) {
+      html += `<div class="q-group">Proposals</div>` + matchedEst.map((e) => `<a class="q-item" href="#/estimates/${esc(e.id)}"><strong>📄 Proposal #${esc(e.number)}</strong><small>${esc(e.projectTitle || '')}</small></a>`).join('');
+    }
+    if (matchedCust.length) {
+      html += `<div class="q-group">Customers</div>` + matchedCust.map((c) => `<a class="q-item" href="#/customers/${esc(c.id)}"><strong>👤 ${esc(c.name)}</strong><small>${esc(c.company || '')}</small></a>`).join('');
+    }
+    if (matchedShortcuts.length) {
+      html += `<div class="q-group">App Shortcuts</div>` + matchedShortcuts.map(([href, title, sub]) => `<a class="q-item" href="${href}"><strong>${esc(title)}</strong><small>${esc(sub)}</small></a>`).join('');
+    }
+    listEl.innerHTML = html || '<p class="muted small">No matches found.</p>';
+  };
+
+  renderList();
+  inputEl.addEventListener('input', () => renderList(inputEl.value));
+  listEl.addEventListener('click', (e) => {
+    if (e.target.closest('a.q-item')) dlg.close();
+  });
+  dlg.querySelector('[data-qclose]').addEventListener('click', () => dlg.close());
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.showModal();
+  inputEl.focus();
+}
+
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    if (state.companyId) openQuickJumpModal();
+  }
+});
+
 function shell() {
   const u = state.user;
   const who = u.displayName || u.email || u.phoneNumber || '';
   const name = esc(state.company?.name || 'Stellar Glass');
   root.innerHTML = `
+  <a class="skip-link no-print" href="#view">Skip to main content</a>
   <div class="app" id="shell">
     <aside class="sidebar no-print" aria-label="Main navigation">
       <a class="brand" href="#/" title="${name}">${logoHtml()}<span class="brand-sub">Installation &amp; glazing</span></a>
       ${GROUPS.map(([label, links]) => `<div class="nav-label">${esc(label)}</div>
-      <nav class="nav">${links.map(([h, l]) => `<a href="#/${h}" data-nav="${h}">${icon(h)}<span>${esc(l)}</span><span class="nav-count hidden" data-count="${h}"></span></a>`).join('')}</nav>`).join('')}
+      <nav class="nav" aria-label="${esc(label)}">${links.map(([h, l]) => `<a href="#/${h}" data-nav="${h}">${icon(h)}<span>${esc(l)}</span><span class="nav-count hidden" data-count="${h}"></span></a>`).join('')}</nav>`).join('')}
       <div class="side-foot">
         <button class="theme-btn" data-theme-toggle title="Switch between dark office mode and high-contrast daylight mode">${themeButton()}</button>
         <div class="user-pill">
-          <div class="avatar">${esc(initials(u.displayName || u.email))}</div>
+          <div class="avatar" aria-hidden="true">${esc(initials(u.displayName || u.email))}</div>
           <div class="user-meta"><strong>${esc(who)}</strong><small>${esc(state.role || '')}</small></div>
           <button class="signout" id="signout">Sign out</button>
         </div>
@@ -141,9 +219,24 @@ function shell() {
     <div class="content">
       <header class="mobilebar no-print">
         <button class="menu" id="menu" aria-label="Menu">☰</button>
-        <a class="brand" href="#/">${logoHtml()}</a>
+        <a class="brand" href="#/" aria-label="${name} home">${logoHtml()}</a>
         <button class="theme-btn" data-theme-toggle>${themeButton()}</button>
       </header>
+      <nav class="quickbar no-print" aria-label="Quick navigation shortcuts">
+        <a class="q-pill" href="#/" title="Go to Dashboard">🏠 Dashboard</a>
+        ${can.edit() ? `
+          <a class="q-pill accent" href="#/takeoff/local" title="Open CAD (.DXF/.DWG) or PDF drawing takeoff & 3D storefront model">📐 CAD &amp; 3D Takeoff</a>
+          <a class="q-pill" href="#/jobs/new" title="Start a new job">＋ New Job</a>
+          <a class="q-pill" href="#/estimates/new" title="Create a new customer proposal">📄 New Proposal</a>
+          <a class="q-pill" href="#/parts/new" title="Order cut glass or Trulite storefront framing">📦 Order Glass / Parts</a>
+        ` : ''}
+        <a class="q-pill" href="#/schedule" title="View schedule & Google Calendar">📅 Schedule</a>
+        <a class="q-pill" href="#/files" title="Job plans, CAD files & photos">📁 Files</a>
+        <a class="q-pill" href="#/payapps" title="AIA G702/G703 Pay Applications">🏗️ Pay Apps</a>
+        <a class="q-pill" href="#/invoices" title="Customer invoices & Stripe payments">💵 Invoices</a>
+        <button type="button" class="q-pill video" data-global-tutorial title="Watch the full Start-to-Finish Stellar Glass walkthrough video">▶ Walkthrough Video</button>
+        <button type="button" class="q-pill search" data-quick-jump title="Search jobs, proposals, customers or shortcuts (⌘K)">⚡ Quick Jump</button>
+      </nav>
       <main id="view"></main>
     </div>
   </div>`;
@@ -151,6 +244,8 @@ function shell() {
   root.querySelector('#menu').addEventListener('click', () => root.querySelector('#shell').classList.toggle('nav-open'));
   root.querySelector('#scrim').addEventListener('click', () => root.querySelector('#shell').classList.remove('nav-open'));
   root.querySelectorAll('[data-theme-toggle]').forEach((b) => b.addEventListener('click', toggleTheme));
+  root.querySelector('[data-global-tutorial]')?.addEventListener('click', () => openTutorialModal(root, { showOpenTakeoff: true }));
+  root.querySelector('[data-quick-jump]')?.addEventListener('click', () => openQuickJumpModal());
 }
 
 // Live counts beside the sidebar links.
@@ -191,7 +286,12 @@ function route() {
   const section = path.split('/')[0];
   const title = el.querySelector('.page-head .page-title');
   if (title && !title.querySelector('p') && path === section && SUBTITLES[section]) title.insertAdjacentHTML('beforeend', `<p>${esc(SUBTITLES[section])}</p>`);
-  document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === section));
+  document.querySelectorAll('[data-nav]').forEach((a) => {
+    const isAct = a.dataset.nav === section;
+    a.classList.toggle('active', isAct);
+    if (isAct) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
   document.getElementById('shell')?.classList.remove('nav-open');
   updateCounts();
 }

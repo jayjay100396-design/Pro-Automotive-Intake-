@@ -84,7 +84,7 @@ export function websitePage() {
     return `<div class="card"><div class="card-head"><h2>Gallery</h2>
       ${can.remove() ? '<label class="btn primary small">Add photos<input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple data-add hidden></label>' : ''}</div>
       ${g.length ? '<p class="small muted">Shown in this order. Captions are optional and show under each photo. Visitors can click a photo to see it full size.</p>'
-        : `<p class="small muted">The page shows these ${SITE_STARTER_GALLERY.length} starter photos, cut from screenshots of the old website, so they're small and soft. Add your own photos and they take the starter set's place. You can pick many at once.</p>`}
+        : `<p class="small muted">The page shows these ${SITE_STARTER_GALLERY.length} high-resolution starter photos. Add your own photos and they take the starter set's place. You can pick many at once.</p>`}
       ${uploading.length ? `<ul class="upload-list">${uploading.map(([, t]) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
       <div class="site-gallery">${g.length ? g.map((p, i) => `<div class="site-photo" data-id="${esc(p.id)}">
           <div class="thumb"><img src="${esc(p.url)}" alt="" loading="lazy"></div>

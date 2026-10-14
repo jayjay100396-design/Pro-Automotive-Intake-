@@ -2,7 +2,8 @@
 // and hands them to the phone's share sheet (which attaches the PDF), Gmail or the email app. Gmail and email-app
 // links can't carry a file, so for those the PDF downloads to be attached there. Then it notes on the proposal that
 // it went out.
-import { state, get, update } from './data.js';
+import { state, get, update, listMembers, savePreparedBy } from './data.js';
+import { BRAND } from './brand.js';
 import { esc, toast } from './ui.js';
 import { emailList, isEmail, gmailLink, mailtoLink } from './parts-email.js';
 import { proposalContent, proposalPdf, proposalEmail, pdfName, dayText } from './proposal-doc.js';
@@ -67,11 +68,74 @@ async function proposalFile(e) {
   return new File([blob], pdfName(p), { type: 'application/pdf' });
 }
 
-// The person sending, for the signature: what they put on proposals (Prepared by), else their sign-in.
-function person() {
+// The person sending, for the signature: uses the proposal's own Prepared By fields first,
+// then saved profile / company contact / signed-in user.
+export function person(e = {}) {
   const p = state.profile?.preparedBy || {};
-  return { name: p.name || state.user?.displayName || '', title: p.title || '', phone: p.phone || '', email: p.email || state.user?.email || '' };
+  const c = state.company || {};
+  const name = e.preparedName || p.name || c.contactName || state.user?.displayName || BRAND.contactName || '';
+  const title = e.preparedTitle || (e.preparedName ? '' : p.title || c.contactTitle || BRAND.contactTitle || '');
+  const phone = e.preparedPhone || p.phone || c.cell || c.phone || state.user?.phoneNumber || '';
+  const email = e.preparedEmail || p.email || c.email || state.user?.email || '';
+  return { name, title, phone, email };
 }
+
+// Builds a list of distinct team senders so Wes, Jay, or any estimator can pick who is sending.
+export function senderChoices(e = {}, members = []) {
+  const list = [];
+  const seen = new Set();
+  const addChoice = (item) => {
+    const k = `${(item.name || '').toLowerCase()}|${(item.email || '').toLowerCase()}`;
+    if (!item.name || seen.has(k)) return;
+    seen.add(k);
+    list.push(item);
+  };
+  const c = state.company || {};
+  const p = state.profile?.preparedBy || {};
+  if (e.preparedName) {
+    addChoice({
+      name: e.preparedName,
+      title: e.preparedTitle || '',
+      phone: e.preparedPhone || c.cell || c.phone || '',
+      email: e.preparedEmail || c.email || '',
+    });
+  }
+  addChoice({
+    name: c.contactName || BRAND.contactName,
+    title: c.contactTitle || BRAND.contactTitle,
+    phone: c.cell || c.phone || BRAND.cell || BRAND.phone,
+    email: c.email || BRAND.email,
+  });
+  if (p.name) {
+    addChoice({
+      name: p.name,
+      title: p.title || 'Estimator',
+      phone: p.phone || state.user?.phoneNumber || '',
+      email: p.email || state.user?.email || '',
+    });
+  }
+  if (state.user?.displayName || state.user?.email) {
+    addChoice({
+      name: state.user.displayName || state.user.email.split('@')[0],
+      title: p.title || 'Estimator',
+      phone: state.user.phoneNumber || p.phone || '',
+      email: state.user.email || '',
+    });
+  }
+  for (const m of members) {
+    const mName = m.displayName || (m.email ? m.email.split('@')[0] : '');
+    if (mName) {
+      addChoice({
+        name: mName,
+        title: m.role === 'owner' ? (c.contactTitle || 'President') : 'Estimator',
+        phone: c.phone || '',
+        email: m.email || '',
+      });
+    }
+  }
+  return list;
+}
+
 // The Google account to open Gmail in, when they signed in with Google.
 const googleAccount = () => state.user?.providerData?.find((p) => p.providerId === 'google.com')?.email || '';
 const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -84,19 +148,30 @@ const canShareFiles = () => {
   } catch { return false; }
 };
 
-// The line under a proposal's status that says when it went out.
+// The line under a proposal's status that says when it went out and who sent it.
 export function sentNote(e = {}) {
   if (!e.sentOn) return '';
   const to = emailList(e.lastSent?.to).join(', ');
-  return `Sent to the customer ${dayText(e.sentOn)}${to ? ` (${to})` : ''}.`;
+  const by = e.lastSent?.by || e.preparedName || '';
+  return `Sent to the customer ${dayText(e.sentOn)}${by ? ` by ${by}` : ''}${to ? ` (${to})` : ''}.`;
 }
 
-// Notes that it went out: when, how (share, gmail, email or copy) and to whom. A draft becomes sent; one that's
+// Notes that it went out: when, how (share, gmail, email or copy), by whom, and to whom. A draft becomes sent; one that's
 // accepted or declined stays so.
-async function markSent(id, via, to) {
+async function markSent(id, via, to, sender) {
   const e = get('estimates', id);
   if (!e) return null;
-  const fields = { sentOn: localDay(), lastSent: { via, to: emailList(to), at: new Date().toISOString() } };
+  const by = (sender?.name || e.preparedName || '').trim();
+  const fields = {
+    sentOn: localDay(),
+    lastSent: { via, to: emailList(to), by, at: new Date().toISOString() },
+  };
+  if (sender?.name) {
+    fields.preparedName = sender.name;
+    fields.preparedTitle = sender.title || '';
+    fields.preparedPhone = sender.phone || '';
+    fields.preparedEmail = sender.email || '';
+  }
   if (!e.status || e.status === 'draft') fields.status = 'sent';
   try {
     await update('estimates', id, fields);
@@ -112,14 +187,23 @@ async function markSent(id, via, to) {
 // not have caught up). onSent(fields) runs once it's marked sent.
 export function sendProposal(id, e = get('estimates', id), { onSent = () => {} } = {}) {
   if (!e || document.querySelector('dialog.send-dlg')) return;
-  const p = content(e);
+  let sender = person(e);
+  const estWithSender = () => ({
+    ...e,
+    preparedName: sender.name,
+    preparedTitle: sender.title,
+    preparedPhone: sender.phone,
+    preparedEmail: sender.email,
+  });
+  const p = content(estWithSender());
   const j = get('jobs', e.jobId) || {};
   const customer = get('customers', e.customerId || j.customerId) || {};
-  const mail = proposalEmail(p, { sender: person(), company: state.company || {} });
+  const mail = proposalEmail(p, { sender, company: state.company || {} });
   const share = canShareFiles();
   // On a phone the share sheet is the way: it attaches the PDF. On a computer, Gmail.
   const phone = share && matchMedia('(pointer: coarse)').matches;
   const fileName = pdfName(p);
+  let choices = senderChoices(e);
 
   const dlg = document.createElement('dialog');
   dlg.className = 'send-dlg';
@@ -130,6 +214,19 @@ export function sendProposal(id, e = get('estimates', id), { onSent = () => {} }
     <div class="send-file"><span class="pdf-ico" aria-hidden="true">PDF</span>
       <span class="send-file-name"><b>${esc(fileName)}</b><span class="small muted" id="sFileNote">Making the PDF…</span></span>
       <a class="btn small" id="sPreview" target="_blank" rel="noopener" hidden>Preview</a></div>
+    <div class="send-from-box">
+      <div class="row between">
+        <label class="grow">Sending as (shown on email &amp; PDF)
+          <select id="sSenderPick"></select>
+        </label>
+      </div>
+      <div class="grid2">
+        <label class="small">Sender name <input id="sFromName" value="${esc(sender.name)}" placeholder="e.g. Wesley Stel"></label>
+        <label class="small">Title <input id="sFromTitle" value="${esc(sender.title)}" placeholder="e.g. President"></label>
+        <label class="small">Phone <input id="sFromPhone" value="${esc(sender.phone)}" placeholder="(863) 255-5731"></label>
+        <label class="small">Email <input id="sFromEmail" value="${esc(sender.email)}" placeholder="wes@stellarglassllc.com"></label>
+      </div>
+    </div>
     <label>To <input id="sTo" type="email" multiple autocomplete="off" value="${esc(emailList(customer.email).join(', '))}" placeholder="customer@example.com"></label>
     <p class="hint warn hidden" id="sToNote"></p>
     <label>Subject <input id="sSubject" value="${esc(mail.subject)}" maxlength="200"></label>
@@ -156,19 +253,68 @@ export function sendProposal(id, e = get('estimates', id), { onSent = () => {} }
   dlg.showModal();
   $('#sClose').addEventListener('click', () => dlg.close());
 
-  proposalFile(e).then((f) => {
+  const renderSenderPick = () => {
+    const sel = $('#sSenderPick');
+    sel.innerHTML = choices.map((c, idx) => `<option value="${idx}" ${c.name === sender.name ? 'selected' : ''}>${esc(c.name)}${c.title ? ` — ${esc(c.title)}` : ''}${c.email ? ` (${esc(c.email)})` : ''}</option>`).join('')
+      + '<option value="custom">Custom sender name…</option>';
+  };
+  renderSenderPick();
+  listMembers().then((m) => {
     if (!dlg.isConnected) return;
-    file = f;
-    url = URL.createObjectURL(f);
-    $('#sFileNote').textContent = `${kb(f.size)}, ready to send`;
-    $('#sPreview').href = url;
-    $('#sPreview').hidden = false;
-    dlg.querySelectorAll('#sShare, #sDownload').forEach((b) => { b.disabled = false; });
-  }).catch((err) => {
-    console.error(err);
-    failed = true;
-    $('#sFileNote').textContent = `${err.message || 'The PDF couldn\'t be made.'} Print proposal / PDF can save it instead.`;
-    $('#sFileNote').classList.add('warn');
+    choices = senderChoices(e, m);
+    renderSenderPick();
+  }).catch(() => {});
+
+  const buildPdf = () => {
+    $('#sFileNote').textContent = 'Making the PDF…';
+    $('#sFileNote').classList.remove('warn');
+    proposalFile(estWithSender()).then((f) => {
+      if (!dlg.isConnected) return;
+      if (url) URL.revokeObjectURL(url);
+      file = f;
+      url = URL.createObjectURL(f);
+      failed = false;
+      $('#sFileNote').textContent = `${kb(f.size)}, ready to send (Prepared by ${sender.name || 'Stellar Glass'})`;
+      $('#sPreview').href = url;
+      $('#sPreview').hidden = false;
+      dlg.querySelectorAll('#sShare, #sDownload').forEach((b) => { b.disabled = false; });
+    }).catch((err) => {
+      console.error(err);
+      failed = true;
+      $('#sFileNote').textContent = `${err.message || 'The PDF couldn\'t be made.'} Print proposal / PDF can save it instead.`;
+      $('#sFileNote').classList.add('warn');
+    });
+  };
+  buildPdf();
+
+  const applySenderChange = () => {
+    sender = {
+      name: $('#sFromName').value.trim(),
+      title: $('#sFromTitle').value.trim(),
+      phone: $('#sFromPhone').value.trim(),
+      email: $('#sFromEmail').value.trim(),
+    };
+    const updatedMail = proposalEmail(content(estWithSender()), { sender, company: state.company || {} });
+    $('#sText').value = updatedMail.text;
+    savePreparedBy(sender);
+    buildPdf();
+  };
+
+  $('#sSenderPick').addEventListener('change', (ev) => {
+    const idx = Number(ev.target.value);
+    if (!Number.isNaN(idx) && choices[idx]) {
+      const picked = choices[idx];
+      $('#sFromName').value = picked.name || '';
+      $('#sFromTitle').value = picked.title || '';
+      $('#sFromPhone').value = picked.phone || '';
+      $('#sFromEmail').value = picked.email || '';
+      applySenderChange();
+    } else {
+      $('#sFromName').focus();
+    }
+  });
+  ['#sFromName', '#sFromTitle', '#sFromPhone', '#sFromEmail'].forEach((sel) => {
+    $(sel).addEventListener('change', applySenderChange);
   });
 
   const current = () => ({ to: emailList($('#sTo').value), subject: $('#sSubject').value.trim(), text: $('#sText').value });
@@ -238,11 +384,11 @@ export function sendProposal(id, e = get('estimates', id), { onSent = () => {} }
   $('#sYes').addEventListener('click', async (ev) => {
     const button = ev.currentTarget;
     button.disabled = true;
-    const fields = await markSent(id, via, current().to);
+    const fields = await markSent(id, via, current().to, sender);
     button.disabled = false;
     if (!fields) return;
     dlg.close();
-    toast('Marked sent');
+    toast(`Marked sent by ${sender.name || 'team'}`);
     onSent(fields);
   });
 }

@@ -17,7 +17,7 @@ import { alertEmails, parseEmails, lastAlertNote, MAX_ALERT_EMAILS } from './req
 import { jobParts, openPartsCount, latePartsCount, dueSoonCount } from './parts.js';
 import { DRAFT_KEY } from './takeoff/takeoff.js';
 import { openTutorialModal } from './takeoff/tutorial.js';
-import { sendProposal, sentNote } from './proposal-send.js';
+import { sendProposal, sentNote, senderChoices, person } from './proposal-send.js';
 
 // The schedule's cards on the dashboard and job pages, and the Google Calendar panel in Settings.
 import { scheduleSummary, comingUpHtml, mountJobSchedule } from './schedule.js';
@@ -392,13 +392,13 @@ export function estimateEdit(id, params) {
   const e = isNew
     ? (() => {
       const template = job?.type === 'shower' ? 'shower' : 'storefront';
-      const prep = state.profile?.preparedBy || {};
+      const prep = person();
       return {
         number: nextNumber('estimates'), jobId: job?.id || '', date: today(), validUntil: addDays(today(), 30), status: 'draft', template,
         markupPct: 0, minCharge: 250, taxPct: 7, lines: [], ...PROPOSAL_DEFAULTS, scope: '', attn: '', projectTitle: job?.name || '',
         options: [{ fromLines: true, name: '', specs: OPTION_SPECS[template] }], acceptedOption: 0, showLines: false,
-        preparedName: prep.name || state.user.displayName || '', preparedTitle: prep.title || 'Estimator',
-        preparedPhone: prep.phone || state.user.phoneNumber || '', preparedEmail: prep.email || state.user.email || '',
+        preparedName: prep.name, preparedTitle: prep.title || 'President',
+        preparedPhone: prep.phone, preparedEmail: prep.email,
         ...(params.get('from') === 'takeoff' ? fromTakeoff(template, job?.id) : {}),
       };
     })()
@@ -472,7 +472,10 @@ export function estimateEdit(id, params) {
         <label>Deposit is <select name="depositType">${options([['percent', '% of the price'], ['amount', 'a dollar amount']], dep.type)}</select></label>
         <p class="span2 hint" id="depnote"></p>
         <label class="span4">Other payment terms <textarea name="terms" rows="3" placeholder="e.g. Balance due on completion.">${esc(terms)}</textarea></label>
-        <h2 class="span4 top-gap">Proposal prepared by</h2>
+        <div class="span4 row between top-gap">
+          <h2>Proposal prepared by / Sender</h2>
+          <div class="row" id="prepChoices"></div>
+        </div>
         <label>Name <input name="preparedName" value="${esc(e.preparedName)}"></label>
         <label>Title <input name="preparedTitle" value="${esc(e.preparedTitle)}"></label>
         <label>Phone <input name="preparedPhone" type="tel" value="${esc(e.preparedPhone)}"></label>
@@ -538,6 +541,24 @@ export function estimateEdit(id, params) {
         body.innerHTML = PRESETS[t].map(estLineRow).join(''); recalc();
       });
       recalc();
+      const prepBox = root.querySelector('#prepChoices');
+      const renderPrepPills = (members = []) => {
+        if (!prepBox) return;
+        const choices = senderChoices(e, members);
+        prepBox.innerHTML = `<span class="small muted">Quick pick:</span> ${choices.map((c, idx) => `<button type="button" class="btn small" data-prep-idx="${idx}">${esc(c.name)}${c.title ? ` (${esc(c.title)})` : ''}</button>`).join(' ')}`;
+        prepBox.querySelectorAll('[data-prep-idx]').forEach((btn) => btn.addEventListener('click', () => {
+          const picked = choices[Number(btn.dataset.prepIdx)];
+          if (!picked) return;
+          form.elements.preparedName.value = picked.name || '';
+          form.elements.preparedTitle.value = picked.title || '';
+          form.elements.preparedPhone.value = picked.phone || '';
+          form.elements.preparedEmail.value = picked.email || '';
+          toast(`Prepared by set to ${picked.name}`);
+        }));
+      };
+      renderPrepPills();
+      listMembers().then((m) => renderPrepPills(m)).catch(() => {});
+
       // The proposal as it stands in the form.
       const collect = () => ({ ...formData(form), lines: readLines(body).filter((l) => l.desc || l.price), options: readOptions(optBox), acceptedOption: acceptedIndex() });
       if (!isNew) mountProposalBilling(root, id, collect);
@@ -571,6 +592,10 @@ export function estimateEdit(id, params) {
       // Sending: changes in the form are saved first, so the customer gets what's on the screen.
       const sent = (fields) => {
         if (fields.status) form.elements.status.value = fields.status;
+        if (fields.preparedName !== undefined) form.elements.preparedName.value = fields.preparedName;
+        if (fields.preparedTitle !== undefined) form.elements.preparedTitle.value = fields.preparedTitle;
+        if (fields.preparedPhone !== undefined) form.elements.preparedPhone.value = fields.preparedPhone;
+        if (fields.preparedEmail !== undefined) form.elements.preparedEmail.value = fields.preparedEmail;
         saved = JSON.stringify(collect());
         const note = root.querySelector('#sentNote');
         note.textContent = sentNote({ ...get('estimates', id), ...fields });

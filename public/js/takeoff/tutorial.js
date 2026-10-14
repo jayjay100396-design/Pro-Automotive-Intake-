@@ -6,12 +6,13 @@ import { esc } from '../ui.js';
 export const TUTORIAL_VIDEO_URL = '/media/takeoff-walkthrough.mp4';
 
 export const TUTORIAL_CHAPTERS = [
-  { step: 1, time: 0, label: '0:00 · 1. Open CAD (.DXF / .DWG)', detail: 'Open CAD drawings from a job\'s Files tab or your computer at automatic 1:1 true scale.' },
-  { step: 2, time: 21, label: '0:21 · 2. Filter CAD Layers', detail: 'Click Glazing & Dims or toggle layer pills (A-GLAZ, A-DIMS, A-WALL) to hide background clutter.' },
-  { step: 3, time: 36, label: '0:36 · 3. Box W×H & Perimeter LF', detail: '2-click opposite corners for Width × Height, or trace a floor plan run for linear footage.' },
-  { step: 4, time: 55, label: '0:55 · 4. Storefront Glass Cut Sizes', detail: 'Pick CG451 1-3/4" Storefront, 2" Storefront, Curtain Wall, or Frameless to get DLO + pocket bite cut sizes, 24\' stock lengths, and sealant tubes.' },
-  { step: 5, time: 82, label: '1:22 · 5. 3D Storefront View', detail: 'Orbit and zoom your storefront mullions & transoms in 3D, switch anodized finishes & Low-E tints, and save a PNG snapshot.' },
-  { step: 6, time: 101, label: '1:41 · 6. Proposal & Trulite Orders', detail: 'Create a customer proposal or pre-fill a Trulite / Glass Shop parts request in one click.' },
+  { step: 1, time: 0, label: '0:00 · 1. Dashboard & Shortcuts', detail: 'Use the Quick Shortcuts bar or ⌘K Quick Jump anywhere, and convert incoming Website Quote Requests into Customers, Jobs, and Google Calendar measures.' },
+  { step: 2, time: 26.5, label: '0:26 · 2. Job Files & CAD 1:1', detail: 'Store PDFs, photos, and AutoCAD .DXF/.DWG drawings backed up to Google Drive, and open CAD drawings at 1:1 true scale with automatic window tag counting.' },
+  { step: 3, time: 52, label: '0:52 · 3. CAD Layers & Box W×H', detail: 'Click Glazing & Dims to hide A-WALL & A-GRID clutter, then measure openings with 2-click Box W×H or trace floor runs with Perimeter LF.' },
+  { step: 4, time: 76, label: '1:16 · 4. Storefront Cut Sizes', detail: 'Pick CG451 1-3/4" Storefront, 2" Storefront, Curtain Wall, or Frameless to get DLO + 3/8" pocket bite cut sizes, 24\' stock lengths, and sealant tubes.' },
+  { step: 5, time: 103, label: '1:43 · 5. 3D Storefront View', detail: 'Orbit and zoom your storefront mullions & transoms in 3D, switch anodized finishes & Low-E tints, and save a PNG snapshot.' },
+  { step: 6, time: 122.5, label: '2:02 · 6. Proposals & Trulite Orders', detail: 'Select who is sending the proposal (shown on the PDF signature & email) or pre-fill a Trulite / Glass Shop parts request in one click.' },
+  { step: 7, time: 144, label: '2:24 · 7. Contracts, AIA G702 & Invoices', detail: 'Convert accepted proposals to Contracts, track Change Orders, generate AIA G702/G703 progress pay apps with retainage, and send Stripe invoices.' },
 ];
 
 export function openTutorialModal(hostEl = document.body, { showOpenTakeoff = false } = {}) {
@@ -19,6 +20,7 @@ export function openTutorialModal(hostEl = document.body, { showOpenTakeoff = fa
   if (!dlg) {
     dlg = document.createElement('dialog');
     dlg.className = 'tk-video-dlg';
+    dlg.setAttribute('aria-label', 'Stellar Glass Start-to-Finish Walkthrough Video');
     hostEl.append(dlg);
   }
 
@@ -26,22 +28,24 @@ export function openTutorialModal(hostEl = document.body, { showOpenTakeoff = fa
     <div class="tk-video-wrap">
       <div class="row between tk-3d-head">
         <div>
-          <h2>CAD Takeoff, Glass Cut-Size &amp; 3D Storefront Walkthrough</h2>
-          <p class="small muted">2-minute narrated guide · Click any chapter below to jump straight to that step</p>
+          <h2>Stellar Glass — Start-to-Finish App &amp; CAD/3D Takeoff Walkthrough</h2>
+          <p class="small muted">2:47 narrated guide · Click any chapter below to jump straight to that step</p>
         </div>
         <div class="row">
           ${showOpenTakeoff ? '<a class="btn small primary" href="#/takeoff/local" data-try-takeoff>Open CAD / Drawing Takeoff</a>' : ''}
-          <a class="btn small" href="${TUTORIAL_VIDEO_URL}" download="Wes-Stellar-Glass-CAD-3D-Walkthrough.mp4">Download MP4</a>
-          <button type="button" class="icon" data-vid-close aria-label="Close">✕</button>
+          <a class="btn small" href="${TUTORIAL_VIDEO_URL}" download="Wes-Stellar-Glass-Start-To-Finish-Walkthrough.mp4">Download MP4</a>
+          <button type="button" class="icon" data-vid-close aria-label="Close walkthrough video">✕</button>
         </div>
       </div>
       <div class="tk-video-stage">
-        <video data-vid-player src="${TUTORIAL_VIDEO_URL}" controls playsinline preload="metadata"></video>
+        <video data-vid-player src="${TUTORIAL_VIDEO_URL}" controls playsinline preload="metadata" aria-label="Stellar Glass Start-to-Finish Walkthrough Video">
+          <track kind="captions" src="/media/takeoff-walkthrough.vtt" srclang="en" label="English" default>
+        </video>
       </div>
-      <div class="chips tk-video-chapters">
+      <div class="chips tk-video-chapters" role="group" aria-label="Video chapters">
         ${TUTORIAL_CHAPTERS.map((c, i) => `<button type="button" class="chip ${i === 0 ? 'on' : ''}" data-seek="${c.time}" title="${esc(c.detail)}">${esc(c.label)}</button>`).join('')}
       </div>
-      <p class="small muted tk-video-note" data-vid-note>${esc(TUTORIAL_CHAPTERS[0].detail)}</p>
+      <p class="small muted tk-video-note" data-vid-note aria-live="polite">${esc(TUTORIAL_CHAPTERS[0].detail)}</p>
     </div>
   `;
 

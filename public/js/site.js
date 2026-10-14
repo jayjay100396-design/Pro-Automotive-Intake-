@@ -112,7 +112,12 @@ const seen = new Map();
 const spy = new IntersectionObserver((entries) => {
   entries.forEach((en) => seen.set(en.target.id, en.isIntersecting));
   const current = ['home', 'services', 'gallery', 'quote', 'contact'].find((id) => seen.get(id));
-  links.forEach((a) => a.classList.toggle('on', a.getAttribute('href') === `#${current}`));
+  links.forEach((a) => {
+    const isOn = a.getAttribute('href') === `#${current}`;
+    a.classList.toggle('on', isOn);
+    if (isOn) a.setAttribute('aria-current', 'location');
+    else a.removeAttribute('aria-current');
+  });
 }, { rootMargin: '-45% 0px -50% 0px' });
 document.querySelectorAll('main section[id], footer[id]').forEach((s) => spy.observe(s));
 
@@ -130,11 +135,11 @@ function addFiles(picked) {
 
 function renderFiles(locked = false) {
   list.innerHTML = files.map((f) => `<li data-key="${f.key}">
-    ${f.preview ? `<img class="thumb" src="${f.preview}" alt="">` : `<span class="thumb">${esc(extOf(f.file.name).toUpperCase() || 'FILE')}</span>`}
+    ${f.preview ? `<img class="thumb" src="${f.preview}" alt="">` : `<span class="thumb" aria-hidden="true">${esc(extOf(f.file.name).toUpperCase() || 'FILE')}</span>`}
     <span class="fname">${esc(f.file.name)}</span>
     ${f.state === 'done' ? '<span class="done">Sent</span>'
       : f.state === 'failed' ? '<span class="failed">Didn\'t upload</span>'
-        : f.state === 'sending' ? `<progress max="1" value="${f.pct || 0}"></progress>`
+        : f.state === 'sending' ? `<progress max="1" value="${f.pct || 0}" aria-label="Uploading ${esc(f.file.name)}"></progress>`
           : locked ? '' : `<button type="button" class="x" data-remove="${f.key}" aria-label="Remove ${esc(f.file.name)}">✕</button>`}
   </li>`).join('');
 }

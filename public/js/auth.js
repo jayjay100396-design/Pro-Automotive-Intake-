@@ -39,21 +39,22 @@ export function toE164(raw) {
 
 export function renderSignIn(root) {
   root.innerHTML = `
-  <div class="auth-wrap">
+  <main class="auth-wrap" id="main-content">
     <div class="card auth-card">
+      <h1 class="sr-only">Sign in to ${BRAND.name}</h1>
       <div class="auth-logo">${logoHtml()}</div>
       <p class="muted">Estimates, contracts, pay apps and invoices for storefront and shower jobs.</p>
 
-      <button class="btn google" id="google"><span class="g">G</span> Continue with Google</button>
+      <button class="btn google" id="google" type="button"><span class="g" aria-hidden="true">G</span> Continue with Google</button>
 
       ${PHONE_SIGN_IN ? `<div class="tabs" role="tablist">
         <button class="tab active" data-tab="email" role="tab">Email</button>
         <button class="tab" data-tab="phone" role="tab">Phone</button>
       </div>` : ''}
 
-      <form id="email-form" class="stack">
-        <label>Email <input type="email" name="email" autocomplete="email" required></label>
-        <label>Password <input type="password" name="password" autocomplete="current-password" minlength="6" required></label>
+      <form id="email-form" class="stack" aria-label="Sign in with email">
+        <label>Email <input type="email" name="email" autocomplete="email" required aria-required="true"></label>
+        <label>Password <input type="password" name="password" autocomplete="current-password" minlength="6" required aria-required="true"></label>
         <label class="signup-only hidden">Your name <input name="name" autocomplete="name"></label>
         <button class="btn primary" type="submit" id="email-submit">Sign in</button>
         <div class="row between small">
@@ -62,7 +63,7 @@ export function renderSignIn(root) {
         </div>
       </form>
 
-      <form id="phone-form" class="stack hidden">
+      <form id="phone-form" class="stack hidden" aria-label="Sign in with phone">
         <label>Mobile number <input type="tel" name="phone" placeholder="(586) 555-0100" autocomplete="tel" required></label>
         <button class="btn primary" type="submit" id="phone-send">Text me a code</button>
         <div id="code-step" class="stack hidden">
@@ -72,10 +73,10 @@ export function renderSignIn(root) {
         <div id="recaptcha"></div>
       </form>
 
-      <p class="msg" id="auth-msg" role="alert"></p>
+      <p class="msg" id="auth-msg" role="alert" aria-live="assertive"></p>
     </div>
-    <p class="auth-foot">${BRAND.address}<br>Office ${BRAND.phone} · <a href="mailto:${BRAND.email}">${BRAND.email}</a> · <a href="${websiteUrl(BRAND.website)}" target="_blank" rel="noopener">${BRAND.website}</a></p>
-  </div>`;
+    <p class="auth-foot">${BRAND.address}<br>Office <a href="tel:+18632555731">${BRAND.phone}</a> · <a href="mailto:${BRAND.email}">${BRAND.email}</a> · <a href="/quote">Request a quote</a> · <a href="${websiteUrl(BRAND.website)}" target="_blank" rel="noopener">${BRAND.website}</a></p>
+  </main>`;
 
   const $ = (s) => root.querySelector(s);
   const msg = (text, ok = false) => { $('#auth-msg').textContent = text; $('#auth-msg').className = 'msg ' + (ok ? 'ok' : 'err'); };
