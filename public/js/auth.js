@@ -5,6 +5,7 @@ import {
   GoogleAuthProvider, signInWithPopup, RecaptchaVerifier, signInWithPhoneNumber, signOut as fbSignOut,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { BRAND, logoHtml, websiteUrl } from './brand.js';
+import { triggerInstallOrModal } from './pwa.js';
 
 export const signOut = () => fbSignOut(auth);
 
@@ -75,6 +76,7 @@ export function renderSignIn(root) {
       </form>
 
       <p class="msg" id="auth-msg" role="alert" aria-live="assertive"></p>
+      <button class="btn pwa-auth-btn" id="install-app-auth" type="button">⬇ Download Desktop App (Windows &amp; Mac)</button>
     </div>
     <p class="auth-foot">${BRAND.address}<br>Office <a href="tel:+18632555731">${BRAND.phone}</a> · <a href="mailto:${BRAND.email}">${BRAND.email}</a> · <a href="/quote">Request a quote</a> · <a href="${websiteUrl(BRAND.website)}" target="_blank" rel="noopener">${BRAND.website}</a></p>
   </main>`;
@@ -82,6 +84,8 @@ export function renderSignIn(root) {
   const $ = (s) => root.querySelector(s);
   const msg = (text, ok = false) => { $('#auth-msg').textContent = text; $('#auth-msg').className = 'msg ' + (ok ? 'ok' : 'err'); };
   const busy = (btn, on) => { btn.disabled = on; };
+
+  $('#install-app-auth')?.addEventListener('click', () => triggerInstallOrModal(root));
 
   root.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
     root.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === t));

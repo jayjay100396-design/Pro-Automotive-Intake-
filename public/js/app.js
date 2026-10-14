@@ -13,6 +13,7 @@ import { websitePage } from './website.js';
 import { takeoffPage } from './takeoff/page.js';
 import { openTutorialModal } from './takeoff/tutorial.js';
 import { accountingPage, openAccountantTutorialModal } from './accounting.js';
+import { initPwaInstall, triggerInstallOrModal } from './pwa.js';
 import { esc, toast } from './ui.js';
 import { BRAND, logoHtml } from './brand.js';
 import { autosize } from './autosize.js';
@@ -20,6 +21,7 @@ import { autosize } from './autosize.js';
 const root = document.getElementById('app');
 // Note boxes grow with their text.
 autosize();
+initPwaInstall();
 
 const routes = [
   [/^$/, () => V.dashboard()],
@@ -214,6 +216,7 @@ function shell() {
       ${GROUPS.map(([label, links]) => `<div class="nav-label">${esc(label)}</div>
       <nav class="nav" aria-label="${esc(label)}">${links.map(([h, l]) => `<a href="#/${h}" data-nav="${h}">${icon(h)}<span>${esc(l)}</span><span class="nav-count hidden" data-count="${h}"></span></a>`).join('')}</nav>`).join('')}
       <div class="side-foot">
+        <button type="button" class="theme-btn" data-install-app title="Download and install Stellar Glass as a desktop app on Windows or Mac"><span aria-hidden="true">⬇</span><span class="theme-label">Install App (Win / Mac)</span></button>
         <button class="theme-btn" data-theme-toggle title="Switch between dark office mode and high-contrast daylight mode">${themeButton()}</button>
         <div class="user-pill">
           <div class="avatar" aria-hidden="true">${esc(initials(u.displayName || u.email))}</div>
@@ -244,6 +247,7 @@ function shell() {
         <a class="q-pill" href="#/accounting" title="Notary Queue (Melina S. Arias), Florida § 713.20 Lien Waivers & QuickBooks/Xero Sync">⚖️ Accounting &amp; Notary</a>
         <button type="button" class="q-pill video" data-acct-tutorial title="Watch the Accountant & Notary Guide for Melina S. Arias, Wesley Stel & Jason Vergara">▶ Accountant Video</button>
         <button type="button" class="q-pill video" data-global-tutorial title="Watch the full Start-to-Finish Stellar Glass walkthrough video">▶ Takeoff Video</button>
+        <button type="button" class="q-pill install" data-install-app title="Download and install Stellar Glass as a desktop app on Windows or Mac">⬇ Install App</button>
         <button type="button" class="q-pill search" data-quick-jump title="Search jobs, proposals, customers or shortcuts (⌘K)">⚡ Quick Jump</button>
       </nav>
       <main id="view"></main>
@@ -253,6 +257,7 @@ function shell() {
   root.querySelector('#menu').addEventListener('click', () => root.querySelector('#shell').classList.toggle('nav-open'));
   root.querySelector('#scrim').addEventListener('click', () => root.querySelector('#shell').classList.remove('nav-open'));
   root.querySelectorAll('[data-theme-toggle]').forEach((b) => b.addEventListener('click', toggleTheme));
+  root.querySelectorAll('[data-install-app]').forEach((b) => b.addEventListener('click', () => triggerInstallOrModal(root)));
   root.querySelector('[data-global-tutorial]')?.addEventListener('click', () => openTutorialModal(root, { showOpenTakeoff: true }));
   root.querySelector('[data-acct-tutorial]')?.addEventListener('click', () => openAccountantTutorialModal(root));
   root.querySelector('[data-quick-jump]')?.addEventListener('click', () => openQuickJumpModal());

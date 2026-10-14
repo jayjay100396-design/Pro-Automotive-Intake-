@@ -734,3 +734,20 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .acct-banner { border-left: 4px solid var(--accent); }
 .acct-upload-bar { align-items: end; padding: .75rem; border: 1px dashed var(--border); border-radius: var(--radius-sm); background: var(--bg); }
 
+/* Desktop Web App (PWA) Install Button & Modal (Windows & Mac) */
+.q-pill.install { border-color: #10b981; background: color-mix(in srgb, #10b981 15%, var(--bg)); }
+.pwa-auth-btn { width: 100%; margin-top: .35rem; border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+dialog.pwa-install-dlg { width: min(860px, 95vw); max-height: 90vh; padding: 1.25rem; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 16px 56px rgba(0, 0, 0, .55); overflow-y: auto; }
+dialog.pwa-install-dlg::backdrop { background: rgba(8, 18, 30, .75); }
+.pwa-install-body { display: flex; flex-direction: column; gap: 1rem; margin-top: .85rem; }
+.pwa-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding: .85rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg); }
+.pwa-banner-ready { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+.pwa-banner-ok { border-color: #10b981; background: color-mix(in srgb, #10b981 12%, var(--bg)); flex-direction: column; align-items: flex-start; gap: .25rem; }
+.pwa-os-grid { align-items: stretch; }
+.pwa-os-card { display: flex; flex-direction: column; gap: .65rem; border: 1px solid var(--border); }
+.pwa-os-card.pwa-os-active { border: 2px solid var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.pwa-steps { margin: .25rem 0; padding-left: 1.25rem; display: flex; flex-direction: column; gap: .55rem; font-size: .9rem; line-height: 1.5; }
+.pwa-tip { margin-top: auto; padding-top: .6rem; border-top: 1px solid var(--border); }
+@media (display-mode: standalone), (display-mode: window-controls-overlay) {
+  .q-pill.install, .pwa-auth-btn { display: none; }
+}

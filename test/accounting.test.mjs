@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
   DEFAULT_NOTARY,
   ADMIN_SIGNERS,
@@ -12,6 +13,7 @@ import {
   exportXeroCsv,
   exportAccountingPackageJson,
 } from '../public/js/accounting-calc.js';
+import { detectInstallEnvironment } from '../public/js/pwa.js';
 
 describe('Accounting, Notary & Florida Statutory Lien Waiver (§ 713.20) Calculations', () => {
   it('verifies Melina S. Arias notary commission and Wesley Stel / Jason Vergara admin defaults', () => {
@@ -184,4 +186,42 @@ describe('Accounting, Notary & Florida Statutory Lien Waiver (§ 713.20) Calcula
     assert.equal(parsed.admins[0].name, 'Wesley Stel');
     assert.equal(parsed.admins[1].name, 'Jason Vergara');
   });
+
+  it('detects Windows and Mac desktop web app (PWA) environments and validates manifest.webmanifest', () => {
+    const winEdge = detectInstallEnvironment(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0',
+      'Win32',
+      false,
+    );
+    assert.equal(winEdge.os, 'windows');
+    assert.equal(winEdge.browser, 'edge');
+    assert.equal(winEdge.supportsNativePrompt, true);
+
+    const macSafari = detectInstallEnvironment(
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
+      'MacIntel',
+      false,
+    );
+    assert.equal(macSafari.os, 'mac');
+    assert.equal(macSafari.browser, 'safari');
+    assert.equal(macSafari.supportsNativePrompt, false);
+
+    const macChrome = detectInstallEnvironment(
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      'MacIntel',
+      true,
+    );
+    assert.equal(macChrome.os, 'mac');
+    assert.equal(macChrome.browser, 'chrome');
+    assert.equal(macChrome.isStandalone, true);
+
+    const manifest = JSON.parse(fs.readFileSync(new URL('../public/manifest.webmanifest', import.meta.url), 'utf8'));
+    assert.equal(manifest.display, 'standalone');
+    assert.equal(manifest.start_url, '/');
+    assert.ok(manifest.icons.some((i) => i.sizes === '192x192'));
+    assert.ok(manifest.icons.some((i) => i.sizes === '512x512' && i.purpose === 'any'));
+    assert.ok(manifest.icons.some((i) => i.sizes === '512x512' && i.purpose === 'maskable'));
+    assert.ok(manifest.shortcuts.length >= 4);
+  });
 });
+

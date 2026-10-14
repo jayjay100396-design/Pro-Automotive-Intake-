@@ -10,6 +10,12 @@ import { getStorage, connectStorageEmulator, ref, uploadBytesResumable } from 'h
 import { useEmulators, loadConfig } from './config.js';
 import { SITE_ID, BRAND } from './brand.js';
 import { autosize } from './autosize.js';
+import { initPwaInstall, triggerInstallOrModal } from './pwa.js';
+
+initPwaInstall();
+document.querySelectorAll('[data-install-app]').forEach((btn) => {
+  btn.addEventListener('click', () => triggerInstallOrModal(document.body));
+});
 
 const MB = 1024 * 1024;
 const MAX_FILES = 8;
