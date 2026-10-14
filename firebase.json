@@ -1,10 +1,16 @@
 {
   "firestore": {
     "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json"
+    "indexes": "firestore.indexes.json",
+    "predeploy": [
+      "bash \"$PROJECT_DIR/scripts/deploy-guard.sh\""
+    ]
   },
   "storage": {
-    "rules": "storage.rules"
+    "rules": "storage.rules",
+    "predeploy": [
+      "bash \"$PROJECT_DIR/scripts/deploy-guard.sh\""
+    ]
   },
   "ailogic": {
     "templates": "prompts"
@@ -13,6 +19,9 @@
     {
       "source": "functions",
       "codebase": "default",
+      "predeploy": [
+        "bash \"$PROJECT_DIR/scripts/deploy-guard.sh\""
+      ],
       "ignore": [
         "node_modules",
         ".git",
@@ -25,6 +34,9 @@
     {
       "source": "functions-calendar",
       "codebase": "calendar",
+      "predeploy": [
+        "bash \"$PROJECT_DIR/scripts/deploy-guard.sh\""
+      ],
       "ignore": [
         "node_modules",
         ".git",
@@ -37,6 +49,9 @@
     {
       "source": "functions-alerts",
       "codebase": "alerts",
+      "predeploy": [
+        "bash \"$PROJECT_DIR/scripts/deploy-guard.sh\""
+      ],
       "ignore": [
         "node_modules",
         ".git",
@@ -49,6 +64,9 @@
     {
       "source": "functions-parts",
       "codebase": "parts",
+      "predeploy": [
+        "bash \"$PROJECT_DIR/scripts/deploy-guard.sh\""
+      ],
       "ignore": [
         "node_modules",
         ".git",
@@ -62,6 +80,9 @@
   "hosting": {
     "public": "public",
     "cleanUrls": true,
+    "predeploy": [
+      "bash \"$PROJECT_DIR/scripts/deploy-guard.sh\""
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",
