@@ -16,6 +16,7 @@ import { fileBrowser, countJobFiles } from './files.js';
 import { alertEmails, parseEmails, lastAlertNote, MAX_ALERT_EMAILS } from './requests.js';
 import { jobParts, openPartsCount, latePartsCount, dueSoonCount } from './parts.js';
 import { DRAFT_KEY } from './takeoff/takeoff.js';
+import { openTutorialModal } from './takeoff/tutorial.js';
 import { sendProposal, sentNote } from './proposal-send.js';
 
 // The schedule's cards on the dashboard and job pages, and the Google Calendar panel in Settings.
@@ -97,7 +98,7 @@ export function dashboard() {
   return {
     live: true,
     html: `
-    ${header(`${esc(state.company?.name || 'Stellar Glass')}`, can.edit() ? `<a class="btn primary" href="#/jobs/new">New job</a> <a class="btn" href="#/estimates/new">New estimate</a>` : '')}
+    ${header(`${esc(state.company?.name || 'Stellar Glass')}`, `<button type="button" class="btn" data-open-tutorial title="Watch the 2-minute CAD & 3D Takeoff walkthrough">▶ Walkthrough video</button> ${can.edit() ? `<a class="btn" href="#/takeoff/local">CAD / Drawing Takeoff</a> <a class="btn primary" href="#/jobs/new">New job</a> <a class="btn" href="#/estimates/new">New estimate</a>` : ''}`)}
     <div class="tiles">
       <a class="tile" href="#/requests">${tileIcon('i-green', 'requests')}<span class="t-label">New requests</span><span class="t-value">${newRequests.length}</span><span class="t-sub">from the website quote page</span></a>
       <a class="tile" href="#/schedule">${tileIcon('i-teal', 'schedule')}<span class="t-label">On today</span><span class="t-value">${sched.today}</span><span class="t-sub ${sched.overdue ? 'warn' : ''}">${sched.overdue ? `${sched.overdue} overdue task${sched.overdue === 1 ? '' : 's'}` : 'on the schedule'}</span></a>
@@ -116,6 +117,11 @@ export function dashboard() {
       ${recentJobs.map((j) => `<tr data-href="#/jobs/${esc(j.id)}"><td>${esc(j.name)}</td><td>${esc(customerName(j.customerId))}</td><td>${esc(JOB_TYPES.find((t) => t[0] === j.type)?.[1] || '')}</td><td>${badge(j.status)}</td></tr>`).join('')}
       </tbody></table>` : empty('No jobs yet. Start with a customer and a job, then build the estimate.', can.edit() ? '<a class="btn primary" href="#/jobs/new">Add the first job</a>' : '')}
     </div>`,
+    mount(root) {
+      root.querySelector('[data-open-tutorial]')?.addEventListener('click', () => {
+        openTutorialModal(root, { showOpenTakeoff: true });
+      });
+    },
   };
 }
 
@@ -267,8 +273,18 @@ export function jobEdit(id, params) {
 
 // ---------- Files across all jobs ----------
 export function filesPage(params) {
-  const files = fileBrowser({ jobId: null, startJob: params.get('job') || '' });
-  return { html: `${header('Files')}${files.html}`, mount: files.mount, unmount: files.unmount };
+  const jobId = params.get('job') || '';
+  const files = fileBrowser({ jobId: null, startJob: jobId });
+  return {
+    html: `${header('Files', `<button type="button" class="btn" data-open-tutorial title="Watch the 2-minute CAD & 3D Takeoff walkthrough">▶ Walkthrough video</button> ${can.edit() ? `<a class="btn primary" href="#/takeoff/local${jobId ? `?job=${esc(jobId)}` : ''}">CAD / Drawing Takeoff</a>` : ''}`)}${files.html}`,
+    mount(root) {
+      files.mount(root);
+      root.querySelector('[data-open-tutorial]')?.addEventListener('click', () => {
+        openTutorialModal(root, { showOpenTakeoff: true });
+      });
+    },
+    unmount: files.unmount,
+  };
 }
 
 // ---------- Estimates ----------

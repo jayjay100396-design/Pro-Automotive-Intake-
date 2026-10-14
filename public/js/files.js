@@ -253,15 +253,17 @@ export function fileBrowser({ jobId = null, startJob = '' } = {}) {
   function renderUpload() {
     if (!el) return;
     const box = el.querySelector('[data-upload]');
+    const takeoffBtn = can.edit() ? `<a class="btn small" href="#/takeoff/local${jobFilter ? `?job=${esc(jobFilter)}` : ''}" title="Open a CAD (.DXF/.DWG), PDF drawing or photo for takeoff">CAD / Drawing Takeoff</a>` : '';
     if (!canUpload()) {
-      box.innerHTML = jobId ? '' : '<span class="muted small">Choose a job to add files to it.</span>';
+      box.innerHTML = `${takeoffBtn} ${jobId ? '' : '<span class="muted small">Choose a job to add files to it.</span>'}`;
       return;
     }
     const cats = isAccountant() ? CATEGORIES.filter((c) => ACCOUNTANT_CATS.includes(c.key)) : CATEGORIES;
     box.innerHTML = `
       <label class="small add-to">Add to <select data-addto>${options([...(isAccountant() ? [] : [['auto', 'Sort by type']]), ...cats.map((c) => [c.key, c.label])], addTo)}</select></label>
       ${touch ? '<button type="button" class="btn small primary" data-take>Take photo</button>' : ''}
-      <button type="button" class="btn small ${touch ? '' : 'primary'}" data-add>Add files</button>`;
+      <button type="button" class="btn small ${touch ? '' : 'primary'}" data-add>Add files</button>
+      ${takeoffBtn}`;
   }
 
   function renderChips() {

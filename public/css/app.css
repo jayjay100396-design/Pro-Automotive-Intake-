@@ -650,6 +650,15 @@ dialog.tk-3d-dlg::backdrop { background: rgba(8, 18, 30, .72); }
 .tk-3d-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: .95rem; }
 .tk-3d-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: .6rem; padding: .65rem .8rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
 .tk-3d-stats > div { display: flex; flex-direction: column; gap: .15rem; }
+dialog.tk-video-dlg { width: min(1040px, 96vw); max-height: 92vh; padding: 1.1rem; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 12px 48px rgba(0, 0, 0, .45); overflow-y: auto; }
+dialog.tk-video-dlg::backdrop { background: rgba(8, 18, 30, .72); }
+.tk-video-wrap { display: flex; flex-direction: column; gap: .7rem; }
+.tk-video-head h2 { margin: 0; }
+.tk-video-head p { margin: .15rem 0 0; }
+.tk-video-stage { width: 100%; border-radius: var(--radius-sm); overflow: hidden; background: #0f172a; border: 1px solid var(--border); }
+.tk-video-stage video { display: block; width: 100%; max-height: 62vh; background: #0f172a; }
+.tk-video-chapters { display: flex; flex-wrap: wrap; gap: .4rem; }
+.tk-video-note { margin: 0; }
 @media (max-width: 1100px) {
   .takeoff { grid-template-columns: minmax(0, 1fr); }
   .tk-scroll { height: 62vh; }

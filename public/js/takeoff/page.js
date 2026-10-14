@@ -18,6 +18,7 @@ import { readPage, geminiAvailable, imagesFor, estimateCents, usageCents, fmtCen
 import { openingsFrom } from './vision.js';
 import { detectCadKind, loadCadBytes, applyCadLayerFilter, renderCadToCanvas } from './cad.js';
 import { open3DViewerModal } from './viewer3d.js';
+import { openTutorialModal } from './tutorial.js';
 
 const MAX_CANVAS = 6000; // pixels on the long side; bigger sheets are drawn a little softer when zoomed in
 
@@ -59,6 +60,7 @@ export function takeoffPage(fileId, params) {
   const pageCount = () => (pdf ? pdf.numPages : (img || cad) ? 1 : 0);
 
   const html = `${header('Takeoff', `
+    <button type="button" class="btn" data-open-tutorial title="Watch the 2-minute narrated walkthrough">▶ Walkthrough Video</button>
     <button type="button" class="btn" data-open-3d title="Inspect storefront mullions, transoms and glass in 3D">3D Storefront View</button>
     <a class="btn" href="${local ? `#/jobs/${esc(jobId)}?tab=files` : '#/files'}" data-back>Back to files</a>
   `)}
@@ -598,9 +600,10 @@ export function takeoffPage(fileId, params) {
   function renderOpen() {
     const box = el.querySelector('[data-open]');
     const j = job();
-    box.innerHTML = `<h2>${esc(file?.name || 'Drawing')}</h2>
+    box.innerHTML = `<div class="row between"><h2>${esc(file?.name || 'Drawing')}</h2><button type="button" class="btn small" data-open-tutorial-card title="Watch the 2-minute walkthrough">▶ How it works</button></div>
       <p class="small muted">${j ? `Job: <a href="#/jobs/${esc(j.id)}">${esc(j.name)}</a>` : 'No job picked'}</p>
       <label class="small">Open a CAD (.DXF, .DWG), PDF drawing or photo from this computer <input type="file" accept=".dxf,.dwg,image/vnd.dxf,image/vnd.dwg,application/pdf,.pdf,image/jpeg,image/png,image/webp" data-local></label>`;
+    box.querySelector('[data-open-tutorial-card]')?.addEventListener('click', () => openTutorialModal(el));
     box.querySelector('[data-local]').addEventListener('change', async (e) => {
       const f = e.target.files[0];
       if (!f) return;
@@ -995,6 +998,9 @@ export function takeoffPage(fileId, params) {
     el.querySelector('[data-order-glass]')?.addEventListener('click', () => createPartsOrder('glass'));
     el.querySelector('[data-order-parts]')?.addEventListener('click', () => createPartsOrder('parts'));
     el.querySelector('[data-save]')?.addEventListener('click', () => save());
+    el.querySelectorAll('[data-open-tutorial]').forEach((b) => b.addEventListener('click', () => {
+      openTutorialModal(el);
+    }));
     el.querySelectorAll('[data-open-3d]').forEach((b) => b.addEventListener('click', () => {
       open3DViewerModal(el, {
         rows: cleanRows(),
