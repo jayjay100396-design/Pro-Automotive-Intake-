@@ -47,7 +47,7 @@ export const safeUrl = (u) => {
 const driveUrl = (u) => (/^https:\/\/(drive|docs)\.google\.com\//.test(u) ? u : '');
 
 // The same limits as storage.rules, checked first so people get a clear message.
-function problem(file) {
+export function problem(file) {
   const t = typeOf(file);
   const ok = /^image\//.test(t) || /^video\//.test(t) || t === 'application/pdf' || /^text\/(plain|csv)$/.test(t) || t === 'message/rfc822'
     || /^application\/(msword|vnd\.ms-excel|vnd\.ms-powerpoint|vnd\.openxmlformats-officedocument\..+)$/.test(t);
@@ -84,7 +84,7 @@ async function makeThumb(file) {
   }
 }
 
-async function uploadOne(file, job, category, progress) {
+export async function uploadOne(file, job, category, progress = () => {}) {
   const id = newId('files');
   const contentType = typeOf(file);
   const name = file.name || `Photo ${new Date().toLocaleString()}.jpg`;
@@ -138,7 +138,7 @@ async function download(rec) {
 
 // Copies one file into the person's Drive and notes it on the file's record.
 // `blob` is the file itself when it was just uploaded; otherwise it's downloaded from storage.
-async function copyToDrive(rec, blob) {
+export async function copyToDrive(rec, blob) {
   const job = get('jobs', rec.jobId) || { id: rec.jobId, name: 'Deleted job', customerId: rec.customerId || '', deleted: true };
   const customerId = job.customerId || '';
   const folderId = await drive.jobFolder({

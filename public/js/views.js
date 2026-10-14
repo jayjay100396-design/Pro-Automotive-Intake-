@@ -17,6 +17,7 @@ import { alertEmails, parseEmails, lastAlertNote, MAX_ALERT_EMAILS } from './req
 import { jobParts, openPartsCount, latePartsCount, dueSoonCount } from './parts.js';
 import { DRAFT_KEY } from './takeoff/takeoff.js';
 import { openTutorialModal } from './takeoff/tutorial.js';
+import { openAccountantTutorialModal } from './accounting.js';
 import { sendProposal, sentNote, senderChoices, person } from './proposal-send.js';
 
 // The schedule's cards on the dashboard and job pages, and the Google Calendar panel in Settings.
@@ -90,6 +91,7 @@ export function dashboard() {
     ['contracts', 'Change order', `${pendingCOs} pending`],
     ['payapps', 'Pay app', `${pending.length} awaiting payment`],
     ['invoices', 'Invoice', `${unpaid.length} unpaid`],
+    ['accounting', 'Notary & Sync', 'Waivers & QuickBooks'],
   ];
   const partsLate = latePartsCount();
   const sched = scheduleSummary();
@@ -98,7 +100,7 @@ export function dashboard() {
   return {
     live: true,
     html: `
-    ${header(`${esc(state.company?.name || 'Stellar Glass')}`, `<button type="button" class="btn" data-open-tutorial title="Watch the 2-minute CAD & 3D Takeoff walkthrough">▶ Walkthrough video</button> ${can.edit() ? `<a class="btn" href="#/takeoff/local">CAD / Drawing Takeoff</a> <a class="btn primary" href="#/jobs/new">New job</a> <a class="btn" href="#/estimates/new">New estimate</a>` : ''}`)}
+    ${header(`${esc(state.company?.name || 'Stellar Glass')}`, `<a class="btn" href="#/accounting">⚖️ Accounting &amp; Notary Hub</a> <button type="button" class="btn" data-open-acct-tutorial title="Watch the Accountant & Notary Guide for Melina S. Arias, Wesley Stel & Jason Vergara">▶ Accountant video</button> <button type="button" class="btn" data-open-tutorial title="Watch the CAD & 3D Takeoff walkthrough">▶ Takeoff video</button> ${can.edit() ? `<a class="btn" href="#/takeoff/local">CAD / Drawing Takeoff</a> <a class="btn primary" href="#/jobs/new">New job</a> <a class="btn" href="#/estimates/new">New estimate</a>` : ''}`)}
     <div class="tiles">
       <a class="tile" href="#/requests">${tileIcon('i-green', 'requests')}<span class="t-label">New requests</span><span class="t-value">${newRequests.length}</span><span class="t-sub">from the website quote page</span></a>
       <a class="tile" href="#/schedule">${tileIcon('i-teal', 'schedule')}<span class="t-label">On today</span><span class="t-value">${sched.today}</span><span class="t-sub ${sched.overdue ? 'warn' : ''}">${sched.overdue ? `${sched.overdue} overdue task${sched.overdue === 1 ? '' : 's'}` : 'on the schedule'}</span></a>
@@ -120,6 +122,9 @@ export function dashboard() {
     mount(root) {
       root.querySelector('[data-open-tutorial]')?.addEventListener('click', () => {
         openTutorialModal(root, { showOpenTakeoff: true });
+      });
+      root.querySelector('[data-open-acct-tutorial]')?.addEventListener('click', () => {
+        openAccountantTutorialModal(root);
       });
     },
   };
@@ -901,7 +906,7 @@ export function payApps() {
   const rows = [...D().payApps].sort((a, b) => (a.jobId || '').localeCompare(b.jobId || '') || sortNum(a, b));
   return {
     live: true,
-    html: `${header('Pay apps')}
+    html: `${header('Pay apps', '<a class="btn" href="#/accounting">⚖️ Accounting &amp; Notary Hub</a> <a class="btn" href="#/accounting/waiver/print?kind=progress">⚖️ Florida Lien Waiver (§ 713.20)</a>')}
     <p class="muted">Progress billing on AIA G702/G703. Start a pay app from its contract.</p>
     <div class="card">${rows.length ? `<table class="list"><thead><tr><th>Job</th><th>App #</th><th>Period to</th><th>Status</th><th class="num">Completed to date</th><th class="num">Retainage</th><th class="num">Current due</th></tr></thead><tbody>
     ${rows.map((p) => { const s = payAppSummary(p); return `<tr data-href="#/payapps/${esc(p.id)}"><td>${esc(jobName(p.jobId))}</td><td>${esc(p.number)}</td><td>${fmtDate(p.periodTo)}</td><td>${badge(p.status)}</td><td class="num">${money(s.totalCompleted)}</td><td class="num">${money(s.totalRetainage)}</td><td class="num">${money(s.currentDue)}</td></tr>`; }).join('')}
@@ -927,7 +932,9 @@ export function payAppEdit(id) {
   const ro = can.bill() ? '' : 'disabled';
   const c = get('contracts', p.contractId);
   return {
-    html: `${header(`Pay app ${esc(p.number)}`, `<a class="btn" href="#/payapps/${esc(id)}/print">Print G702/G703</a>
+    html: `${header(`Pay app ${esc(p.number)}`, `<a class="btn" href="#/payapps/${esc(id)}/print">Print G702/G703 + Notary</a>
+      <a class="btn" href="#/accounting/waiver/print?payApp=${esc(id)}&amp;kind=progress">⚖️ Partial Lien Waiver (§ 713.20)</a>
+      <a class="btn" href="#/accounting/waiver/print?payApp=${esc(id)}&amp;kind=final">⚖️ Final Waiver</a>
       ${can.bill() ? '<button class="btn" id="toinvoice">Create invoice</button>' : ''}
       ${can.remove() ? '<button class="btn danger" id="del">Delete</button>' : ''}`)}
     <p class="muted">${jobLink(p.jobId)}${c ? ` · <a href="#/contracts/${esc(c.id)}">Contract ${esc(c.number)}</a>` : ''}</p>
@@ -1066,7 +1073,7 @@ export function invoices() {
   const rows = [...D().invoices].sort(sortNum);
   return {
     live: true,
-    html: `${header('Invoices', can.bill() ? '<a class="btn primary" href="#/invoices/new">New invoice</a>' : '')}
+    html: `${header('Invoices', `<a class="btn" href="#/accounting">⚖️ Accounting &amp; QuickBooks Sync</a> ${can.bill() ? '<a class="btn primary" href="#/invoices/new">New invoice</a>' : ''}`)}
     <div class="card">${rows.length ? `<table class="list"><thead><tr><th>#</th><th>Job</th><th>Customer</th><th>Date</th><th>Due</th><th>Status</th><th class="num">Total</th></tr></thead><tbody>
     ${rows.map((i) => { const late = i.status === 'unpaid' && i.dueDate && i.dueDate < today(); return `<tr data-href="#/invoices/${esc(i.id)}"><td>${esc(i.number)}</td><td>${esc(jobName(i.jobId))}</td><td>${esc(customerName(i.customerId))}</td><td>${fmtDate(i.date)}</td><td class="${late ? 'warn' : ''}">${fmtDate(i.dueDate)}${late ? ' (overdue)' : ''}</td><td>${badge(i.status === 'unpaid' && paidOn(i) > 0 ? 'partly paid' : i.status)}</td><td class="num">${money(invoiceTotals(i).total)}</td></tr>`; }).join('')}
     </tbody></table>` : empty('No invoices yet.')}</div>`,
@@ -1105,6 +1112,7 @@ export function invoiceEdit(id, params) {
   return {
     html: `${header(isNew ? 'New invoice' : `Invoice ${esc(inv.number)}`, `
       ${!isNew ? `<a class="btn" href="#/invoices/${esc(id)}/print">Print / PDF</a>` : ''}
+      ${!isNew ? `<a class="btn" href="#/accounting/waiver/print?invoice=${esc(id)}&amp;kind=progress">⚖️ Lien Waiver (§ 713.20)</a>` : ''}
       ${!isNew && can.bill() ? `<button class="btn primary" id="paid" ${inv.status === 'unpaid' ? '' : 'hidden'}>Record payment</button>` : ''}
       ${!isNew && can.remove() ? '<button class="btn danger" id="del">Delete</button>' : ''}`)}
     ${inv.payAppId ? `<p class="muted">From <a href="#/payapps/${esc(inv.payAppId)}">pay app ${esc(get('payApps', inv.payAppId)?.number || '')}</a></p>` : ''}

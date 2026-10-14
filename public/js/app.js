@@ -12,6 +12,7 @@ import * as S from './schedule.js';
 import { websitePage } from './website.js';
 import { takeoffPage } from './takeoff/page.js';
 import { openTutorialModal } from './takeoff/tutorial.js';
+import { accountingPage, openAccountantTutorialModal } from './accounting.js';
 import { esc, toast } from './ui.js';
 import { BRAND, logoHtml } from './brand.js';
 import { autosize } from './autosize.js';
@@ -40,11 +41,13 @@ const routes = [
   [/^contracts\/([^/]+)$/, (m) => V.contractEdit(m[1])],
   [/^changeorders\/([^/]+)\/print$/, (m) => P.changeOrderDoc(m[1])],
   [/^payapps$/, () => V.payApps()],
-  [/^payapps\/([^/]+)\/print$/, (m) => P.payAppDoc(m[1])],
+  [/^payapps\/([^/]+)\/print$/, (m, q) => P.payAppDoc(m[1], q)],
   [/^payapps\/([^/]+)$/, (m) => V.payAppEdit(m[1])],
   [/^invoices$/, () => V.invoices()],
   [/^invoices\/([^/]+)\/print$/, (m) => P.invoiceDoc(m[1])],
   [/^invoices\/([^/]+)$/, (m, q) => V.invoiceEdit(m[1], q)],
+  [/^accounting$/, () => accountingPage()],
+  [/^accounting\/waiver\/print$/, (m, q) => P.lienWaiverDoc(q)],
   [/^parts$/, (m, q) => PT.partsList(q)],
   [/^parts\/([^/]+)$/, (m, q) => PT.partsEdit(m[1], q)],
   [/^suppliers$/, () => SP.supplierList()],
@@ -53,7 +56,7 @@ const routes = [
   [/^settings$/, () => V.settings()],
 ];
 
-const NAV = [['', 'Dashboard'], ['schedule', 'Schedule'], ['requests', 'Requests'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates'], ['contracts', 'Contracts'], ['payapps', 'Pay apps'], ['invoices', 'Invoices'], ['parts', 'Parts orders'], ['suppliers', 'Suppliers'], ['website', 'Website'], ['settings', 'Settings']];
+const NAV = [['', 'Dashboard'], ['schedule', 'Schedule'], ['requests', 'Requests'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates'], ['contracts', 'Contracts'], ['payapps', 'Pay apps'], ['invoices', 'Invoices'], ['accounting', 'Accounting & Notary'], ['parts', 'Parts orders'], ['suppliers', 'Suppliers'], ['website', 'Website'], ['settings', 'Settings']];
 
 // Sidebar groups: [label, [[section, link text, icon]]]. Icons are 24px stroke paths.
 const ICONS = {
@@ -67,6 +70,7 @@ const ICONS = {
   contracts: '<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
   payapps: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>',
   invoices: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  accounting: '<path d="M12 3v18"/><path d="m19 8 3 8a5 5 0 0 1-6 0z"/><path d="M3 7h18"/><path d="m5 8 3 8a5 5 0 0 1-6 0z"/><path d="M7 21h10"/>',
   parts: '<path d="M16.5 9.4 7.55 4.24"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.29 7 12 12 20.71 7"/><line x1="12" y1="22" x2="12" y2="12"/>',
   suppliers: '<path d="M10 17h4V5H2v12h3"/><path d="M20 17h2v-3.34a4 4 0 0 0-1.17-2.83L19 9h-5"/><path d="M14 17h1"/><circle cx="7.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
   website: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
@@ -74,7 +78,7 @@ const ICONS = {
 };
 const GROUPS = [
   ['Management', [['', 'Dashboard'], ['schedule', 'Schedule'], ['requests', 'Requests'], ['jobs', 'Jobs'], ['files', 'Files'], ['customers', 'Customers'], ['estimates', 'Estimates']]],
-  ['Billing & contracts', [['contracts', 'Contracts'], ['payapps', 'Pay apps (G702)'], ['invoices', 'Invoices']]],
+  ['Billing & contracts', [['contracts', 'Contracts'], ['payapps', 'Pay apps (G702)'], ['invoices', 'Invoices'], ['accounting', 'Accounting & Notary']]],
   ['Suppliers & parts', [['parts', 'Parts orders'], ['suppliers', 'Suppliers']]],
   ['Admin', [['website', 'Website'], ['settings', 'Settings']]],
 ];
@@ -90,6 +94,7 @@ const SUBTITLES = {
   contracts: 'Contracts and their change orders.',
   payapps: 'AIA G702/G703 progress billing with retainage.',
   invoices: 'Simple invoices and what is still owed.',
+  accounting: 'Notary queue, Florida § 713.20 lien waivers, document vault & QuickBooks / Xero sync.',
   parts: 'Quote requests and orders to suppliers, tracked until everything is in.',
   suppliers: 'Who you buy from, their branches, and where requests go.',
   website: 'Photos on your public quote page. Upload sharp ones of your own work.',
@@ -141,6 +146,8 @@ function openQuickJumpModal() {
     ['#/contracts', '✍️ Contracts & Change Orders', 'Signed contracts, SOV & change orders'],
     ['#/payapps', '🏗️ AIA G702 / G703 Pay Apps', 'Commercial progress billing & retainage'],
     ['#/invoices', '💵 Invoices & Online Payments', 'Customer invoices & Stripe online payments'],
+    ['#/accounting', '⚖️ Accounting & Notary Hub', 'Melina S. Arias Notary Queue, Florida § 713.20 Lien Waivers & QuickBooks/Xero Sync'],
+    ['#/accounting/waiver/print?kind=progress', '📜 Print Florida Lien Waiver (§ 713.20)', 'Partial or Final Waiver & Release of Lien Upon Payment'],
     ['#/website', '🌐 Website Photos & Quote Page', 'Manage high-res photos on your public quote page'],
     ['#/settings', '⚙️ Settings & Team Members', 'Company profile, team invites & Google Calendar'],
   ];
@@ -234,7 +241,9 @@ function shell() {
         <a class="q-pill" href="#/files" title="Job plans, CAD files & photos">📁 Files</a>
         <a class="q-pill" href="#/payapps" title="AIA G702/G703 Pay Applications">🏗️ Pay Apps</a>
         <a class="q-pill" href="#/invoices" title="Customer invoices & Stripe payments">💵 Invoices</a>
-        <button type="button" class="q-pill video" data-global-tutorial title="Watch the full Start-to-Finish Stellar Glass walkthrough video">▶ Walkthrough Video</button>
+        <a class="q-pill" href="#/accounting" title="Notary Queue (Melina S. Arias), Florida § 713.20 Lien Waivers & QuickBooks/Xero Sync">⚖️ Accounting &amp; Notary</a>
+        <button type="button" class="q-pill video" data-acct-tutorial title="Watch the Accountant & Notary Guide for Melina S. Arias, Wesley Stel & Jason Vergara">▶ Accountant Video</button>
+        <button type="button" class="q-pill video" data-global-tutorial title="Watch the full Start-to-Finish Stellar Glass walkthrough video">▶ Takeoff Video</button>
         <button type="button" class="q-pill search" data-quick-jump title="Search jobs, proposals, customers or shortcuts (⌘K)">⚡ Quick Jump</button>
       </nav>
       <main id="view"></main>
@@ -245,6 +254,7 @@ function shell() {
   root.querySelector('#scrim').addEventListener('click', () => root.querySelector('#shell').classList.remove('nav-open'));
   root.querySelectorAll('[data-theme-toggle]').forEach((b) => b.addEventListener('click', toggleTheme));
   root.querySelector('[data-global-tutorial]')?.addEventListener('click', () => openTutorialModal(root, { showOpenTakeoff: true }));
+  root.querySelector('[data-acct-tutorial]')?.addEventListener('click', () => openAccountantTutorialModal(root));
   root.querySelector('[data-quick-jump]')?.addEventListener('click', () => openQuickJumpModal());
 }
 

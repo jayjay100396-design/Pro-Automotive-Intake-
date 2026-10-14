@@ -6,13 +6,13 @@ import { esc } from '../ui.js';
 export const TUTORIAL_VIDEO_URL = '/media/takeoff-walkthrough.mp4';
 
 export const TUTORIAL_CHAPTERS = [
-  { step: 1, time: 0, label: '0:00 · 1. Dashboard & Shortcuts', detail: 'Use the Quick Shortcuts bar or ⌘K Quick Jump anywhere, and convert incoming Website Quote Requests into Customers, Jobs, and Google Calendar measures.' },
+  { step: 1, time: 0, label: '0:00 · 1. Dashboard & Shortcuts', detail: 'Welcome Wesley Stel & Jason Vergara! Use the Quick Shortcuts bar or ⌘K Quick Jump anywhere, and convert incoming Website Quote Requests into Customers, Jobs, and Google Calendar measures.' },
   { step: 2, time: 26.5, label: '0:26 · 2. Job Files & CAD 1:1', detail: 'Store PDFs, photos, and AutoCAD .DXF/.DWG drawings backed up to Google Drive, and open CAD drawings at 1:1 true scale with automatic window tag counting.' },
   { step: 3, time: 52, label: '0:52 · 3. CAD Layers & Box W×H', detail: 'Click Glazing & Dims to hide A-WALL & A-GRID clutter, then measure openings with 2-click Box W×H or trace floor runs with Perimeter LF.' },
   { step: 4, time: 76, label: '1:16 · 4. Storefront Cut Sizes', detail: 'Pick CG451 1-3/4" Storefront, 2" Storefront, Curtain Wall, or Frameless to get DLO + 3/8" pocket bite cut sizes, 24\' stock lengths, and sealant tubes.' },
   { step: 5, time: 103, label: '1:43 · 5. 3D Storefront View', detail: 'Orbit and zoom your storefront mullions & transoms in 3D, switch anodized finishes & Low-E tints, and save a PNG snapshot.' },
-  { step: 6, time: 122.5, label: '2:02 · 6. Proposals & Trulite Orders', detail: 'Select who is sending the proposal (shown on the PDF signature & email) or pre-fill a Trulite / Glass Shop parts request in one click.' },
-  { step: 7, time: 144, label: '2:24 · 7. Contracts, AIA G702 & Invoices', detail: 'Convert accepted proposals to Contracts, track Change Orders, generate AIA G702/G703 progress pay apps with retainage, and send Stripe invoices.' },
+  { step: 6, time: 122.5, label: '2:02 · 6. Proposals & Trulite Orders', detail: 'Select whether Wesley Stel or Jason Vergara is sending the proposal (shown on the PDF signature & email) or pre-fill a Trulite / Glass Shop parts request in one click.' },
+  { step: 7, time: 144, label: '2:24 · 7. Contracts, AIA G702 & Accounting', detail: 'Convert accepted proposals to Contracts, track Change Orders, generate AIA G702/G703 progress pay apps with retainage, and sync with Melina S. Arias in the Accounting & Notary Hub.' },
 ];
 
 export function openTutorialModal(hostEl = document.body, { showOpenTakeoff = false } = {}) {

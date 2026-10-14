@@ -1,34 +1,58 @@
 WEBVTT
 
-00:00:00.000 --> 00:00:13.000
-Hey Wes — welcome to your complete start-to-finish walkthrough of Stellar Glass. Every job starts right here on the Dashboard, with your Quick Shortcuts bar and Quick Jump search at the top of every screen.
+00:00.000 --> 00:09.000
+Hey Wesley, hey Jason! Here's a quick walkthrough of the Stellar Glass workspace.
 
-00:00:13.000 --> 00:00:26.500
-When a customer or general contractor submits a request on your public website, it lands in New Requests — ready to turn into a Customer, a Job, and a site measure on your Google-synced Schedule.
+00:09.000 --> 00:18.000
+Right at the top of the screen, you've got one-click shortcut buttons to jump straight to CAD Takeoff, Proposals, Billing, or Melina S. Arias's Accounting Hub, plus Command-K search from anywhere.
 
-00:00:26.500 --> 00:00:39.000
-Next, inside your Job Files, you can store site photos, contracts, PDF plans, and AutoCAD DXF or DWG drawings — all automatically backed up to Google Drive.
+00:18.000 --> 00:26.500
+And whenever a customer requests a quote on your public website, it lands right here in Website Requests so you can turn it into a job and schedule the measure in one click.
 
-00:00:39.000 --> 00:00:52.000
-Click CAD and 3D Takeoff on any drawing, and Stellar Glass reads the CAD unit header so your sheet opens immediately at true 1:1 scale, counting window tags right off the elevation.
+00:26.500 --> 00:35.500
+Inside any job, open the Files tab to drop in architectural PDFs, site photos, or AutoCAD DXF and DWG drawings.
 
-00:00:52.000 --> 00:01:04.000
-To clean up a busy architectural sheet, click Glazing and Dims in the CAD Layers bar to hide walls and ceiling grids in one click.
+00:35.500 --> 00:44.000
+Everything backs up automatically to your Google Drive folder.
 
-00:01:04.000 --> 00:01:16.000
-Then select Box Width-by-Height and click two opposite corners of any opening to capture width, height, square footage, and perimeter linear feet — or use Perimeter LF to trace storefront runs.
+00:44.000 --> 00:52.000
+Click Open in CAD and 3D Takeoff on any drawing, and Stellar Glass loads the vector geometry at true one-to-one scale and counts every window and storefront tag on the sheet.
 
-00:01:16.000 --> 00:01:29.500
-Now pick your commercial framing system — like 1-3/4 by 4-1/2 inch center-glazed storefront, curtain wall, or frameless heavy glass — and set the number of bays.
+00:52.000 --> 01:00.500
+To clean up a busy architectural floor plan, just click the Glazing and Dims filter chip.
 
-00:01:29.500 --> 00:01:43.000
-Stellar Glass automatically deducts the 1/2 inch rough opening clearance, the jambs, head, sill, and vertical mullions, adds the 3/8 inch glass pocket bite, and gives you the exact glass cut size, 24-foot stock lengths, and sealant tubes.
+01:00.500 --> 01:08.500
+That hides the structural grids, walls, and hatching so only your storefront elevations and dimensions stay on screen.
 
-00:01:43.000 --> 00:02:02.500
-Before ordering glass, click 3D Storefront View at the top right to orbit and zoom around the 3D mullions, transoms, and glass lites, preview anodized finishes and Low-E glass tints, and save a PNG snapshot.
+01:08.500 --> 01:16.000
+Then pick the Box Width-by-Height tool, click two corners of any opening, or trace continuous runs with the Perimeter tool to log your footage.
 
-00:02:02.500 --> 00:02:24.000
-When you're ready to price or order, click Create Proposal, Order Glass, or Order Framing and Parts. Pick who is sending the proposal so their name and title appear on both the PDF signature and email, and send cut sizes straight to a Trulite order.
+01:16.000 --> 01:25.000
+Next, choose your framing system, like Trulite CG451 four-and-a-half-inch storefront or frameless heavy glass shower enclosures.
 
-00:02:24.000 --> 00:02:47.000
-Finally, once the customer accepts your proposal, convert it to a Contract in one click, track Change Orders, bill GCs with AIA G702 and G703 progress pay applications, or send an Invoice with online Stripe payment.
+01:25.000 --> 01:34.000
+Stellar Glass automatically deducts the perimeter caulk joints, jambs, head, sill, and intermediate mullions.
+
+01:34.000 --> 01:43.000
+You get the exact Daylight Opening, the tempered or insulated glass cut size, and the twenty-four-foot aluminum stock lengths and sealant tubes needed for the job.
+
+01:43.000 --> 01:51.000
+Want to double-check the elevation before ordering glass? Click View in 3D to orbit and zoom around the storefront frame.
+
+01:51.000 --> 02:02.500
+You can preview Clear Anodized, Dark Bronze, or Matte Black aluminum finishes with Low-E tinted glass, inspect every mullion and transom, and save a snapshot right into the job folder.
+
+02:02.500 --> 02:11.500
+When you're ready to price the job or order material, click Send to Proposal or Send to Trulite Order.
+
+02:11.500 --> 02:24.000
+On every proposal, you can choose whether Wesley Stel or Jason Vergara is sending the estimate, so the PDF signature block and outgoing email show your exact name and title.
+
+02:24.000 --> 02:32.500
+Once a customer accepts your proposal, convert it into a Contract with a single click and track any Change Orders along the way.
+
+02:32.500 --> 02:41.000
+From there, you can generate AIA G702 and G703 progress pay applications with ten percent retainage, or send a Stripe payment link on an invoice.
+
+02:41.000 --> 02:48.500
+And everything flows automatically into the Accounting and Notary Hub for Melina S. Arias to notarize and sync with QuickBooks.
