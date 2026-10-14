@@ -583,8 +583,40 @@ describe('Firestore rules', function () {
     });
   });
 
-  it('keeps user profiles private', async () => {
+  it('keeps user profiles private and bounded', async () => {
     await assertSucceeds(setDoc(doc(db('wes'), 'users/wes'), { name: 'Wes' }));
     await assertFails(getDoc(doc(db('crew'), 'users/wes')));
+    await assertFails(deleteDoc(doc(db('wes'), 'users/wes')));
+  });
+
+  it('denies unlisted collections under a company and locks subcollections on live paid/open Stripe invoices', async () => {
+    for (const uid of ['wes', 'admin1', 'crew', 'cpa']) {
+      await assertFails(getDoc(doc(db(uid), 'companies/stellar/auditLogs/a1')));
+      await assertFails(setDoc(doc(db(uid), 'companies/stellar/auditLogs/a1'), { ok: true }));
+    }
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const f = ctx.firestore();
+      await setDoc(doc(f, 'companies/stellar/invoices/livepaid'), { number: 1001, status: 'paid', stripe: { status: 'paid', livemode: true } });
+      await setDoc(doc(f, 'companies/stellar/invoices/livepaid/lines/l1'), { desc: 'Glass', qty: 1, price: 500 });
+    });
+    for (const uid of ['wes', 'admin1', 'crew', 'cpa']) {
+      await assertFails(setDoc(doc(db(uid), 'companies/stellar/invoices/livepaid/lines/l2'), { desc: 'Extra', qty: 1, price: 100 }));
+      await assertFails(updateDoc(doc(db(uid), 'companies/stellar/invoices/livepaid/lines/l1'), { price: 900 }));
+      await assertFails(deleteDoc(doc(db(uid), 'companies/stellar/invoices/livepaid/lines/l1')));
+    }
+  });
+
+  it('enforces file name and note length limits on create and update', async () => {
+    const url = 'https://firebasestorage.googleapis.com/v0/b/stellar-glass-jobs.firebasestorage.app/o/companies%2Fstellar%2Fphotos%2Fj1%2Fx%2Fa.jpg?alt=media&token=t';
+    const file = (by, category = 'photos', over = {}) => ({
+      jobId: 'j1', category, name: 'a.jpg', path: `companies/stellar/${category}/j1/x/a.jpg`, url, thumbPath: '', thumbUrl: '', createdBy: by, ...over,
+    });
+    const crew = db('crew');
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/bad1'), file('crew', 'photos', { name: '' })));
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/bad2'), file('crew', 'photos', { name: 'x'.repeat(261) })));
+    await assertFails(setDoc(doc(crew, 'companies/stellar/files/bad3'), file('crew', 'photos', { note: 'x'.repeat(2001) })));
+    await assertSucceeds(setDoc(doc(crew, 'companies/stellar/files/ok1'), file('crew')));
+    await assertFails(updateDoc(doc(crew, 'companies/stellar/files/ok1'), { name: '' }));
+    await assertFails(updateDoc(doc(crew, 'companies/stellar/files/ok1'), { note: 'x'.repeat(2001) }));
   });
 });

@@ -97,7 +97,7 @@ service firebase.storage {
 
     match /companies/{companyId}/{folder}/{allPaths=**} {
       allow read: if isMember(companyId);
-      allow create, update: if folder != 'website' && canEdit(companyId) && isAllowedFile() && mayReplace(companyId);
+      allow create, update: if folder in ['photos', 'plans', 'documents', 'forms', 'other'] && canEdit(companyId) && isAllowedFile() && mayReplace(companyId);
       allow delete: if canManage(companyId) || (canEdit(companyId) && uploadedByMe());
     }
   }

@@ -60,9 +60,17 @@ service cloud.firestore {
         || (isBillingCollection(collection) && hasRole(companyId, ['accountant']));
     }
 
-    // Business records. members, invites, requests, files, suppliers, partsRequests and the schedule have their own rules below.
+    // Business records: explicit allowlist so any future server-only collection is denied by default.
+    // members, invites, requests, files, suppliers, partsRequests, events, calendarLinks and calendarTokens have their own rules below.
     function isRecord(collection) {
-      return !(collection in ['members', 'invites', 'requests', 'files', 'suppliers', 'partsRequests', 'events', 'calendarLinks', 'calendarTokens']);
+      return collection in ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices', 'billing', 'documents', 'forms'];
+    }
+
+    function parentInvoiceLocked(companyId, collection, docId) {
+      let invPath = /databases/$(database)/documents/companies/$(companyId)/invoices/$(docId);
+      return collection == 'invoices' && exists(invPath)
+        && get(invPath).data.get('stripe', {}).get('livemode', false) == true
+        && get(invPath).data.get('stripe', {}).get('status', '') in ['paid', 'open', 'uncollectible'];
     }
 
     function invitePath(companyId, inviteId) {
@@ -156,10 +164,16 @@ service cloud.firestore {
       return v is string && v.size() <= 1024 && v.matches('companies/' + companyId + '/.+');
     }
 
+    function isValidFileText(d) {
+      return isText(d.get('name', ''), 1, 260)
+        && isText(d.get('note', ''), 0, 2000);
+    }
+
     // A new record has no Drive copies yet; each person adds their own afterwards.
     function isValidNewFile(companyId, d) {
       return d.createdBy == request.auth.uid
         && isFileCategory(d.category)
+        && isValidFileText(d)
         && isStoragePath(companyId, d.path)
         && isStorageUrl(companyId, d.url)
         && (d.get('thumbPath', '') == '' || isStoragePath(companyId, d.thumbPath))
@@ -251,7 +265,10 @@ service cloud.firestore {
 
     // A user's own profile. Nobody else can read or write it.
     match /users/{uid} {
-      allow read, write: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.size() <= 50;
+      allow delete: if false;
     }
 
     // ---------- Quote requests from the public website ----------
@@ -406,11 +423,12 @@ service cloud.firestore {
       // The owner's member doc must be written in the same batch (see members below).
       allow create: if signedIn()
         && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
+        && isText(request.resource.data.name, 1, 200)
         && existsAfter(memberPath(companyId));
 
-      allow update: if hasRole(companyId, ['owner']) && unchanged('ownerUid');
+      allow update: if hasRole(companyId, ['owner'])
+        && unchanged('ownerUid')
+        && (!('name' in request.resource.data) || isText(request.resource.data.name, 1, 200));
 
       // Transferring ownership: the owner hands the company to an existing member, in one batch
       // that also makes that member 'owner' and the old owner 'admin' (see members below).
@@ -516,11 +534,13 @@ service cloud.firestore {
         // Owners, admins and staff rename any file, move it to another category and add notes.
         allow update: if canEdit(companyId)
           && keepsFileOrigin()
-          && isFileCategory(request.resource.data.category);
+          && isFileCategory(request.resource.data.category)
+          && isValidFileText(request.resource.data);
         // The accountant does the same for the contracts, documents, permits and forms they added.
         allow update: if hasRole(companyId, ['accountant'])
           && resource.data.createdBy == request.auth.uid
           && request.resource.data.category in ['documents', 'forms']
+          && isValidFileText(request.resource.data)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'category', 'note', 'updatedAt']);
         // Anyone on the team notes that they copied a file to their own Google Drive, and only that.
         allow update: if isMember(companyId)
@@ -603,9 +623,17 @@ service cloud.firestore {
       // Line items (e.g. G703 continuation lines), attachment metadata and other nested records.
       match /{collection}/{docId}/{subcollection}/{rest=**} {
         allow read: if isRecord(collection) && isMember(companyId);
-        allow create, update: if isRecord(collection) && canEditCollection(companyId, collection);
-        allow delete: if isRecord(collection) && canEdit(companyId);
+        allow create, update: if isRecord(collection)
+          && canEditCollection(companyId, collection)
+          && !parentInvoiceLocked(companyId, collection, docId);
+        allow delete: if isRecord(collection)
+          && canEdit(companyId)
+          && !parentInvoiceLocked(companyId, collection, docId);
       }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

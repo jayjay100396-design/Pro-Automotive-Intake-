@@ -119,9 +119,11 @@ describe('Storage rules', function () {
     await assertFails(getBytes(ref(anon, 'companies/stellar/documents/notarized.pdf')));
   });
 
-  it('blocks outsiders and bad file types', async () => {
+  it('blocks outsiders, unlisted folders and bad file types', async () => {
     await assertFails(getBytes(ref(st('stranger'), 'companies/stellar/documents/notarized.pdf')));
     await assertFails(uploadBytes(ref(st('stranger'), 'companies/stellar/documents/x.pdf'), bytes, pdf));
+    await assertFails(uploadBytes(ref(st('crew'), 'companies/stellar/unlisted/x.pdf'), bytes, pdf));
+    await assertFails(uploadBytes(ref(st('crew'), 'companies/stellar/requests/r1/fake.pdf'), bytes, pdf));
     await assertFails(uploadBytes(ref(st('cpa'), 'companies/stellar/documents/x.exe'), bytes,
       { contentType: 'application/octet-stream' }));
   });
