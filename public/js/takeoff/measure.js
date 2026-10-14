@@ -45,6 +45,36 @@ export function measure(a, b, unitsPerInch, { square = true } = {}) {
   return { inches: Math.round((d / unitsPerInch) * 16) / 16, dir };
 }
 
+// 2-click rectangle measurement: opposite corners of a window, storefront bay, or curtain-wall opening.
+export function measureRect(a, b, unitsPerInch) {
+  if (!a || !b || !(unitsPerInch > 0)) return null;
+  const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]);
+  const y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+  const widthIn = Math.round(((x1 - x0) / unitsPerInch) * 16) / 16;
+  const heightIn = Math.round(((y1 - y0) / unitsPerInch) * 16) / 16;
+  if (!(widthIn > 0 && heightIn > 0)) return null;
+  const perimeterLf = Math.round(((2 * (widthIn + heightIn)) / 12) * 100) / 100;
+  const areaSqft = Math.round(((widthIn * heightIn) / 144) * 100) / 100;
+  return { widthIn, heightIn, perimeterLf, areaSqft, x0, y0, x1, y1 };
+}
+
+// Multi-point polyline measurement: linear footage along a storefront plan run, sill flashing, or caulking perimeter.
+export function measurePolyline(points, unitsPerInch) {
+  if (!Array.isArray(points) || points.length < 2 || !(unitsPerInch > 0)) return null;
+  const segments = [];
+  let totalInches = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const m = measure(a, b, unitsPerInch);
+    if (!m) continue;
+    segments.push({ a, b, inches: m.inches, dir: m.dir });
+    totalInches += m.inches;
+  }
+  totalInches = Math.round(totalInches * 16) / 16;
+  const linearFeet = Math.round((totalInches / 12) * 100) / 100;
+  return { totalInches, linearFeet, segments };
+}
+
 // Where two lines cross, or null (near-parallel lines don't count).
 function crossing(g, h) {
   const ax = g.x2 - g.x1, ay = g.y2 - g.y1, bx = h.x2 - h.x1, by = h.y2 - h.y1;

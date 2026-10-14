@@ -330,3 +330,228 @@ export function proposalPayment(est, invoices) {
   const status = !live.length ? 'not billed' : paid <= 0 ? 'unpaid' : paid >= price ? 'paid' : 'partly paid';
   return { price, paid, balance: round2(Math.max(0, price - paid)), status };
 }
+
+// ---------- Commercial storefront, curtain wall & glass cut-size math ----------
+const round16 = (n) => Math.round(num(n) * 16) / 16;
+
+// Standard commercial framing systems with rough-opening-to-frame clearance, member sightlines,
+// and glazing pocket bite (Glass Cut Size = DLO + 2 * glassBiteIn).
+export const COMMERCIAL_SYSTEMS = {
+  sf175: {
+    id: 'sf175',
+    name: '1-3/4" × 4-1/2" Center-Set Storefront (CG451 / 451T)',
+    short: '1-3/4" × 4-1/2" Storefront',
+    partSeries: 'CG451',
+    roClearanceW: 0.5,    // 1/4" caulk/shim joint each jamb
+    roClearanceH: 0.5,    // 1/4" head + 1/4" sill shim/flashing
+    jambProfileIn: 1.75,
+    headProfileIn: 1.75,
+    sillProfileIn: 1.75,
+    mullionProfileIn: 1.75,
+    transomProfileIn: 1.75,
+    depthIn: 4.5,
+    glassBiteIn: 0.375,   // 3/8" bite each edge -> DLO + 3/4"
+    defaultGlass: '1/4" clear tempered',
+  },
+  sf200: {
+    id: 'sf200',
+    name: '2" × 4-1/2" Storefront (Trifab 451 / YES 45)',
+    short: '2" × 4-1/2" Storefront',
+    partSeries: 'TF451',
+    roClearanceW: 0.5,
+    roClearanceH: 0.5,
+    jambProfileIn: 2.0,
+    headProfileIn: 2.0,
+    sillProfileIn: 2.0,
+    mullionProfileIn: 2.0,
+    transomProfileIn: 2.0,
+    depthIn: 4.5,
+    glassBiteIn: 0.375,   // 3/8" bite each edge -> DLO + 3/4"
+    defaultGlass: '1" clear low-E insulated, tempered',
+  },
+  cw250: {
+    id: 'cw250',
+    name: '2-1/2" × 7-1/2" Curtain Wall (1600 / CW250)',
+    short: '2-1/2" × 7-1/2" Curtain Wall',
+    partSeries: 'CW250',
+    roClearanceW: 0.75,   // 3/8" perimeter joint each side
+    roClearanceH: 0.75,
+    jambProfileIn: 2.5,
+    headProfileIn: 2.5,
+    sillProfileIn: 2.5,
+    mullionProfileIn: 2.5,
+    transomProfileIn: 2.5,
+    depthIn: 7.5,
+    glassBiteIn: 0.5,     // 1/2" pocket bite each edge -> DLO + 1"
+    defaultGlass: '1" clear low-E insulated, tempered',
+  },
+  herculite: {
+    id: 'herculite',
+    name: '3/8"–1/2" Frameless Glass / U-Channel Partition',
+    short: 'Frameless / U-Channel',
+    partSeries: 'UCHAN',
+    roClearanceW: 0.25,   // 1/8" side clearance each jamb
+    roClearanceH: 0.375,  // 3/8" head/sill clearance
+    jambProfileIn: 0,
+    headProfileIn: 1.5,
+    sillProfileIn: 1.5,
+    mullionProfileIn: 0.125, // 1/8" butt-glazed silicone joint
+    transomProfileIn: 0,
+    depthIn: 1.75,
+    glassBiteIn: 0.375,
+    defaultGlass: '1/2" clear tempered, polished edges',
+  },
+};
+
+// Computes Frame Outer Size, Daylight Opening (DLO), and exact Glass Cut Size from a Rough Opening
+// (or Frame Size when basis === 'frame'), plus bay splits and optional horizontal transom.
+export function commercialGlassSize(widthIn, heightIn, opts = {}) {
+  const w = num(widthIn);
+  const h = num(heightIn);
+  const sys = COMMERCIAL_SYSTEMS[opts.system] || COMMERCIAL_SYSTEMS.sf175;
+  if (!(w > 0 && h > 0)) return null;
+
+  const basis = opts.basis === 'frame' ? 'frame' : 'ro';
+  const roWidthIn = basis === 'ro' ? w : round16(w + sys.roClearanceW);
+  const roHeightIn = basis === 'ro' ? h : round16(h + sys.roClearanceH);
+  const frameWidthIn = basis === 'frame' ? w : Math.max(4, round16(w - sys.roClearanceW));
+  const frameHeightIn = basis === 'frame' ? h : Math.max(4, round16(h - sys.roClearanceH));
+
+  // Equal horizontal bays (default: 1 bay if <= 60" wide, or auto-suggested / user-specified)
+  const bays = Math.max(1, Math.min(24, Math.round(num(opts.bays) || 1)));
+  const totalMullionsW = 2 * sys.jambProfileIn + (bays - 1) * sys.mullionProfileIn;
+  const bayDloWidthIn = Math.max(1, round16((frameWidthIn - totalMullionsW) / bays));
+  const glassCutWidthIn = round16(bayDloWidthIn + 2 * sys.glassBiteIn);
+
+  // Optional horizontal transom bar at `transomHeightIn` above the bottom of the frame (e.g. 84" door head)
+  const rawTransom = num(opts.transomHeightIn);
+  const hasTransom = rawTransom > sys.sillProfileIn + 6 && rawTransom < frameHeightIn - sys.headProfileIn - 6;
+
+  let mainDloHeightIn;
+  let mainGlassCutHeightIn;
+  let transomDloHeightIn = 0;
+  let transomGlassCutHeightIn = 0;
+
+  if (hasTransom) {
+    mainDloHeightIn = Math.max(1, round16(rawTransom - sys.sillProfileIn - sys.transomProfileIn / 2));
+    mainGlassCutHeightIn = round16(mainDloHeightIn + 2 * sys.glassBiteIn);
+    transomDloHeightIn = Math.max(1, round16((frameHeightIn - rawTransom) - sys.headProfileIn - sys.transomProfileIn / 2));
+    transomGlassCutHeightIn = round16(transomDloHeightIn + 2 * sys.glassBiteIn);
+  } else {
+    mainDloHeightIn = Math.max(1, round16(frameHeightIn - sys.headProfileIn - sys.sillProfileIn));
+    mainGlassCutHeightIn = round16(mainDloHeightIn + 2 * sys.glassBiteIn);
+  }
+
+  // Outside perimeter of the frame and total aluminum extrusion linear footage (head + sill + 2 jambs + intermediates + transom)
+  const perimeterLf = round2((2 * (frameWidthIn + frameHeightIn)) / 12);
+  const verticalsIn = (2 + (bays - 1)) * frameHeightIn;
+  const horizontalsIn = (2 + (hasTransom ? 1 : 0)) * frameWidthIn;
+  const framingLf = round2((verticalsIn + horizontalsIn) / 12);
+  const sealantLf = round2(perimeterLf * 2); // interior + exterior perimeter beads
+
+  return {
+    system: sys.id,
+    systemName: sys.short,
+    partSeries: sys.partSeries,
+    basis,
+    roWidthIn,
+    roHeightIn,
+    frameWidthIn,
+    frameHeightIn,
+    bays,
+    hasTransom,
+    transomHeightIn: hasTransom ? rawTransom : 0,
+    bayDloWidthIn,
+    mainDloHeightIn,
+    glassCutWidthIn,
+    glassCutHeightIn: mainGlassCutHeightIn,
+    transomDloHeightIn,
+    transomGlassCutHeightIn,
+    litesPerOpening: bays * (hasTransom ? 2 : 1),
+    perimeterLf,
+    framingLf,
+    sealantLf,
+  };
+}
+
+// Summarizes an entire takeoff opening row (with quantity `qty`) into glass cut lites and framing stock.
+export function storefrontBayBreakdown(opening, opts = {}) {
+  const qty = Math.max(0, Math.round(num(opening?.qty ?? 1)));
+  const spec = commercialGlassSize(opening?.widthIn, opening?.heightIn, {
+    system: opening?.system || opts.system || 'sf175',
+    bays: opening?.bays || opts.bays || 1,
+    transomHeightIn: opening?.transomHeightIn ?? opts.transomHeightIn ?? 0,
+    basis: opening?.basis || opts.basis || 'ro',
+  });
+  if (!spec || qty <= 0) return null;
+
+  const sys = COMMERCIAL_SYSTEMS[spec.system] || COMMERCIAL_SYSTEMS.sf175;
+  const glassDesc = opening?.glassDesc || opts.glassDesc || sys.defaultGlass;
+  const mark = String(opening?.label || '').trim();
+  const lites = [
+    {
+      qty: qty * spec.bays,
+      width: spec.glassCutWidthIn,
+      height: spec.glassCutHeightIn,
+      dloWidth: spec.bayDloWidthIn,
+      dloHeight: spec.mainDloHeightIn,
+      desc: glassDesc,
+      mark: spec.hasTransom && mark ? `${mark}-L` : mark,
+      role: 'main',
+    },
+  ];
+  if (spec.hasTransom) {
+    lites.push({
+      qty: qty * spec.bays,
+      width: spec.glassCutWidthIn,
+      height: spec.transomGlassCutHeightIn,
+      dloWidth: spec.bayDloWidthIn,
+      dloHeight: spec.transomDloHeightIn,
+      desc: glassDesc,
+      mark: mark ? `${mark}-T` : 'TRANSOM',
+      role: 'transom',
+    });
+  }
+
+  return {
+    ...spec,
+    qty,
+    mark,
+    glassDesc,
+    lites,
+    totalLites: qty * spec.litesPerOpening,
+    totalPerimeterLf: round2(spec.perimeterLf * qty),
+    totalFramingLf: round2(spec.framingLf * qty),
+    totalSealantLf: round2(spec.sealantLf * qty),
+  };
+}
+
+// Totals perimeter, framing stock lengths (24 ft S/L), and sealant tubes across all takeoff rows.
+export function openingLinearFeet(rows, defaultOpts = {}) {
+  let perimeterLf = 0;
+  let framingLf = 0;
+  let sealantLf = 0;
+  let totalLites = 0;
+  let totalSqft = 0;
+  for (const r of rows || []) {
+    const bd = storefrontBayBreakdown(r, defaultOpts);
+    if (!bd) continue;
+    perimeterLf += bd.totalPerimeterLf;
+    framingLf += bd.totalFramingLf;
+    sealantLf += bd.totalSealantLf;
+    totalLites += bd.totalLites;
+    for (const l of bd.lites) {
+      totalSqft += sqft(l.width, l.height) * l.qty;
+    }
+  }
+  return {
+    perimeterLf: round2(perimeterLf),
+    framingLf: round2(framingLf),
+    stockLengths24Ft: framingLf > 0 ? Math.ceil((framingLf * 1.08) / 24) : 0, // +8% cutting waste in 24' stock lengths
+    sealantLf: round2(sealantLf),
+    sealantTubes: sealantLf > 0 ? Math.ceil(sealantLf / 25) : 0, // ~25 LF per sausage/tube at 1/4"x1/4"
+    totalLites,
+    totalSqft: round2(totalSqft),
+  };
+}
+

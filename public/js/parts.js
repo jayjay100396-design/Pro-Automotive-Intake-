@@ -15,6 +15,7 @@ import { pluginFor } from './supplier-plugins.js';
 import { codeOf, sentenceOf, noAnswer } from './call-errors.js';
 import { esc, options, toast, empty, fmtDate, formData } from './ui.js';
 import { money } from './calc.js';
+import { PARTS_DRAFT_KEY } from './takeoff/takeoff.js';
 
 const go = (hash) => { location.hash = hash; };
 const rerender = () => window.dispatchEvent(new HashChangeEvent('hashchange'));
@@ -233,17 +234,25 @@ function readItems(tbody) {
 
 const head = (listType) => `<tr>${COLS[listType].map(([, h]) => `<th>${esc(h)}</th>`).join('')}<th></th></tr>`;
 
-// A request to start from: the job, the proposal's materials and the supplier's defaults.
+// A request to start from: the job, the proposal's materials (or a CAD/drawing takeoff) and the supplier's defaults.
 function newRequest(params) {
   const est = get('estimates', params.get('estimate'));
-  const job = get('jobs', params.get('job')) || get('jobs', est?.jobId);
+  let tkDraft = null;
+  if (params.get('from') === 'takeoff') {
+    try { tkDraft = JSON.parse(sessionStorage.getItem(PARTS_DRAFT_KEY) || 'null'); } catch { /* private mode */ }
+  }
+  const job = get('jobs', params.get('job')) || get('jobs', est?.jobId) || get('jobs', tkDraft?.jobId);
   const supplier = get('suppliers', params.get('supplier')) || (D().suppliers.length === 1 ? D().suppliers[0] : null);
   const plugin = pluginFor(supplier?.plugin);
-  const listType = supplier?.listType || plugin.listType;
+  const listType = tkDraft?.listType || supplier?.listType || plugin.listType;
+  const items = tkDraft
+    ? (listType === 'glass' ? tkDraft.glassItems || tkDraft.items || [] : tkDraft.partsItems || tkDraft.items || [])
+    : (est ? PE.itemsFromEstimate(est, listType) : []);
   const r = {
     number: nextNumber('partsRequests', 1), status: 'draft', kind: supplier?.kind || 'quote', listType, jobId: job?.id || '', supplierId: supplier?.id || '',
-    estimateId: est?.id || '', items: est ? PE.itemsFromEstimate(est, listType) : [], delivery: supplier?.delivery || plugin.delivery || 'site',
-    po: '', neededBy: '', subject: '', intro: '', notes: '', ccMe: true, ccOffice: false, attachments: [], signature: PE.defaultSignature(person(), state.company || {}),
+    estimateId: est?.id || '', items, delivery: supplier?.delivery || plugin.delivery || 'site',
+    po: '', neededBy: '', subject: '', intro: '', notes: tkDraft?.notes || '', ccMe: true, ccOffice: false,
+    attachments: tkDraft?.fileId ? [tkDraft.fileId] : [], signature: PE.defaultSignature(person(), state.company || {}),
   };
   r.deliverTo = r.delivery === 'site' ? job?.siteAddress || '' : r.delivery === 'shop' ? state.company?.address || '' : '';
   return r;

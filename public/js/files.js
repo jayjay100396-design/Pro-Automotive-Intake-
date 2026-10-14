@@ -437,9 +437,13 @@ export function fileBrowser({ jobId = null, startJob = '' } = {}) {
     dlg.querySelector('[data-next]').disabled = !(i >= 0 && i < list.length - 1);
   }
 
+  const isCad = (f) => /dwg|dxf/i.test(f.contentType || '') || /\.(dwg|dxf)$/i.test(f.name || '');
+  const canTakeoff = (f) => /^(application\/pdf|image\/(jpeg|png|webp|vnd\.dwg|vnd\.dxf))$/.test(f.contentType || '') || isCad(f);
+
   function preview(f, url) {
     const t = f.contentType || '';
     if (!url) return '<p class="muted">This file can\'t be shown.</p>';
+    if (isCad(f) && can.edit()) return `<a class="big-ext" href="#/takeoff/${esc(f.id)}">${esc(kindLabel(f))}<small>Open in CAD Takeoff</small></a>`;
     if (t.startsWith('image/') && !/dwg|dxf/.test(t)) return `<img src="${esc(url)}" alt="${esc(f.name)}">`;
     if (t.startsWith('video/')) return `<video src="${esc(url)}" controls playsinline></video>`;
     if (t === 'application/pdf' && !touch) return `<iframe src="${esc(url)}" title="${esc(f.name)}"></iframe>`;
@@ -505,7 +509,7 @@ export function fileBrowser({ jobId = null, startJob = '' } = {}) {
         ${url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener">Open</a>` : ''}
         ${edit ? '<button class="btn small primary">Save changes</button>' : ''}
       </div>
-      ${url && can.edit() && /^(application\/pdf|image\/(jpeg|png|webp))$/.test(f.contentType || '')
+      ${url && can.edit() && canTakeoff(f)
     ? `<div class="row"><a class="btn small" href="#/takeoff/${esc(f.id)}" title="Count window types and sizes, measure, and start a proposal">Takeoff for a proposal</a></div>` : ''}
       <div class="row">
         ${mineLink ? `<a class="btn small" href="${esc(mineLink)}" target="_blank" rel="noopener">${G} Open in Drive</a>` : ''}

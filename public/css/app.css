@@ -613,24 +613,43 @@ main.wide-view { max-width: none; }
 .tk-tip { margin: 0; padding: .5rem .8rem; border-top: 1px solid var(--border); }
 .tk-side .card { margin-bottom: 0; }
 .tk-side h2 { margin-bottom: .5rem; }
-.tk-hit, .tk-type, .tk-dup, .tk-mark, .tk-line, .tk-cal { vector-effect: non-scaling-stroke; stroke-width: 2.5; }
+.tk-hit, .tk-type, .tk-dup, .tk-mark, .tk-line, .tk-cal, .tk-rect { vector-effect: non-scaling-stroke; stroke-width: 2.5; }
 .tk-hit { fill: rgba(16, 185, 129, .18); stroke: #059669; }
 .tk-type { fill: rgba(37, 99, 235, .14); stroke: #2563eb; }
 .tk-dup { fill: none; stroke: #64748b; stroke-dasharray: 5 4; }
 .tk-mark { fill: rgba(245, 158, 11, .12); stroke: #d97706; }
 .tk-line { stroke: #e11d48; }
+.tk-rect { fill: rgba(225, 29, 72, .12); stroke: #e11d48; stroke-dasharray: 6 3; }
 .tk-cal { stroke: #2563eb; stroke-dasharray: 6 4; }
 .tk-dot { fill: #e11d48; }
 .tk-label { fill: #be123c; font-weight: 800; text-anchor: middle; paint-order: stroke; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; font-family: var(--font); }
+.tk-cad-layers { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; padding: .45rem .8rem; border-bottom: 1px solid var(--border); background: var(--bg); max-height: 5.5rem; overflow-y: auto; }
+.tk-layer-dot { display: inline-block; width: .55rem; height: .55rem; border-radius: 50%; margin-right: .3rem; }
+.tk-sys-bar { display: flex; flex-direction: column; gap: .45rem; margin-bottom: .65rem; padding: .55rem .65rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
 table.tk-rows td { padding: .15rem; }
 table.tk-rows input { padding-left: .35rem; padding-right: .35rem; }
-table.tk-rows input.tk-n { width: 4.9rem; }
-table.tk-rows input[data-f="qty"] { width: 3.1rem; appearance: textfield; -moz-appearance: textfield; }
-table.tk-rows input[data-f="qty"]::-webkit-inner-spin-button, table.tk-rows input[data-f="qty"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-table.tk-rows input[data-f="label"] { width: 3.3rem; }
+table.tk-rows input.tk-n { width: 4.5rem; }
+table.tk-rows input.tk-bays { width: 2.8rem; appearance: textfield; -moz-appearance: textfield; }
+table.tk-rows input[data-f="qty"] { width: 2.9rem; appearance: textfield; -moz-appearance: textfield; }
+table.tk-rows input[data-f="qty"]::-webkit-inner-spin-button, table.tk-rows input[data-f="qty"]::-webkit-outer-spin-button,
+table.tk-rows input.tk-bays::-webkit-inner-spin-button, table.tk-rows input.tk-bays::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+table.tk-rows input[data-f="label"] { width: 3.1rem; }
+.tk-cut-summary { margin: .55rem 0; }
+.tk-cut-grid { display: flex; flex-direction: column; gap: .25rem; padding: .5rem .65rem; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border)); }
 .tk-sel td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .tk-big { font-size: 1.3rem; font-family: var(--mono); }
 .tk-fam + .tk-fam { margin-top: .6rem; }
+dialog.tk-3d-dlg { width: min(1040px, 96vw); max-height: 92vh; padding: 1.1rem; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 12px 48px rgba(0, 0, 0, .45); overflow-y: auto; }
+dialog.tk-3d-dlg::backdrop { background: rgba(8, 18, 30, .72); }
+.tk-3d-wrap { display: flex; flex-direction: column; gap: .75rem; }
+.tk-3d-head h2 { margin: 0; }
+.tk-3d-head p { margin: .15rem 0 0; }
+.tk-3d-controls { gap: .75rem; flex-wrap: wrap; padding: .55rem .75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+.tk-3d-controls label { display: flex; flex-direction: column; gap: .2rem; flex: 1 1 180px; }
+.tk-3d-stage { position: relative; width: 100%; height: min(56vh, 520px); min-height: 320px; border-radius: var(--radius-sm); overflow: hidden; background: #0f172a; border: 1px solid var(--border); }
+.tk-3d-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: .95rem; }
+.tk-3d-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: .6rem; padding: .65rem .8rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+.tk-3d-stats > div { display: flex; flex-direction: column; gap: .15rem; }
 @media (max-width: 1100px) {
   .takeoff { grid-template-columns: minmax(0, 1fr); }
   .tk-scroll { height: 62vh; }

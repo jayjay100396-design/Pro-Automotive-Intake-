@@ -5,9 +5,11 @@
 import { textRuns, findTags, findViews, viewAt, gridRows, gridPosition, dimensionRuns, sheetInfo } from './reader.js';
 import { parseDim, parseSize, fmtFtIn } from './dims.js';
 import { snapScale } from './measure.js';
+import { COMMERCIAL_SYSTEMS, storefrontBayBreakdown, openingLinearFeet } from '../calc.js';
 
-// Where a takeoff hands its openings to a new proposal (sessionStorage).
+// Where a takeoff hands its openings to a new proposal or parts order (sessionStorage).
 export const DRAFT_KEY = 'stellar-takeoff-draft';
+export const PARTS_DRAFT_KEY = 'stellar-takeoff-parts-draft';
 
 const SHAPE_ORDER = ['diamond', 'hexagon', 'square', 'rect', 'triangle', 'ellipse', 'circle', 'other'];
 
@@ -408,17 +410,125 @@ export function scopeLine(openings) {
 }
 
 // Estimate lines from openings: a glass line per type (sized and counted, priced from the proposal
-// template), and the storefront framing as the frames' outside perimeter in linear feet.
-export function estimateLines(openings, { desc = 'storefront' } = {}) {
+// template), and the storefront framing in linear feet. When `useCutSize` is true (or an opening has
+// multiple bays / transom), calculates exact glass cut sizes and full mullion/transom linear footage.
+export function estimateLines(openings, { desc = 'storefront', system = null, useCutSize = false } = {}) {
   const list = openings.filter((o) => o.qty > 0);
-  const lines = list.map((o) => ({
-    desc: `Type ${o.label || '?'} ${desc}${o.widthIn && o.heightIn ? ` ${fmtFtIn(o.widthIn)} x ${fmtFtIn(o.heightIn)}` : ''}`,
-    kind: 'Glass', unit: o.widthIn && o.heightIn ? 'sqft' : 'each', qty: o.qty,
-    widthIn: o.widthIn || null, heightIn: o.heightIn || null,
-  }));
-  const lf = list.reduce((s, o) => s + (o.widthIn && o.heightIn ? (2 * (o.widthIn + o.heightIn) / 12) * o.qty : 0), 0);
-  if (lf > 0) lines.push({ desc: 'Storefront framing (outside perimeter of the openings above)', kind: 'Framing', unit: 'lf', qty: Math.ceil(lf) });
+  if (!useCutSize && !system && !list.some((o) => (o.bays && o.bays > 1) || o.transomHeightIn > 0)) {
+    const lines = list.map((o) => ({
+      desc: `Type ${o.label || '?'} ${desc}${o.widthIn && o.heightIn ? ` ${fmtFtIn(o.widthIn)} x ${fmtFtIn(o.heightIn)}` : ''}`,
+      kind: 'Glass', unit: o.widthIn && o.heightIn ? 'sqft' : 'each', qty: o.qty,
+      widthIn: o.widthIn || null, heightIn: o.heightIn || null,
+    }));
+    const lf = list.reduce((s, o) => s + (o.widthIn && o.heightIn ? (2 * (o.widthIn + o.heightIn) / 12) * o.qty : 0), 0);
+    if (lf > 0) lines.push({ desc: 'Storefront framing (outside perimeter of the openings above)', kind: 'Framing', unit: 'lf', qty: Math.ceil(lf) });
+    return lines;
+  }
+
+  const lines = [];
+  let totalFramingLf = 0;
+  let totalPerimeterLf = 0;
+  for (const o of list) {
+    const bd = storefrontBayBreakdown(o, { system: o.system || system || 'sf175' });
+    if (!bd) {
+      lines.push({
+        desc: `Type ${o.label || '?'} ${desc}`,
+        kind: 'Glass', unit: 'each', qty: o.qty, widthIn: null, heightIn: null,
+      });
+      continue;
+    }
+    totalFramingLf += bd.totalFramingLf;
+    totalPerimeterLf += bd.totalPerimeterLf;
+    for (const lite of bd.lites) {
+      const roleNote = lite.role === 'transom' ? ' (transom lite)' : bd.bays > 1 ? ` (${bd.bays} bays/opening)` : '';
+      lines.push({
+        desc: `Type ${lite.mark || o.label || '?'} ${desc}${roleNote} — cut ${fmtFtIn(lite.width)} x ${fmtFtIn(lite.height)} (RO ${fmtFtIn(bd.roWidthIn)} x ${fmtFtIn(bd.roHeightIn)})`,
+        kind: 'Glass',
+        unit: 'sqft',
+        qty: lite.qty,
+        widthIn: lite.width,
+        heightIn: lite.height,
+      });
+    }
+  }
+  if (totalFramingLf > 0) {
+    const sysName = COMMERCIAL_SYSTEMS[system || list[0]?.system || 'sf175']?.short || 'Storefront';
+    lines.push({
+      desc: `${sysName} framing (head, sill, jambs, mullions & transoms)`,
+      kind: 'Framing',
+      unit: 'lf',
+      qty: Math.ceil(totalFramingLf),
+    });
+  }
+  if (totalPerimeterLf > 0) {
+    lines.push({
+      desc: 'Perimeter silicone sealant (interior & exterior joints)',
+      kind: 'Caulking',
+      unit: 'lf',
+      qty: Math.ceil(totalPerimeterLf),
+    });
+  }
   return lines;
+}
+
+// Builds supplier parts-order items from takeoff openings:
+// - listType === 'glass': cut-to-size glass lites with exact DLO + bite dimensions and mark labels.
+// - listType === 'parts': Trulite / aluminum framing 24' stock lengths, gaskets, setting blocks, and glass cut list.
+export function partsFromTakeoff(openings, { system = 'sf175', listType = 'glass', finish = '#04 clear anodized' } = {}) {
+  const active = (openings || []).filter((o) => o.qty > 0 && o.widthIn > 0 && o.heightIn > 0);
+  if (!active.length) return [];
+  const sys = COMMERCIAL_SYSTEMS[system] || COMMERCIAL_SYSTEMS.sf175;
+  const breakdowns = active.map((o) => storefrontBayBreakdown(o, { system: o.system || sys.id })).filter(Boolean);
+  const totals = openingLinearFeet(active, { system: sys.id });
+
+  const glassRows = breakdowns.flatMap((bd) => bd.lites.map((l) => ({
+    qty: l.qty,
+    unit: 'ea',
+    width: l.width,
+    height: l.height,
+    desc: l.desc,
+    edge: `DLO ${fmtFtIn(l.dloWidth)} × ${fmtFtIn(l.dloHeight)} (${bd.systemName})`,
+    mark: l.mark || '?',
+  })));
+
+  if (listType === 'glass') return glassRows;
+
+  const items = [
+    { heading: `${sys.partSeries} ${finish} — ${sys.short} (${totals.framingLf} LF total)` },
+    {
+      qty: totals.stockLengths24Ft,
+      unit: 'S/L',
+      partNo: `${sys.partSeries}-1`,
+      desc: `${sys.short} head / sill / jamb / mullion (24' stock lengths, incl. 8% waste)`,
+    },
+    {
+      qty: Math.max(1, Math.ceil((totals.framingLf * 2) / 250)),
+      unit: 'roll',
+      partNo: 'RG-1',
+      desc: 'Glazing gasket (250\' roll)',
+    },
+    {
+      qty: Math.max(1, Math.ceil((totals.totalLites * 2) / 50)),
+      unit: 'pkg',
+      partNo: 'RSB-3',
+      desc: 'Setting blocks (2 per lite)',
+    },
+    {
+      qty: Math.max(1, Math.ceil((active.reduce((s, o) => s + Number(o.qty || 0), 0) * 2) / 10)),
+      unit: 'pkg',
+      partNo: 'ED450-2',
+      desc: 'Sill flashing end dams',
+    },
+    {
+      qty: totals.sealantTubes,
+      unit: 'tube',
+      partNo: 'SIL-CLR',
+      desc: `Perimeter silicone sealant (${totals.sealantLf} LF int/ext joints)`,
+    },
+    { heading: `Cut-to-size glass (${totals.totalLites} lites, ${totals.totalSqft} sq ft)` },
+    ...glassRows,
+  ];
+  return items;
 }
 
 export { parseDim };
