@@ -39,6 +39,7 @@ export function toE164(raw) {
 
 export function renderSignIn(root) {
   root.innerHTML = `
+  <a class="skip-link" href="#main-content">Skip to sign in</a>
   <main class="auth-wrap" id="main-content">
     <div class="card auth-card">
       <h1 class="sr-only">Sign in to ${BRAND.name}</h1>
