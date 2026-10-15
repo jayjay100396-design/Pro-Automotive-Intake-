@@ -165,7 +165,7 @@ describe('Phase 2: Commercial Glazing Deductions, Box/Polyline Measure & Supplie
     const propLines = estimateLines(rows, { system: 'sf175', useCutSize: true });
     assert.ok(propLines.some((l) => l.kind === 'Glass' && l.widthIn === bd.glassCutWidthIn));
     assert.ok(propLines.some((l) => l.kind === 'Framing' && l.unit === 'lf'));
-    assert.ok(propLines.some((l) => l.kind === 'Caulking' && l.unit === 'lf'));
+    assert.ok(propLines.some((l) => l.kind === 'Materials' && l.unit === 'lf' && l.price === 3.5));
   });
 
   it('measures 2-click rectangles (Box W×H) and multi-point polylines (Perimeter LF)', () => {

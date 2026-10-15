@@ -1,6 +1,6 @@
 // Pure accounting, notary, Florida Statutory Lien Waiver (§ 713.20), and ledger export calculations
 // for Melina S. Arias (Accountant & Notary Public) and admins Wesley Stel & Jason Vergara.
-import { invoiceTotals, contractSum, money, round2, paidOn, dueOn, creditedOn } from './calc.js';
+import { invoiceTotals, contractSum, g702, money, round2, paidOn, dueOn, creditedOn } from './calc.js';
 
 export const DEFAULT_NOTARY = {
   name: 'Melina S. Arias',
@@ -405,12 +405,14 @@ export function buildAccountingLedger({
     const cust = custById.get(pa.customerId || contract.customerId || job.customerId) || {};
     const customerLabel = cust.company || cust.name || 'Customer';
     const jobLabel = job.name || '';
-    const s = payAppSummaries[pa.id] || {
-      currentDue: Number(pa.currentDue) || 0,
-      totalCompleted: 0,
-      totalRetainage: 0,
-      depositApplied: Number(pa.depositApplied) || 0,
-    };
+    const s = payAppSummaries[pa.id] || (pa.lines?.length
+      ? g702(pa, contract, changeOrders.filter((c) => c.contractId === pa.contractId), 0)
+      : {
+        currentDue: Number(pa.currentDue) || 0,
+        totalCompleted: 0,
+        totalRetainage: 0,
+        depositApplied: Number(pa.depositApplied) || 0,
+      });
     const syncKey = `pa:${pa.id}`;
     const syncInfo = syncStatus[syncKey] || {};
     const isSynced = Boolean(syncInfo.synced);
@@ -450,7 +452,8 @@ export function buildAccountingLedger({
         paid: isPaid ? currentDue : 0,
         credited: 0,
         balanceDue: openBalance,
-        paymentRefs: syncInfo.checkNumber ? `Check #${syncInfo.checkNumber}` : '',
+        checkNumber: syncInfo.checkNumber || pa.checkNumber || '',
+        paymentRefs: (syncInfo.checkNumber || pa.checkNumber) ? `Check #${syncInfo.checkNumber || pa.checkNumber}` : '',
         incomeAccount: incomeAcct,
         arAccount: acct.arAccount,
         lines: [{ desc: `AIA G702 Application #${pa.number} thru ${pa.periodTo || pa.date} (Net of ${pa.retainagePct ?? 10}% retainage)`, qty: 1, price: currentDue }],
@@ -475,6 +478,40 @@ export function buildAccountingLedger({
           ],
         });
       }
+
+      if (isPaid && currentDue > 0) {
+        const payDate = syncInfo.paidDate || pa.paidDate || pa.date || pa.periodTo || '';
+        const refNum = syncInfo.checkNumber || pa.checkNumber || `PA-${pa.number}`;
+        payments.push({
+          id: `pa-pay-${pa.id}`,
+          invoiceId: '',
+          payAppId: pa.id,
+          invoiceNumber: `PA-${pa.number}`,
+          customerName: customerLabel,
+          jobName: jobLabel,
+          date: payDate,
+          amount: currentDue,
+          method: 'check',
+          reference: refNum,
+          checkRef: refNum,
+          note: `AIA G702 Pay App #${pa.number} payment`,
+          depositAccount: acct.checkingAccount,
+          arAccount: acct.arAccount,
+        });
+        journalEntries.push({
+          trnsType: 'PAYMENT',
+          docNum: refNum,
+          date: payDate,
+          dueDate: payDate,
+          name: customerLabel,
+          account: acct.checkingAccount,
+          amount: currentDue,
+          memo: `check payment on Pay App #${pa.number} (${refNum})`,
+          splits: [
+            { account: acct.arAccount, amount: -currentDue, memo: `Apply to Pay App #${pa.number}` },
+          ],
+        });
+      }
     }
   }
 
@@ -484,7 +521,7 @@ export function buildAccountingLedger({
     if (['cancelled', 'draft'].includes(pr.status)) continue;
     const job = jobById.get(pr.jobId) || {};
     const sup = supById.get(pr.supplierId) || {};
-    const quotedAmount = round2(Number(pr.quoteAmount || pr.totalAmount || 0));
+    const quotedAmount = round2(Number(pr.quoteTotal ?? pr.quoteAmount ?? pr.totalAmount ?? 0));
     vendorCommitments.push({
       id: pr.id,
       number: pr.number || '',
@@ -519,6 +556,7 @@ export function buildAccountingLedger({
   const totalCollected = round2(receivables.reduce((s, r) => s + r.paid, 0));
   const totalOpenAR = round2(receivables.reduce((s, r) => s + r.balanceDue, 0));
   const totalSalesTax = round2(receivables.reduce((s, r) => s + r.tax, 0));
+  const totalVendorCommitments = round2(vendorCommitments.reduce((s, v) => s + v.amount, 0));
   const unsyncedCount = receivables.filter((r) => !r.synced).length;
   const pendingNotaryCount = payApps.filter((p) => !syncStatus[`pa:${p.id}`]?.notarized).length;
 
@@ -534,6 +572,7 @@ export function buildAccountingLedger({
       totalOpenAR,
       totalRetainageHeld,
       totalSalesTax,
+      totalVendorCommitments,
       unsyncedCount,
       pendingNotaryCount,
     },

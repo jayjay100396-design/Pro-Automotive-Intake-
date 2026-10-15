@@ -477,7 +477,9 @@ export function accountingPage() {
                     <td class="num">${r.retainageHeld ? money(r.retainageHeld) : '—'}</td>
                     <td class="num">${money(r.paid)}</td>
                     <td class="num"><b>${money(r.balanceDue)}</b></td>
-                    <td>${esc(r.paymentRefs || '—')}</td>
+                    <td>${r.recordType === 'AIA G702 Pay App'
+                      ? `<input class="acct-ref-in" data-check-key="${esc(r.key)}" value="${esc(r.checkNumber || '')}" placeholder="Check #" aria-label="Check number for ${esc(r.number)}">`
+                      : esc(r.paymentRefs || '—')}</td>
                     <td class="actions-cell">
                       <a class="btn small" href="${printHref}">Print</a>
                       <a class="btn small" href="${waiverHref}">Waiver</a>
@@ -500,7 +502,7 @@ export function accountingPage() {
                   <th>Check / Ref #</th>
                   <th>Customer / GC</th>
                   <th>Job</th>
-                  <th>Invoice #</th>
+                  <th>Invoice / Pay App</th>
                   <th>Deposit Account</th>
                   <th class="num">Amount</th>
                 </tr>
@@ -512,7 +514,7 @@ export function accountingPage() {
                   <td><b>${esc(p.reference || '—')}</b></td>
                   <td>${esc(p.customerName)}</td>
                   <td>${esc(p.jobName)}</td>
-                  <td><a href="#/invoices/${esc(p.invoiceId)}">#${esc(p.invoiceNumber)}</a></td>
+                  <td><a href="${p.invoiceId ? `#/invoices/${esc(p.invoiceId)}` : `#/payapps/${esc(p.payAppId)}`}">#${esc(p.invoiceNumber)}</a></td>
                   <td class="small muted">${esc(p.depositAccount)}</td>
                   <td class="num"><b>${money(p.amount)}</b></td>
                 </tr>`).join('')}
@@ -531,6 +533,7 @@ export function accountingPage() {
                   <th>Job</th>
                   <th>Order Status</th>
                   <th>Items</th>
+                  <th class="num">Quote Total</th>
                   <th>Account</th>
                   <th>Sworn Statement</th>
                 </tr>
@@ -541,8 +544,9 @@ export function accountingPage() {
                   <td><a href="#/jobs/${esc(v.jobId)}">${esc(v.jobName || 'Job')}</a></td>
                   <td>${badge(v.status)}</td>
                   <td>${v.itemCount} item${v.itemCount === 1 ? '' : 's'}</td>
+                  <td class="num"><b>${v.amount ? money(v.amount) : '—'}</b></td>
                   <td class="small muted">${esc(v.account)}</td>
-                  <td><a class="btn small" href="#/accounting/waiver/print?job=${esc(v.jobId)}&amp;kind=sworn">Print Sworn Statement</a></td>
+                  <td><a class="btn small" href="#/accounting/waiver/print?job=${esc(v.jobId)}&amp;kind=sworn&amp;vendor=${encodeURIComponent(v.supplierName)}&amp;vendorBalanceCurrent=${encodeURIComponent(v.amount || 0)}">Print Sworn Statement</a></td>
                 </tr>`).join('')}
               </tbody>
             </table>
@@ -626,6 +630,25 @@ export function accountingPage() {
         };
         await persistBillingState({ syncStatus: { [key]: nextEntry } });
         toast(cb.checked ? 'Marked complete' : 'Unmarked');
+        render();
+      });
+    });
+
+    rootEl.querySelectorAll('[data-check-key]').forEach((inp) => {
+      inp.addEventListener('change', async () => {
+        const key = inp.dataset.checkKey;
+        const prev = syncStatus[key] || {};
+        const nextEntry = {
+          ...prev,
+          checkNumber: inp.value.trim(),
+        };
+        if (key && key.startsWith('pa:')) {
+          const paId = key.slice(3);
+          const paRec = (state.data.payApps || []).find((p) => p.id === paId);
+          if (paRec) paRec.checkNumber = nextEntry.checkNumber;
+        }
+        await persistBillingState({ syncStatus: { [key]: nextEntry } });
+        toast(nextEntry.checkNumber ? `Saved Check #${nextEntry.checkNumber}` : 'Cleared check reference');
         render();
       });
     });

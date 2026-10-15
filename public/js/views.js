@@ -386,7 +386,12 @@ function fromTakeoff(template, jobId) {
   const preset = PRESETS[template] || PRESETS.storefront;
   const like = (kind) => preset.find((l) => l.kind === kind) || {};
   // A type without a size comes over priced each, so the template's per-sq-ft price doesn't fit it.
-  const lines = draft.lines.map((l) => ({ ...like(l.kind), ...l, price: like(l.kind).unit === l.unit ? like(l.kind).price ?? 0 : 0, taxable: like(l.kind).taxable ?? true }));
+  const lines = draft.lines.map((l) => ({
+    ...like(l.kind),
+    ...l,
+    price: l.price != null ? l.price : (like(l.kind).unit === l.unit ? like(l.kind).price ?? 0 : 0),
+    taxable: l.taxable != null ? l.taxable : (like(l.kind).taxable ?? true),
+  }));
   const kinds = new Set(draft.lines.map((l) => l.kind));
   return { lines: [...lines, ...preset.filter((l) => !kinds.has(l.kind))], scope: draft.scope || '' };
 }
@@ -1337,7 +1342,7 @@ export function settings() {
       ${lastAlertNote() ? `<p class="small muted">${lastAlertNote()}</p>` : ''}
     </div>
     <div class="card"><h2>Your account</h2>
-      <p>${esc(u.displayName || '')} ${esc(u.email || u.phoneNumber || '')}<br><span class="muted small">Role: ${esc(state.role)} · signed in with ${esc(u.providerData.map((p) => ({ 'google.com': 'Google', password: 'email and password', phone: 'phone' }[p.providerId] || p.providerId)).join(', '))}</span></p>
+      <p>${esc(u.displayName || '')} ${esc(u.email || u.phoneNumber || '')}<br><span class="muted small">Role: ${esc(state.role)} · signed in with ${esc((u.providerData || []).map((p) => ({ 'google.com': 'Google', password: 'email and password', phone: 'phone' }[p.providerId] || p.providerId)).join(', ') || 'email')}</span></p>
     </div>
     <div class="card gcal-card"><h2>Google Calendar</h2><div id="gcal"><p class="muted small">Checking…</p></div></div>
     <div class="card"><h2>Team</h2>

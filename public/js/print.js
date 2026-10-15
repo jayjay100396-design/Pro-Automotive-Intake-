@@ -127,14 +127,24 @@ export function estimateDoc(id) {
 export function contractDoc(id) {
   const c = get('contracts', id);
   if (!c) return { waiting: true, html: '<p class="muted">Loading…</p>' };
-  const s = contractSum(c, where('changeOrders', 'contractId', id));
+  const cos = where('changeOrders', 'contractId', id);
+  const s = contractSum(c, cos);
+  const approvedCos = cos.filter((x) => x.status === 'approved');
   return page(`Contract ${c.number}`, `
     ${letterhead('Contract', `<div>No. ${esc(c.number)}</div><div>${fmtDate(c.date)}</div>`)}
     ${party(c.jobId, c.customerId)}
     <table class="doc-table"><thead><tr><th>Item</th><th>Schedule of values</th><th class="num">Value</th></tr></thead><tbody>
     ${(c.sov || []).map((l) => `<tr><td>${esc(l.item)}</td><td>${esc(l.desc)}</td><td class="num">${money(l.value)}</td></tr>`).join('')}
+    ${approvedCos.map((co) => `<tr><td>CO${esc(co.number)}</td><td>${esc(co.title || co.desc || `Change Order #${co.number}`)}</td><td class="num">${money(co.amount)}</td></tr>`).join('')}
     </tbody></table>
-    <div class="doc-totals"><div class="tr grand"><span>Contract sum</span><span>${money(s.original)}</span></div><div class="tr"><span>Retainage</span><span>${esc(c.retainagePct ?? 0)}%</span></div></div>
+    <div class="doc-totals">
+      <div class="tr ${approvedCos.length ? '' : 'grand'}"><span>${approvedCos.length ? 'Original contract sum' : 'Contract sum'}</span><span>${money(s.original)}</span></div>
+      ${approvedCos.length ? `
+        <div class="tr"><span>Net change by approved change orders</span><span>${money(s.netChange)}</span></div>
+        <div class="tr grand"><span>Contract sum to date</span><span>${money(s.toDate)}</span></div>
+      ` : ''}
+      <div class="tr"><span>Retainage</span><span>${esc(c.retainagePct ?? 0)}%</span></div>
+    </div>
     ${c.terms ? `<div class="doc-terms"><div class="label">Terms</div>${nl(c.terms)}</div>` : ''}
     ${signatures('Owner / Customer', `Contractor: ${esc(state.company?.name || 'Stellar Glass')}`)}`);
 }
@@ -320,6 +330,9 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
       ownerName: params.get('owner') ?? undefined,
       propertyDesc: params.get('property') ?? undefined,
       signerName: params.get('signer') ?? undefined,
+      vendorName: params.get('vendor') ?? undefined,
+      vendorBalanceThru: params.get('vendorBalanceThru') ?? undefined,
+      vendorBalanceCurrent: params.get('vendorBalanceCurrent') ?? undefined,
       includeNotary: params.get('notary') ?? '1',
     },
   });
@@ -466,6 +479,15 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
           <label>Signed / Notarized Date
             <input type="date" name="signedDate" value="${esc(initial.signedDate)}">
           </label>
+          <label>NTO Supplier / Vendor
+            <input name="vendorName" value="${esc(initial.vendorName || '')}">
+          </label>
+          <label>Vendor Balance Thru ($)
+            <input type="number" step="0.01" name="vendorBalanceThru" value="${esc(initial.vendorBalanceThru ?? 0)}">
+          </label>
+          <label>Vendor Total Unpaid ($)
+            <input type="number" step="0.01" name="vendorBalanceCurrent" value="${esc(initial.vendorBalanceCurrent ?? 0)}">
+          </label>
           <label class="span2"><input type="checkbox" name="includeNotary" ${initial.includeNotary ? 'checked' : ''}> Include Florida Notary Acknowledgment &amp; Seal (${esc(nt.name)} · #${esc(nt.commissionNumber)})</label>
         </div>
       </section>
@@ -496,6 +518,9 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
             ownerName: getVal('ownerName'),
             propertyDesc: getVal('propertyDesc'),
             signerName: getVal('signerName'),
+            vendorName: getVal('vendorName'),
+            vendorBalanceThru: getVal('vendorBalanceThru'),
+            vendorBalanceCurrent: getVal('vendorBalanceCurrent'),
             includeNotary: incNotary,
           },
         });

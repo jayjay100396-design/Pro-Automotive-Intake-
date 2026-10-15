@@ -51,8 +51,9 @@ self.addEventListener('fetch', (event) => {
   // Never intercept range requests or large MP4 video streams
   if (request.headers.has('range') || url.pathname.endsWith('.mp4')) return;
 
+  const revalidate = /\.(js|mjs|css|html|webmanifest)$/i.test(url.pathname) || request.mode === 'navigate';
   event.respondWith(
-    fetch(request)
+    fetch(request, revalidate ? { cache: 'no-cache' } : undefined)
       .then((networkResp) => {
         if (networkResp && networkResp.status === 200 && networkResp.type === 'basic') {
           const copy = networkResp.clone();

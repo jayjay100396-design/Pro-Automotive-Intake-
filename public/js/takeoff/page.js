@@ -862,8 +862,23 @@ export function takeoffPage(fileId, params) {
 
   function renderRows() {
     const body = el.querySelector('[data-rows]');
+    let totalCount = 0;
+    let totalDisplayArea = 0;
+    let totalRoArea = 0;
+    let totalCutArea = 0;
     body.innerHTML = rows.map((r, i) => {
+      const q = Number(r.qty) || 0;
+      totalCount += q;
       const cut = r.widthIn && r.heightIn ? commercialGlassSize(r.widthIn, r.heightIn, { system: r.system || framingSystem, bays: r.bays || 1, transomHeightIn: r.transomHeightIn || 0 }) : null;
+      const roArea = r.widthIn && r.heightIn ? sqft(r.widthIn, r.heightIn) * q : 0;
+      const cutArea = cut ? (sqft(cut.glassCutWidthIn, cut.glassCutHeightIn) * cut.bays + (cut.hasTransom ? sqft(cut.glassCutWidthIn, cut.transomGlassCutHeightIn) * cut.bays : 0)) * q : roArea;
+      const rowArea = useCutSize ? cutArea : roArea;
+      totalRoArea += roArea;
+      totalCutArea += cutArea;
+      totalDisplayArea += rowArea;
+      const sqftTitle = cut
+        ? `Net Glass Cut: ${cutArea.toFixed(2)} sq ft · Rough Opening: ${roArea.toFixed(2)} sq ft`
+        : '';
       return `<tr data-i="${i}" class="${i === selected ? 'tk-sel' : ''}">
         <td><input type="radio" name="tkrow" ${i === selected ? 'checked' : ''} aria-label="Fill this row by measuring" data-pick></td>
         <td><input data-f="label" value="${esc(r.label)}" placeholder="A1" size="4"></td>
@@ -871,13 +886,11 @@ export function takeoffPage(fileId, params) {
         <td><input data-f="widthIn" value="${esc(inches(r.widthIn))}" class="n tk-n" placeholder="in" title="${cut ? `Glass cut width: ${fmtIn(cut.glassCutWidthIn)} (DLO ${fmtIn(cut.bayDloWidthIn)})` : ''}"></td>
         <td><input data-f="heightIn" value="${esc(inches(r.heightIn))}" class="n tk-n" placeholder="in" title="${cut ? `Glass cut height: ${fmtIn(cut.glassCutHeightIn)} (DLO ${fmtIn(cut.mainDloHeightIn)})` : ''}"></td>
         <td><input data-f="bays" type="number" min="1" max="24" step="1" value="${esc(r.bays ?? 1)}" class="n tk-bays" title="Number of horizontal glass bays separated by vertical mullions"></td>
-        <td class="num">${r.widthIn && r.heightIn ? (sqft(r.widthIn, r.heightIn) * (Number(r.qty) || 0)).toFixed(1) : ''}</td>
+        <td class="num" title="${esc(sqftTitle)}">${r.widthIn && r.heightIn ? rowArea.toFixed(1) : ''}</td>
         <td><button type="button" class="icon" data-del aria-label="Remove row">✕</button></td>
       </tr>`;
     }).join('') || '<tr><td colspan="8" class="muted small">No openings yet.</td></tr>';
-    const count = rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-    const area = rows.reduce((s, r) => s + (r.widthIn && r.heightIn ? sqft(r.widthIn, r.heightIn) * (Number(r.qty) || 0) : 0), 0);
-    el.querySelector('[data-totals]').innerHTML = rows.length ? `<tr><td></td><td>Total</td><td class="num">${count}</td><td></td><td></td><td></td><td class="num">${area.toFixed(1)}</td><td></td></tr>` : '';
+    el.querySelector('[data-totals]').innerHTML = rows.length ? `<tr><td></td><td>Total</td><td class="num">${totalCount}</td><td></td><td></td><td></td><td class="num" title="Net Cut: ${totalCutArea.toFixed(2)} sq ft · Rough Opening: ${totalRoArea.toFixed(2)} sq ft">${totalDisplayArea.toFixed(1)}</td><td></td></tr>` : '';
 
     // Commercial cut-size & stock-length summary box
     const cutBox = el.querySelector('[data-cut-summary]');
@@ -889,7 +902,7 @@ export function takeoffPage(fileId, params) {
         cutBox.innerHTML = `
           <div class="tk-cut-grid small">
             ${selCut ? `<div><span class="muted">${esc(selRow.label || 'Selected')} Glass Cut (${selCut.bays} bay${selCut.bays > 1 ? 's' : ''}):</span> <b>${esc(fmtIn(selCut.glassCutWidthIn))} × ${esc(fmtIn(selCut.glassCutHeightIn))}</b> <span class="muted">(DLO ${esc(fmtIn(selCut.bayDloWidthIn))} × ${esc(fmtIn(selCut.mainDloHeightIn))})</span></div>` : ''}
-            <div><span class="muted">Framing Stock:</span> <b>${lfTotals.framingLf} LF</b> (${lfTotals.stockLengths24Ft} × 24' S/L) · <span class="muted">Perimeter Sealant:</span> <b>${lfTotals.sealantLf} LF</b> (~${lfTotals.sealantTubes} tubes) · <span class="muted">Total Glass:</span> <b>${lfTotals.totalLites} lites</b></div>
+            <div><span class="muted">Framing Stock:</span> <b>${lfTotals.framingLf} LF</b> (${lfTotals.stockLengths24Ft} × 24' S/L) · <span class="muted">Perimeter Sealant:</span> <b>${lfTotals.sealantLf} LF</b> (~${lfTotals.sealantTubes} tubes) · <span class="muted">Total Glass:</span> <b>${lfTotals.totalLites} lites</b> (${totalCutArea.toFixed(1)} cut sq ft / ${totalRoArea.toFixed(1)} RO sq ft)</div>
           </div>`;
       } else {
         cutBox.innerHTML = '';
@@ -993,6 +1006,7 @@ export function takeoffPage(fileId, params) {
     });
     el.querySelector('[data-cutsize]')?.addEventListener('change', (e) => {
       useCutSize = e.target.checked;
+      renderRows();
     });
     el.querySelector('[data-estimate]').addEventListener('click', createEstimate);
     el.querySelector('[data-order-glass]')?.addEventListener('click', () => createPartsOrder('glass'));

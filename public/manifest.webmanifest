@@ -78,7 +78,7 @@
       "name": "Proposals & Estimates",
       "short_name": "Proposals",
       "description": "Create and send commercial glazing & shower proposals",
-      "url": "/#/proposals",
+      "url": "/#/estimates",
       "icons": [
         {
           "src": "/img/icon-192.png",
@@ -91,7 +91,7 @@
       "name": "AIA G702/G703 Billing",
       "short_name": "Billing",
       "description": "Contracts, Change Orders, AIA G702/G703 Pay Apps & Invoices",
-      "url": "/#/billing",
+      "url": "/#/payapps",
       "icons": [
         {
           "src": "/img/icon-192.png",

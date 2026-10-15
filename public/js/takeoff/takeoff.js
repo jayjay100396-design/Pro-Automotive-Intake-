@@ -463,9 +463,10 @@ export function estimateLines(openings, { desc = 'storefront', system = null, us
   if (totalPerimeterLf > 0) {
     lines.push({
       desc: 'Perimeter silicone sealant (interior & exterior joints)',
-      kind: 'Caulking',
+      kind: 'Materials',
       unit: 'lf',
       qty: Math.ceil(totalPerimeterLf),
+      price: 3.5,
     });
   }
   return lines;
