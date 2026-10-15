@@ -141,12 +141,16 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
       `Takeoff table cut sq ft (${takeoffTableCutSqft}) must equal Proposal glass sq ft (${proposalGlassSqft})`,
     );
 
-    // Check sealant line has kind 'Materials', unit 'lf', and positive price $3.50/lf
-    const sealantLine = propLines.find((l) => l.kind === 'Materials');
-    assert.ok(sealantLine, 'Must include Perimeter silicone sealant line under Materials');
-    assert.equal(sealantLine.unit, 'lf');
-    assert.equal(sealantLine.price, 3.5);
-    assert.ok(sealantLine.qty > 0);
+    // Sealant stays with the proposal template's own caulking line, not a price made up by the takeoff
+    assert.ok(!propLines.some((l) => l.kind === 'Materials'));
+
+    // Without the cut-size box ticked, the proposal gets the opening sizes and outside perimeter as before
+    const plainLines = estimateLines(rows, { system: 'sf175' });
+    assert.deepEqual(plainLines.map((l) => [l.kind, l.unit, l.qty, l.widthIn, l.heightIn]), [
+      ['Glass', 'sqft', 2, 108, 96],
+      ['Glass', 'sqft', 3, 72, 84],
+      ['Framing', 'lf', Math.ceil((2 * 2 * (108 + 96) + 3 * 2 * (72 + 84)) / 12), undefined, undefined],
+    ]);
 
     // Check 3D Scene Builder matches exact opening assemblies and lites
     const scene = build3DSceneSpec(rows, { system: 'sf175' });

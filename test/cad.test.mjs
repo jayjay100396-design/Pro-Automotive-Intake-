@@ -41,6 +41,33 @@ describe('Phase 1: CAD (.DXF / .DWG) reader (cad.js)', () => {
 
     const dxfBytes = new TextEncoder().encode('  0\nSECTION\n  2\nHEADER\n');
     assert.equal(detectCadKind('', 'unknown.bin', dxfBytes), 'dxf');
+
+    // A file that says it's a PDF or a picture opens as one, whatever its first bytes are.
+    assert.equal(detectCadKind('application/pdf', 'plans.pdf', dwgBytes), null);
+    assert.equal(detectCadKind('', 'site-photo.JPG', dxfBytes), null);
+  });
+
+  it('keeps a malformed or hostile drawing from freezing the page', function () {
+    this.timeout(20000);
+    // An arc with an absurd end angle used to loop forever.
+    const arcModel = cadToPageModel(parseDxf(makeDxf({ entities: '0\nARC\n8\nA-GLAZ\n10\n0\n20\n0\n40\n10\n50\n0\n51\n-1e300' })));
+    assert.ok(arcModel.cad.allSegs.length <= 32);
+
+    // A block inserted as a million-by-million array, and blocks that each insert the next one ten thousand
+    // times, stop at a limit instead of expanding without end.
+    const line = '0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n0';
+    const started = Date.now();
+    const arrayModel = cadToPageModel(parseDxf(makeDxf({
+      blocks: `0\nBLOCK\n2\nTICK\n10\n0\n20\n0\n${line}\n0\nENDBLK`,
+      entities: '0\nINSERT\n8\nA-GLAZ\n2\nTICK\n10\n0\n20\n0\n70\n1000000\n71\n1000000\n44\n2\n45\n2',
+    })));
+    assert.equal(arrayModel.cad.allSegs.length, 500 * 500);
+
+    const nested = [0, 1, 2, 3].map((b) => `0\nBLOCK\n2\nB${b}\n10\n0\n20\n0\n${
+      b === 3 ? line : `0\nINSERT\n8\n0\n2\nB${b + 1}\n10\n0\n20\n0\n70\n100\n71\n100\n44\n1\n45\n1`}\n0\nENDBLK`);
+    const nestedModel = cadToPageModel(parseDxf(makeDxf({ blocks: nested.join('\n'), entities: '0\nINSERT\n8\nA-GLAZ\n2\nB0\n10\n0\n20\n0' })));
+    assert.ok(nestedModel.cad.allSegs.length > 0 && nestedModel.cad.allSegs.length <= 1500000);
+    assert.ok(Date.now() - started < 15000, 'expanding the drawings took too long');
   });
 
   it('cleans AutoCAD TEXT and MTEXT formatting codes and stacked fractions', () => {
@@ -165,7 +192,8 @@ describe('Phase 2: Commercial Glazing Deductions, Box/Polyline Measure & Supplie
     const propLines = estimateLines(rows, { system: 'sf175', useCutSize: true });
     assert.ok(propLines.some((l) => l.kind === 'Glass' && l.widthIn === bd.glassCutWidthIn));
     assert.ok(propLines.some((l) => l.kind === 'Framing' && l.unit === 'lf'));
-    assert.ok(propLines.some((l) => l.kind === 'Materials' && l.unit === 'lf' && l.price === 3.5));
+    // Sealant is counted in tubes for the parts order; the proposal keeps the template's own caulking line.
+    assert.ok(!propLines.some((l) => l.kind === 'Materials'));
   });
 
   it('measures 2-click rectangles (Box W×H) and multi-point polylines (Perimeter LF)', () => {

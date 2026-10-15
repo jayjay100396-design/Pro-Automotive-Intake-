@@ -410,11 +410,13 @@ export function scopeLine(openings) {
 }
 
 // Estimate lines from openings: a glass line per type (sized and counted, priced from the proposal
-// template), and the storefront framing in linear feet. When `useCutSize` is true (or an opening has
-// multiple bays / transom), calculates exact glass cut sizes and full mullion/transom linear footage.
+// template), and the storefront framing in linear feet. Only when `useCutSize` is on (the "exact glass
+// cut sizes" box on the Takeoff page) are the lines priced on glass cut sizes and full mullion/transom
+// footage; otherwise on the openings' size and outside perimeter, so a proposal's price doesn't change
+// unless that box is ticked.
 export function estimateLines(openings, { desc = 'storefront', system = null, useCutSize = false } = {}) {
   const list = openings.filter((o) => o.qty > 0);
-  if (!useCutSize && !system && !list.some((o) => (o.bays && o.bays > 1) || o.transomHeightIn > 0)) {
+  if (!useCutSize) {
     const lines = list.map((o) => ({
       desc: `Type ${o.label || '?'} ${desc}${o.widthIn && o.heightIn ? ` ${fmtFtIn(o.widthIn)} x ${fmtFtIn(o.heightIn)}` : ''}`,
       kind: 'Glass', unit: o.widthIn && o.heightIn ? 'sqft' : 'each', qty: o.qty,
@@ -427,7 +429,6 @@ export function estimateLines(openings, { desc = 'storefront', system = null, us
 
   const lines = [];
   let totalFramingLf = 0;
-  let totalPerimeterLf = 0;
   for (const o of list) {
     const bd = storefrontBayBreakdown(o, { system: o.system || system || 'sf175' });
     if (!bd) {
@@ -438,7 +439,6 @@ export function estimateLines(openings, { desc = 'storefront', system = null, us
       continue;
     }
     totalFramingLf += bd.totalFramingLf;
-    totalPerimeterLf += bd.totalPerimeterLf;
     for (const lite of bd.lites) {
       const roleNote = lite.role === 'transom' ? ' (transom lite)' : bd.bays > 1 ? ` (${bd.bays} bays/opening)` : '';
       lines.push({
@@ -460,15 +460,8 @@ export function estimateLines(openings, { desc = 'storefront', system = null, us
       qty: Math.ceil(totalFramingLf),
     });
   }
-  if (totalPerimeterLf > 0) {
-    lines.push({
-      desc: 'Perimeter silicone sealant (interior & exterior joints)',
-      kind: 'Materials',
-      unit: 'lf',
-      qty: Math.ceil(totalPerimeterLf),
-      price: 3.5,
-    });
-  }
+  // Sealant stays with the template's own caulking line (and the parts order's sealant count), not a
+  // made-up price here.
   return lines;
 }
 
