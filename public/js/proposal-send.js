@@ -73,10 +73,17 @@ async function proposalFile(e) {
 export function person(e = {}) {
   const p = state.profile?.preparedBy || {};
   const c = state.company || {};
-  const name = e.preparedName || p.name || c.contactName || state.user?.displayName || BRAND.contactName || '';
-  const title = e.preparedTitle || (e.preparedName ? '' : p.title || c.contactTitle || BRAND.contactTitle || '');
-  const phone = e.preparedPhone || p.phone || c.cell || c.phone || state.user?.phoneNumber || '';
-  const email = e.preparedEmail || p.email || c.email || state.user?.email || '';
+  const u = state.user || {};
+  // Whoever is signed in, as they last signed a proposal; the business's contact in Settings when that's who
+  // is signed in; anyone else as themselves. Picking someone else is one click in the quick pick or the send box.
+  const isContact = !!c.contactName && (u.displayName === c.contactName || (!!c.email && u.email === c.email));
+  const own = p.name ? p
+    : isContact ? { name: c.contactName, title: c.contactTitle, phone: c.cell || c.phone, email: c.email }
+      : { name: u.displayName || '', title: '', phone: u.phoneNumber || '', email: u.email || '' };
+  const name = e.preparedName || own.name || '';
+  const title = e.preparedTitle || (e.preparedName ? '' : own.title || '');
+  const phone = e.preparedPhone || own.phone || '';
+  const email = e.preparedEmail || own.email || '';
   return { name, title, phone, email };
 }
 
@@ -122,13 +129,15 @@ export function senderChoices(e = {}, members = []) {
       email: state.user.email || '',
     });
   }
+  // Team members (their member records keep the name they signed up with). Only the contact named in Settings has
+  // a known title; anyone else's is typed in.
   for (const m of members) {
-    const mName = m.displayName || (m.email ? m.email.split('@')[0] : '');
+    const mName = m.name || m.displayName || (m.email ? m.email.split('@')[0] : '');
     if (mName) {
       addChoice({
         name: mName,
-        title: m.role === 'owner' ? (c.contactTitle || 'President') : 'Estimator',
-        phone: c.phone || '',
+        title: mName === c.contactName ? (c.contactTitle || '') : '',
+        phone: m.phone || '',
         email: m.email || '',
       });
     }
@@ -220,12 +229,15 @@ export function sendProposal(id, e = get('estimates', id), { onSent = () => {} }
           <select id="sSenderPick"></select>
         </label>
       </div>
-      <div class="grid2">
-        <label class="small">Sender name <input id="sFromName" value="${esc(sender.name)}" placeholder="e.g. Wesley Stel"></label>
-        <label class="small">Title <input id="sFromTitle" value="${esc(sender.title)}" placeholder="e.g. President"></label>
-        <label class="small">Phone <input id="sFromPhone" value="${esc(sender.phone)}" placeholder="(863) 255-5731"></label>
-        <label class="small">Email <input id="sFromEmail" value="${esc(sender.email)}" placeholder="wes@stellarglassllc.com"></label>
-      </div>
+      <details>
+        <summary class="small">Change the sender's name, title, phone or email</summary>
+        <div class="grid2">
+          <label class="small">Sender name <input id="sFromName" value="${esc(sender.name)}" placeholder="e.g. Wesley Stel"></label>
+          <label class="small">Title <input id="sFromTitle" value="${esc(sender.title)}" placeholder="e.g. President"></label>
+          <label class="small">Phone <input id="sFromPhone" value="${esc(sender.phone)}" placeholder="(863) 255-5731"></label>
+          <label class="small">Email <input id="sFromEmail" value="${esc(sender.email)}" placeholder="wes@stellarglassllc.com"></label>
+        </div>
+      </details>
     </div>
     <label>To <input id="sTo" type="email" multiple autocomplete="off" value="${esc(emailList(customer.email).join(', '))}" placeholder="customer@example.com"></label>
     <p class="hint warn hidden" id="sToNote"></p>
@@ -310,6 +322,7 @@ export function sendProposal(id, e = get('estimates', id), { onSent = () => {} }
       $('#sFromEmail').value = picked.email || '';
       applySenderChange();
     } else {
+      $('.send-from-box details').open = true;
       $('#sFromName').focus();
     }
   });

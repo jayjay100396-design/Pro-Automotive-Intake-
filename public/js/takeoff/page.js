@@ -937,7 +937,6 @@ export function takeoffPage(fileId, params) {
         widthIn: r.widthIn || null,
         heightIn: r.heightIn || null,
         bays: Math.max(1, Number(r.bays) || 1),
-        system: r.system || framingSystem,
       }));
   }
 
@@ -1074,7 +1073,8 @@ export function takeoffPage(fileId, params) {
         const chk = el.querySelector('[data-cutsize]');
         if (chk) chk.checked = useCutSize;
       }
-      if (file?.takeoff?.rows?.length) { rows = file.takeoff.rows.map((r) => ({ bays: 1, ...r })); renderRows(); }
+      // The framing system is the page's (the dropdown), not each row's: drop any saved with the rows.
+      if (file?.takeoff?.rows?.length) { rows = file.takeoff.rows.map(({ system: _s, ...r }) => ({ bays: 1, ...r })); renderRows(); }
       if (file) await openStored();
     } catch (err) {
       console.error(err);

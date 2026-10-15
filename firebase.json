@@ -91,7 +91,7 @@
     ],
     "headers": [
       {
-        "source": "**",
+        "regex": "^/([^_].*|_[^_].*|__[^/].*)?$",
         "headers": [
           {
             "key": "X-Content-Type-Options",

@@ -1,11 +1,9 @@
-// Accounting & Notary Hub for Melina S. Arias (Accountant & Florida Notary Public)
-// and admins Wesley Stel & Jason Vergara.
+// Accounting & Notary Hub for the accountant and the owners.
 // Provides:
 //  1. AIA G702/G703 Notary & Florida Statutory Lien Waiver (§ 713.20) Queue
 //  2. Signed & Notarized Document Vault (view & upload directly to job 'documents' / 'forms')
 //  3. Accounting Software Sync & Reconciliation Center (QuickBooks Online CSV, QuickBooks Desktop .IIF, Xero CSV, JSON)
-//  4. Florida Notary Commission (#HH 427582) & Chart of Accounts Mapping
-//  5. Narrated Accountant & Notary Tutorial Video modal
+//  4. Notary profile (typed onto printed notary blocks) & Chart of Accounts Mapping
 import { db } from './firebase.js';
 import {
   doc, collection, query, orderBy, limit, onSnapshot, setDoc, serverTimestamp,
@@ -18,7 +16,6 @@ import { safeUrl, problem, uploadOne, copyToDrive } from './files.js';
 import * as drive from './drive.js';
 import {
   DEFAULT_NOTARY,
-  ADMIN_SIGNERS,
   DEFAULT_ACCOUNTS,
   buildAccountingLedger,
   exportQuickBooksOnlineCsv,
@@ -27,45 +24,10 @@ import {
   exportAccountingPackageJson,
 } from './accounting-calc.js';
 
-export const ACCOUNTANT_VIDEO_URL = '/media/accountant-walkthrough.mp4';
-export const ACCOUNTANT_VTT_URL = '/media/accountant-walkthrough.vtt';
-
-export const ACCOUNTANT_CHAPTERS = [
-  {
-    step: 1,
-    time: 0,
-    label: '0:00 · 1. Welcome Melina, Wesley & Jason',
-    detail: 'How Melina S. Arias signs in with her Accountant invite from Wesley Stel or Jason Vergara and opens the Accounting & Notary Hub (#/accounting).',
-  },
-  {
-    step: 2,
-    time: 26.5,
-    label: '0:26 · 2. Contracts & Notarized Document Vault',
-    detail: 'Access signed contracts, change orders, W-9s, and GC accounting packages across every job, and upload notarized PDF scans straight into Contracts & documents or Permits & forms.',
-  },
-  {
-    step: 3,
-    time: 57.5,
-    label: '0:57 · 3. AIA G702/G703 & Notary Seal (#HH 427582)',
-    detail: 'Review AIA G702/G703 progress billing, retainage, and deposit offsets, then print with Melina S. Arias’s pre-filled Hillsborough County, Florida Notary Certificate & Commission Seal.',
-  },
-  {
-    step: 4,
-    time: 90.5,
-    label: '1:30 · 4. Florida § 713.20 Lien Waivers & NTOs',
-    detail: 'Generate Partial Waivers upon Progress Payment, Final Waivers, Contractor Affidavits, and NTO Vendor Sworn Statements (e.g. Trulite Glass and Aluminum) with one click.',
-  },
-  {
-    step: 5,
-    time: 120,
-    label: '2:00 · 5. QuickBooks (.CSV / .IIF) & Xero Sync',
-    detail: 'Map your Chart of Accounts, record GC check payments, mark items reconciled, and export balanced QuickBooks Online CSV, QuickBooks Desktop .IIF, or Xero ledger files.',
-  },
-];
-
-const NOTARY_STORAGE_KEY = 'stellar-notary-profile';
-const ACCOUNTS_STORAGE_KEY = 'stellar-chart-of-accounts';
-const SYNC_STORAGE_KEY = 'stellar-accounting-sync-map';
+// This device's copies of the business's accounting settings, one set per business (someone can belong to two).
+const notaryStorageKey = () => `stellar-notary-profile:${state.companyId || ''}`;
+const accountsStorageKey = () => `stellar-chart-of-accounts:${state.companyId || ''}`;
+const syncStorageKey = () => `stellar-accounting-sync-map:${state.companyId || ''}`;
 
 function loadLocalJson(key, fallback) {
   try {
@@ -91,80 +53,10 @@ function downloadBlob(filename, content, mimeType = 'text/csv;charset=utf-8') {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-export function openAccountantTutorialModal(hostEl = document.body) {
-  let dlg = hostEl.querySelector('dialog.acct-video-dlg');
-  if (!dlg) {
-    dlg = document.createElement('dialog');
-    dlg.className = 'tk-video-dlg acct-video-dlg';
-    dlg.setAttribute('aria-label', 'Accountant and Notary Walkthrough Video for Melina S. Arias, Wesley Stel, and Jason Vergara');
-    hostEl.append(dlg);
-  }
-
-  dlg.innerHTML = `
-    <div class="tk-video-wrap">
-      <div class="row between tk-3d-head">
-        <div>
-          <h2>Stellar Glass — Accountant &amp; Notary Guide (Melina S. Arias, Wesley Stel &amp; Jason Vergara)</h2>
-          <p class="small muted">Narrated walkthrough · AIA G702 Notary Certificate, Florida § 713.20 Lien Waivers, Document Vault &amp; QuickBooks Sync</p>
-        </div>
-        <div class="row">
-          <a class="btn small" href="${ACCOUNTANT_VIDEO_URL}" download="Melina-Arias-Stellar-Glass-Accountant-Notary-Guide.mp4">Download MP4</a>
-          <button type="button" class="icon" data-vid-close aria-label="Close accountant tutorial video">✕</button>
-        </div>
-      </div>
-      <div class="tk-video-stage">
-        <video data-vid-player src="${ACCOUNTANT_VIDEO_URL}" controls playsinline preload="metadata" aria-label="Stellar Glass Accountant and Notary Walkthrough Video">
-          <track kind="captions" src="${ACCOUNTANT_VTT_URL}" srclang="en" label="English" default>
-        </video>
-      </div>
-      <div class="chips tk-video-chapters" role="group" aria-label="Video chapters">
-        ${ACCOUNTANT_CHAPTERS.map((c, i) => `<button type="button" class="chip ${i === 0 ? 'on' : ''}" data-seek="${c.time}" title="${esc(c.detail)}">${esc(c.label)}</button>`).join('')}
-      </div>
-      <p class="small muted tk-video-note" data-vid-note aria-live="polite">${esc(ACCOUNTANT_CHAPTERS[0].detail)}</p>
-    </div>
-  `;
-
-  if (!dlg.open) dlg.showModal();
-
-  const video = dlg.querySelector('[data-vid-player]');
-  const noteEl = dlg.querySelector('[data-vid-note]');
-  const chips = [...dlg.querySelectorAll('[data-seek]')];
-
-  chips.forEach((btn, idx) => {
-    btn.addEventListener('click', () => {
-      const sec = Number(btn.dataset.seek) || 0;
-      video.currentTime = sec;
-      video.play().catch(() => {});
-      chips.forEach((c, j) => c.classList.toggle('on', j === idx));
-      if (noteEl && ACCOUNTANT_CHAPTERS[idx]) noteEl.textContent = ACCOUNTANT_CHAPTERS[idx].detail;
-    });
-  });
-
-  video.addEventListener('timeupdate', () => {
-    const t = video.currentTime || 0;
-    let activeIdx = 0;
-    for (let i = 0; i < ACCOUNTANT_CHAPTERS.length; i++) {
-      if (t >= ACCOUNTANT_CHAPTERS[i].time) activeIdx = i;
-    }
-    chips.forEach((c, j) => c.classList.toggle('on', j === activeIdx));
-    if (noteEl && ACCOUNTANT_CHAPTERS[activeIdx]) noteEl.textContent = ACCOUNTANT_CHAPTERS[activeIdx].detail;
-  });
-
-  dlg.querySelector('[data-vid-close]').onclick = () => {
-    video.pause();
-    dlg.close();
-  };
-  dlg.addEventListener('close', () => {
-    video.pause();
-  }, { once: true });
-
-  video.play().catch(() => {});
-}
-
 export function accountingPage() {
-  let notary = loadLocalJson(NOTARY_STORAGE_KEY, DEFAULT_NOTARY);
-  let accounts = loadLocalJson(ACCOUNTS_STORAGE_KEY, DEFAULT_ACCOUNTS);
-  let syncStatus = loadLocalJson(SYNC_STORAGE_KEY, {});
+  let notary = loadLocalJson(notaryStorageKey(), DEFAULT_NOTARY);
+  let accounts = loadLocalJson(accountsStorageKey(), DEFAULT_ACCOUNTS);
+  let syncStatus = loadLocalJson(syncStorageKey(), {});
   let docFiles = [];
   let dateFrom = '';
   let dateTo = '';
@@ -182,24 +74,25 @@ export function accountingPage() {
   const persistBillingState = async (patch) => {
     if (patch.notary) {
       notary = { ...notary, ...patch.notary };
-      saveLocalJson(NOTARY_STORAGE_KEY, notary);
+      saveLocalJson(notaryStorageKey(), notary);
     }
     if (patch.accounts) {
       accounts = { ...accounts, ...patch.accounts };
-      saveLocalJson(ACCOUNTS_STORAGE_KEY, accounts);
+      saveLocalJson(accountsStorageKey(), accounts);
     }
     if (patch.syncStatus) {
       syncStatus = { ...syncStatus, ...patch.syncStatus };
-      saveLocalJson(SYNC_STORAGE_KEY, syncStatus);
+      saveLocalJson(syncStorageKey(), syncStatus);
     }
     if (!state.companyId || !canWriteBilling()) return;
     try {
+      // Only what changed, so this device's older copy of the rest can't undo someone else's changes.
       await setDoc(
         doc(db, 'companies', state.companyId, 'billing', 'accountingSync'),
         {
-          notary,
-          accounts,
-          syncStatus,
+          ...(patch.notary ? { notary } : {}),
+          ...(patch.accounts ? { accounts } : {}),
+          ...(patch.syncStatus ? { syncStatus: patch.syncStatus } : {}),
           updatedAt: serverTimestamp(),
           updatedBy: state.user?.uid || '',
         },
@@ -249,10 +142,9 @@ export function accountingPage() {
       <div class="page-head">
         <div class="page-title">
           <h1>Accounting &amp; Notary Hub</h1>
-          <p>AIA G702/G703 notarization, Florida § 713.20 lien waivers, document vault &amp; QuickBooks / Xero sync for ${esc(notary.name)} (${esc(notary.commissionNumber)}), ${esc(ADMIN_SIGNERS[0].name)} &amp; ${esc(ADMIN_SIGNERS[1].name)}.</p>
+          <p>AIA G702/G703 notarization, Florida § 713.20 lien waivers, the document vault &amp; QuickBooks / Xero exports.</p>
         </div>
         <div class="actions">
-          <button type="button" class="btn primary" data-acct-video>▶ Accountant &amp; Notary Tutorial Video</button>
           <a class="btn" href="#/accounting/waiver/print?kind=progress">⚖️ Florida Lien Waiver (§ 713.20)</a>
           <button type="button" class="btn" data-export="qbo">⬇ QuickBooks Online (.CSV)</button>
           <button type="button" class="btn" data-export="iif">⬇ QuickBooks Desktop (.IIF)</button>
@@ -269,24 +161,11 @@ export function accountingPage() {
         <div class="tile"><span class="t-label">Ready to Sync</span><span class="t-value">${t.unsyncedCount}</span><span class="t-sub">${t.pendingNotaryCount} pay app${t.pendingNotaryCount === 1 ? '' : 's'} awaiting notary check</span></div>
       </div>
 
-      <div class="card acct-banner">
-        <div class="row between">
-          <div>
-            <h2>🎬 Guided Video Walkthrough for ${esc(notary.name)}</h2>
-            <p class="small muted">Covers AIA G702/G703 notarization with Commission #${esc(notary.commissionNumber)}, Florida Statute § 713.20 Progress &amp; Final Lien Waivers, uploading signed scans for ${esc(ADMIN_SIGNERS[0].name)} and ${esc(ADMIN_SIGNERS[1].name)}, and syncing with QuickBooks or Xero.</p>
-          </div>
-          <div class="row">
-            <button type="button" class="btn primary" data-acct-video>▶ Watch Tutorial Video</button>
-            <a class="btn" href="${ACCOUNTANT_VIDEO_URL}" download="Melina-Arias-Stellar-Glass-Accountant-Notary-Guide.mp4">Download MP4</a>
-          </div>
-        </div>
-      </div>
-
       <div class="card">
         <div class="row between">
           <div>
             <h2>1. Notary &amp; Florida Statutory Lien Waiver Queue (F.S. § 713.20)</h2>
-            <p class="small muted">Active Notary Public: <b>${esc(notary.name)}</b> · State of ${esc(notary.state)}, County of ${esc(notary.county)} · Commission <b>#${esc(notary.commissionNumber)}</b> (Expires ${esc(notary.commissionExpiresText)})</p>
+            <p class="small muted">${notary.name ? `Notary typed onto printed notary blocks: <b>${esc(notary.name)}</b>${notary.commissionNumber ? ` · Commission #${esc(notary.commissionNumber)}` : ''}${notary.commissionExpiresText ? ` (expires ${esc(notary.commissionExpiresText)})` : ''}` : 'Printed notary blocks are blank for the notary to fill in. Add the notary\'s details in section 4 to have them typed in.'}</p>
           </div>
           <a class="btn small" href="#/payapps">Open Pay Apps List</a>
         </div>
@@ -325,10 +204,10 @@ export function accountingPage() {
                     <td class="num">${money(s.totalCompleted)}</td>
                     <td class="num">${money(s.totalRetainage)}</td>
                     <td class="num"><b>${money(s.currentDue)}</b></td>
-                    <td class="c"><input type="checkbox" data-flag-key="${esc(sk)}" data-flag-field="notarized" ${st.notarized ? 'checked' : ''} aria-label="Mark Pay App ${esc(pa.number)} notarized by ${esc(notary.name)}"></td>
+                    <td class="c"><input type="checkbox" data-flag-key="${esc(sk)}" data-flag-field="notarized" ${st.notarized ? 'checked' : ''} aria-label="Mark Pay App ${esc(pa.number)} notarized"></td>
                     <td class="c"><input type="checkbox" data-flag-key="${esc(sk)}" data-flag-field="waiverSigned" ${st.waiverSigned ? 'checked' : ''} aria-label="Mark Lien Waiver signed for Pay App ${esc(pa.number)}"></td>
                     <td class="actions-cell">
-                      <a class="btn small primary" href="#/payapps/${esc(pa.id)}/print" title="Print AIA G702/G703 with Melina S. Arias Notary Block">G702 + Notary</a>
+                      <a class="btn small primary" href="#/payapps/${esc(pa.id)}/print" title="Print AIA G702/G703 with a notary block">G702 + Notary</a>
                       <a class="btn small" href="#/accounting/waiver/print?payApp=${esc(pa.id)}&amp;kind=progress" title="Print Florida § 713.20(4) Partial Lien Waiver Upon Progress Payment">Partial Waiver</a>
                       <a class="btn small" href="#/accounting/waiver/print?payApp=${esc(pa.id)}&amp;kind=final" title="Print Florida § 713.20(5) Final Lien Waiver">Final Waiver</a>
                       <a class="btn small" href="#/accounting/waiver/print?payApp=${esc(pa.id)}&amp;kind=sworn" title="Print NTO Vendor Sworn Statement">Sworn Stmt</a>
@@ -345,7 +224,7 @@ export function accountingPage() {
         <div class="row between">
           <div>
             <h2>2. Signed &amp; Notarized Document Vault (Contracts, Pay Apps, Waivers &amp; Forms)</h2>
-            <p class="small muted">All job documents in <b>Contracts &amp; documents</b> and <b>Permits &amp; forms</b>. Upload signed &amp; notarized PDF scans here so ${esc(ADMIN_SIGNERS[0].name)}, ${esc(ADMIN_SIGNERS[1].name)}, and ${esc(notary.name)} have them in one place.</p>
+            <p class="small muted">All job documents in <b>Contracts &amp; documents</b> and <b>Permits &amp; forms</b>. Upload signed &amp; notarized PDF scans here so the whole team has them in one place.</p>
           </div>
           <a class="btn small" href="#/files">Open Full File Browser</a>
         </div>
@@ -556,15 +435,13 @@ export function accountingPage() {
 
       <div class="cols">
         <form class="card stack" id="notarySettingsForm">
-          <h2>4. Florida Notary Public Profile (${esc(notary.name)})</h2>
-          <p class="small muted">Pre-fills the Notary Certificate &amp; Commission Seal on AIA G702 Pay Applications and Florida § 713.20 Lien Waivers.</p>
+          <h2>4. Notary profile</h2>
+          <p class="small muted">Typed onto the notary block of printed pay apps and lien waivers. The county, the date, how the signer appeared, their ID, the signature and the seal stay blank for the notary to complete at the signing. Saved with the business, so only its members see it.</p>
           <div class="grid2">
-            <label>Notary Public Name <input name="name" value="${esc(notary.name)}" required></label>
-            <label>Notary Email <input name="email" type="email" value="${esc(notary.email)}"></label>
-            <label>State <input name="state" value="${esc(notary.state)}" required></label>
-            <label>County <input name="county" value="${esc(notary.county)}" required></label>
-            <label>Commission # <input name="commissionNumber" value="${esc(notary.commissionNumber)}" required></label>
-            <label>Commission Expires <input name="commissionExpiresText" value="${esc(notary.commissionExpiresText)}" placeholder="October 21, 2027" required></label>
+            <label>Notary's commissioned name <input name="name" value="${esc(notary.name)}"></label>
+            <label>State <input name="state" value="${esc(notary.state)}"></label>
+            <label>Commission # <input name="commissionNumber" value="${esc(notary.commissionNumber)}"></label>
+            <label>Commission expires <input name="commissionExpiresText" value="${esc(notary.commissionExpiresText)}" placeholder="e.g. June 30, 2028"></label>
           </div>
           <div class="row"><button class="btn primary">Save Notary Profile</button></div>
         </form>
@@ -592,10 +469,6 @@ export function accountingPage() {
 
   function bindEvents() {
     if (!rootEl) return;
-
-    rootEl.querySelectorAll('[data-acct-video]').forEach((btn) => {
-      btn.addEventListener('click', () => openAccountantTutorialModal(rootEl));
-    });
 
     rootEl.querySelectorAll('[data-export]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -736,12 +609,13 @@ export function accountingPage() {
       const fd = Object.fromEntries(new FormData(ev.target));
       await persistBillingState({
         notary: {
-          ...notary,
-          ...fd,
-          sealName: String(fd.name || 'MELINA ARIAS').toUpperCase(),
+          name: String(fd.name || '').trim(),
+          state: String(fd.state || '').trim() || 'Florida',
+          commissionNumber: String(fd.commissionNumber || '').trim(),
+          commissionExpiresText: String(fd.commissionExpiresText || '').trim(),
         },
       });
-      toast(`Saved Florida Notary profile for ${fd.name}`);
+      toast('Saved the notary profile');
       render();
     });
 
@@ -769,15 +643,15 @@ export function accountingPage() {
             const data = snap.data() || {};
             if (data.notary) {
               notary = { ...DEFAULT_NOTARY, ...data.notary };
-              saveLocalJson(NOTARY_STORAGE_KEY, notary);
+              saveLocalJson(notaryStorageKey(), notary);
             }
             if (data.accounts) {
               accounts = { ...DEFAULT_ACCOUNTS, ...data.accounts };
-              saveLocalJson(ACCOUNTS_STORAGE_KEY, accounts);
+              saveLocalJson(accountsStorageKey(), accounts);
             }
             if (data.syncStatus) {
               syncStatus = { ...syncStatus, ...data.syncStatus };
-              saveLocalJson(SYNC_STORAGE_KEY, syncStatus);
+              saveLocalJson(syncStorageKey(), syncStatus);
             }
             render();
           },

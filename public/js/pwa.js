@@ -61,11 +61,12 @@ export function initPwaInstall() {
   initialized = true;
 
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
-        console.warn('Stellar Glass SW registration:', err);
-      });
+    // The app gets here only after its Firebase config has loaded, often after the page's load event.
+    const register = () => navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
+      console.warn('Stellar Glass SW registration:', err);
     });
+    if (document.readyState === 'complete') register();
+    else window.addEventListener('load', register, { once: true });
   }
 
   window.addEventListener('beforeinstallprompt', (e) => {

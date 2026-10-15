@@ -44,7 +44,6 @@ import {
 } from '../public/js/parts-email.js';
 import {
   DEFAULT_NOTARY,
-  ADMIN_SIGNERS,
   buildLienWaiverData,
   buildAccountingLedger,
   exportQuickBooksOnlineCsv,
@@ -56,6 +55,10 @@ import { occurrences, nextOccurrence } from '../public/js/when.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+
+// Made-up people, businesses and addresses: this repository is public.
+const NOTARY = { name: 'Sample Notary', state: 'Florida', commissionNumber: 'XX 000000', commissionExpiresText: 'January 1, 2030' };
+const JOB_NAME = 'Sample Plaza 300 Main St';
 
 describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)', () => {
   it('1. verifies PWA manifest shortcuts and app.js route table have zero broken routes', () => {
@@ -90,7 +93,7 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
       '0', 'TEXT', '8', 'A-ANNO-DIMS', '10', '54', '20', '48', '40', '2.5', '1', 'A1 108" x 96"',
       '0', 'ENDSEC', '0', 'EOF',
     ].join('\n');
-    const cadModel = cadToPageModel(parseDxf(dxfSample), { name: 'Ruthven-Storefront.dxf' });
+    const cadModel = cadToPageModel(parseDxf(dxfSample), { name: 'Sample-Storefront.dxf' });
     assert.equal(cadModel.cad.isCad, true);
     assert.equal(cadModel.cad.inchesPerUnit, 1);
 
@@ -141,12 +144,16 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
       `Takeoff table cut sq ft (${takeoffTableCutSqft}) must equal Proposal glass sq ft (${proposalGlassSqft})`,
     );
 
-    // Check sealant line has kind 'Materials', unit 'lf', and positive price $3.50/lf
-    const sealantLine = propLines.find((l) => l.kind === 'Materials');
-    assert.ok(sealantLine, 'Must include Perimeter silicone sealant line under Materials');
-    assert.equal(sealantLine.unit, 'lf');
-    assert.equal(sealantLine.price, 3.5);
-    assert.ok(sealantLine.qty > 0);
+    // Sealant stays with the proposal template's own caulking line, not a price made up by the takeoff
+    assert.ok(!propLines.some((l) => l.kind === 'Materials'));
+
+    // Without the cut-size box ticked, the proposal gets the opening sizes and outside perimeter as before
+    const plainLines = estimateLines(rows, { system: 'sf175' });
+    assert.deepEqual(plainLines.map((l) => [l.kind, l.unit, l.qty, l.widthIn, l.heightIn]), [
+      ['Glass', 'sqft', 2, 108, 96],
+      ['Glass', 'sqft', 3, 72, 84],
+      ['Framing', 'lf', Math.ceil((2 * 2 * (108 + 96) + 3 * 2 * (72 + 84)) / 12), undefined, undefined],
+    ]);
 
     // Check 3D Scene Builder matches exact opening assemblies and lites
     const scene = build3DSceneSpec(rows, { system: 'sf175' });
@@ -168,22 +175,22 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
   it('3. verifies Proposal math, Multi-Option pricing, Deposit math, Print view, Email & PDF match to the penny', async () => {
     const company = {
       name: 'Stellar Glass LLC',
-      address: '5529 US Hwy 98 North, Lakeland, FL 33809',
-      phone: '(863) 940-3126',
-      email: 'wes@stellarglass.net',
+      address: '100 Sample Rd, Lakeland, FL 33801',
+      phone: '(555) 010-0100',
+      email: 'office@example.com',
     };
     const customer = {
       id: 'cust-1',
-      name: 'Bryan',
-      company: 'Marcobay Construction, Inc.',
-      address: '1221 E Memorial Blvd, Lakeland, FL 33801',
-      email: 'bryan@marcobay.com',
+      name: 'Pat Builder',
+      company: 'Sample Builders, Inc.',
+      address: '200 Example St, Lakeland, FL 33801',
+      email: 'pat@example.com',
     };
     const job = {
       id: 'job-1',
       number: 2564,
-      name: 'Ruthven 3955 Anchuca Dr',
-      address: '3955 Anchuca Dr, Lakeland, FL 33811',
+      name: JOB_NAME,
+      address: '300 Main St, Lakeland, FL 33811',
       customerId: 'cust-1',
       type: 'storefront',
     };
@@ -203,10 +210,10 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
       depositValue: 50,
       acceptedOption: 0,
       showLines: true,
-      preparedName: 'Wesley Stel',
-      preparedTitle: 'President',
-      preparedPhone: '(863) 606-7880',
-      preparedEmail: 'wes@stellarglass.net',
+      preparedName: 'Sam Estimator',
+      preparedTitle: 'Estimator',
+      preparedPhone: '(555) 010-0101',
+      preparedEmail: 'sam@example.com',
       scope: scopeLine([{ label: 'A1', qty: 4, widthIn: 48, heightIn: 72 }]),
       options: [
         { fromLines: true, name: 'Base Bid — 1-3/4" × 4-1/2" Storefront (CG451)', specs: 'Clear anodized finish, 9/16" laminated impact glass' },
@@ -238,7 +245,7 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
     const docData = proposalContent({ estimate, company, customer, job });
     assert.equal(docData.options[0].price, 13268.79);
     assert.equal(docData.tax, 594.59);
-    assert.equal(docData.prepared.name, 'Wesley Stel');
+    assert.equal(docData.prepared.name, 'Sam Estimator');
     assert.ok(docData.terms.includes('$6,634.40'));
 
     // Verify email text includes exact total
@@ -354,7 +361,7 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
     assert.equal(totalBilledAcrossProject, 15000.00);
   });
 
-  it('5. verifies Parts Requests, Trulite plugin, Supplier Quote Totals (quoteTotal), Accounting Ledger, Melina S. Arias Notary Waivers & QuickBooks/Xero Exports', () => {
+  it('5. verifies Parts Requests, Trulite plugin, Supplier Quote Totals (quoteTotal), Accounting Ledger, Notary Blocks, Lien Waivers & QuickBooks/Xero Exports', () => {
     // 5a. Parse Trulite parts list and verify supplier email
     const truliteLines = parsePasted('4 S/L CG451-1 24\' Clear Anodized\n2 rolls RG-1 Roll Glazing Vinyl', 'parts');
     assert.equal(truliteLines.length, 2);
@@ -387,11 +394,11 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
 
     const emailOut = buildPartsEmail({
       request: partsReq,
-      company: { name: 'Stellar Glass LLC', phone: '(863) 940-3126', email: 'wes@stellarglass.net' },
+      company: { name: 'Stellar Glass LLC', phone: '(555) 010-0100', email: 'office@example.com' },
       supplier: { name: 'Trulite Glass & Aluminum Solutions', accountNo: 'STL-8841' },
-      job: { number: 2564, name: 'Ruthven 3955 Anchuca Dr' },
+      job: { number: 2564, name: JOB_NAME },
     });
-    assert.ok(emailOut.subject.includes('Ruthven'));
+    assert.ok(emailOut.subject.includes('Sample Plaza'));
     assert.ok(emailOut.text.includes('CG451-1'));
 
     // 5b. Accounting Ledger with Invoice + Paid Uninvoiced Pay App + Supplier Commitment (quoteTotal)
@@ -438,8 +445,8 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
       payApps: [paUninvoicedPaid],
       payAppSummaries: paSummaries,
       contracts: [{ id: 'con-1', jobId: 'job-1', customerId: 'cust-1' }],
-      customers: [{ id: 'cust-1', name: 'Bryan', company: 'Marcobay Construction, Inc.', email: 'bryan@marcobay.com' }],
-      jobs: [{ id: 'job-1', number: 2564, name: 'Ruthven 3955 Anchuca Dr', customerId: 'cust-1', type: 'storefront' }],
+      customers: [{ id: 'cust-1', name: 'Pat Builder', company: 'Sample Builders, Inc.', email: 'pat@example.com' }],
+      jobs: [{ id: 'job-1', number: 2564, name: JOB_NAME, customerId: 'cust-1', type: 'storefront' }],
       partsRequests: [partsReq],
       suppliers: [{ id: 'sup-trulite', name: 'Trulite Glass & Aluminum Solutions' }],
       syncStatus: {
@@ -478,9 +485,10 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
     const qboCsv = exportQuickBooksOnlineCsv(ledger);
     assert.ok(qboCsv.includes('PA-3') && qboCsv.includes('5002'));
     const xeroCsv = exportXeroCsv(ledger);
-    assert.ok(xeroCsv.includes('Marcobay Construction'));
-    const jsonPkg = JSON.parse(exportAccountingPackageJson(ledger, { notary: DEFAULT_NOTARY }));
-    assert.equal(jsonPkg.accountantAndNotary.commissionNumber, 'HH 427582');
+    assert.ok(xeroCsv.includes('Sample Builders'));
+    const jsonPkg = JSON.parse(exportAccountingPackageJson(ledger, { notary: NOTARY }));
+    assert.equal(jsonPkg.notary.commissionNumber, 'XX 000000');
+    assert.equal(JSON.parse(exportAccountingPackageJson(ledger, { notary: DEFAULT_NOTARY })).notary.commissionNumber, '');
     assert.equal(jsonPkg.summary.totalVendorCommitments, 6420.50);
 
     // Verify all 4 Florida Statutory § 713.20 Waiver & NTO Sworn Statement types
@@ -489,18 +497,18 @@ describe('End-to-End Computational & Click-Through Audit (Zero-Lie Verification)
         kind,
         payApp: paUninvoicedPaid,
         payAppSummaryData: paSummaries['pa-3'],
-        job: { id: 'job-1', number: 2564, name: 'Ruthven 3955 Anchuca Dr', address: '3955 Anchuca Dr, Lakeland, FL' },
-        customer: { company: 'Marcobay Construction, Inc.' },
-        notary: DEFAULT_NOTARY,
+        job: { id: 'job-1', number: 2564, name: JOB_NAME, address: '300 Main St, Lakeland, FL' },
+        customer: { company: 'Sample Builders, Inc.' },
+        notary: NOTARY,
         overrides: {
-          signerName: ADMIN_SIGNERS[1].name, // Jason Vergara
+          signerName: 'Sam Partner',
           vendorName: 'Trulite Glass & Aluminum Solutions',
           vendorBalanceCurrent: 6420.50,
         },
       });
-      assert.equal(w.notary.name, 'Melina S. Arias');
-      assert.equal(w.notary.commissionNumber, 'HH 427582');
-      assert.equal(w.signerName, 'Jason Vergara');
+      assert.equal(w.notary.name, 'Sample Notary');
+      assert.equal(w.notary.commissionNumber, 'XX 000000');
+      assert.equal(w.signerName, 'Sam Partner');
       assert.equal(w.amount, 22887);
       if (kind === 'sworn') {
         assert.equal(w.vendorName, 'Trulite Glass & Aluminum Solutions');

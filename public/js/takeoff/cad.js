@@ -54,6 +54,11 @@ export function aciToHex(aci) {
   return '#334155';
 }
 
+// Limits on how far a drawing's block references expand: rows or columns in one array insert, and the total
+// number of entities visited.
+const MAX_ARRAY_SIDE = 500;
+const MAX_VISITS = 1500000;
+
 // Detects whether a file or byte buffer is a DXF or DWG drawing.
 // Returns 'dxf' | 'dwg' | null.
 export function detectCadKind(type = '', name = '', bytes = null) {
@@ -61,7 +66,9 @@ export function detectCadKind(type = '', name = '', bytes = null) {
   const n = String(name || '').toLowerCase();
   if (t.includes('dxf') || n.endsWith('.dxf')) return 'dxf';
   if (t.includes('dwg') || t === 'application/acad' || t === 'application/x-acad' || n.endsWith('.dwg')) return 'dwg';
-  if (bytes) {
+  // A file that says it's a PDF or a picture is opened as one, whatever its first bytes look like.
+  const declared = /^(application\/pdf|image\/)/.test(t) || /\.(pdf|png|jpe?g|gif|webp|heic)$/.test(n);
+  if (bytes && !declared) {
     const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes.buffer || bytes, bytes.byteOffset || 0, Math.min(64, bytes.byteLength || 0));
     const head = new TextDecoder('latin1').decode(u8.subarray(0, Math.min(32, u8.length)));
     if (/^AC10(09|12|14|15|18|21|24|27|32)/.test(head)) return 'dwg';
@@ -355,8 +362,8 @@ function parseEntitySection(pairs, startIdx, endIdx) {
         sx: getNum(41, 1) || 1,
         sy: getNum(42, 1) || 1,
         angle: getNum(50, 0),
-        cols: Math.max(1, parseInt(getOne(70, '1'), 10) || 1),
-        rows: Math.max(1, parseInt(getOne(71, '1'), 10) || 1),
+        cols: Math.min(MAX_ARRAY_SIDE, Math.max(1, parseInt(getOne(70, '1'), 10) || 1)),
+        rows: Math.min(MAX_ARRAY_SIDE, Math.max(1, parseInt(getOne(71, '1'), 10) || 1)),
         colSpacing: getNum(44, 0),
         rowSpacing: getNum(45, 0),
       });
@@ -586,8 +593,8 @@ function normalizeDwgEntity(e) {
       x: Number(pt.x || 0), y: Number(pt.y || 0),
       sx: Number(e.xScale ?? 1) || 1, sy: Number(e.yScale ?? 1) || 1,
       angle: Number(e.rotation ?? 0),
-      cols: Math.max(1, Number(e.columnCount || 1)),
-      rows: Math.max(1, Number(e.rowCount || 1)),
+      cols: Math.min(MAX_ARRAY_SIDE, Math.max(1, Math.floor(Number(e.columnCount || 1)) || 1)),
+      rows: Math.min(MAX_ARRAY_SIDE, Math.max(1, Math.floor(Number(e.rowCount || 1)) || 1)),
       colSpacing: Number(e.columnSpacing || 0),
       rowSpacing: Number(e.rowSpacing || 0),
     };
@@ -601,6 +608,8 @@ function normalizeDwgEntity(e) {
 function flattenCadEntities(cadDoc) {
   const rawSegs = [];
   const rawText = [];
+  // Work done expanding block references, capped so a malformed or hostile drawing can't freeze the page.
+  let visits = 0;
   const { blocks, layers } = cadDoc;
 
   // Prefer model-space entities when present; fall back to all entities if only paper-space exists
@@ -632,7 +641,7 @@ function flattenCadEntities(cadDoc) {
   };
 
   function visit(ent, m, inheritedLayer, depth) {
-    if (depth > 6) return;
+    if (depth > 6 || ++visits > MAX_VISITS) return;
     const layer = (ent.layer === '0' && inheritedLayer) ? inheritedLayer : (ent.layer || '0');
     ensureLayer(layer);
     const scaleAvg = (Math.hypot(m[0], m[1]) + Math.hypot(m[2], m[3])) / 2 || 1;
@@ -667,10 +676,11 @@ function flattenCadEntities(cadDoc) {
         prev = cur;
       }
     } else if (ent.type === 'ARC') {
-      let sA = (ent.startAngle * Math.PI) / 180;
-      let eA = (ent.endAngle * Math.PI) / 180;
-      while (eA <= sA) eA += Math.PI * 2;
-      const sweep = eA - sA;
+      const sA = (ent.startAngle * Math.PI) / 180;
+      const eA = (ent.endAngle * Math.PI) / 180;
+      if (!Number.isFinite(sA) || !Number.isFinite(eA)) return;
+      let sweep = (eA - sA) % (Math.PI * 2);
+      if (sweep <= 0) sweep += Math.PI * 2;
       const steps = Math.max(6, Math.min(32, Math.ceil((sweep / (Math.PI * 2)) * 24)));
       let prev = txPt(m, ent.cx + ent.r * Math.cos(sA), ent.cy + ent.r * Math.sin(sA));
       for (let k = 1; k <= steps; k++) {
@@ -727,8 +737,8 @@ function flattenCadEntities(cadDoc) {
       if (!blk) return;
       const rad = ((ent.angle || 0) * Math.PI) / 180;
       const cos = Math.cos(rad), sin = Math.sin(rad);
-      for (let r = 0; r < ent.rows; r++) {
-        for (let c = 0; c < ent.cols; c++) {
+      for (let r = 0; r < ent.rows && visits <= MAX_VISITS; r++) {
+        for (let c = 0; c < ent.cols && visits <= MAX_VISITS; c++) {
           const ox = c * ent.colSpacing;
           const oy = r * ent.rowSpacing;
           const ix = ent.x + ox * cos - oy * sin;

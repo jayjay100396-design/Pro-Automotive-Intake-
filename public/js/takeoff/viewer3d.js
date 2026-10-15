@@ -3,6 +3,7 @@
 // viewer powered by Three.js from jsDelivr CDN with orbit/zoom controls and PNG snapshot export.
 import { COMMERCIAL_SYSTEMS, storefrontBayBreakdown, openingLinearFeet } from '../calc.js';
 import { fmtFtIn } from './dims.js';
+import { esc } from '../ui.js';
 
 export const FINISH_PRESETS = {
   clear: { id: 'clear', name: '#04 Clear Anodized', color: 0xcbd5e1, roughness: 0.32, metalness: 0.78 },
@@ -225,7 +226,7 @@ export async function open3DViewerModal(hostEl, { rows = [], system = 'sf175', o
         <label class="small">Opening
           <select data-3d-filter>
             <option value="">All openings (${validRows.length})</option>
-            ${validRows.map((r) => `<option value="${r.label}">${r.label || '?'} (${fmtFtIn(r.widthIn)} × ${fmtFtIn(r.heightIn)})</option>`).join('')}
+            ${validRows.map((r) => `<option value="${esc(r.label)}">${esc(r.label || '?')} (${fmtFtIn(r.widthIn)} × ${fmtFtIn(r.heightIn)})</option>`).join('')}
           </select>
         </label>
       </div>

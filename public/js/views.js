@@ -17,7 +17,6 @@ import { alertEmails, parseEmails, lastAlertNote, MAX_ALERT_EMAILS } from './req
 import { jobParts, openPartsCount, latePartsCount, dueSoonCount } from './parts.js';
 import { DRAFT_KEY } from './takeoff/takeoff.js';
 import { openTutorialModal } from './takeoff/tutorial.js';
-import { openAccountantTutorialModal } from './accounting.js';
 import { sendProposal, sentNote, senderChoices, person } from './proposal-send.js';
 
 // The schedule's cards on the dashboard and job pages, and the Google Calendar panel in Settings.
@@ -100,7 +99,7 @@ export function dashboard() {
   return {
     live: true,
     html: `
-    ${header(`${esc(state.company?.name || 'Stellar Glass')}`, `<a class="btn" href="#/accounting">⚖️ Accounting &amp; Notary Hub</a> <button type="button" class="btn" data-open-acct-tutorial title="Watch the Accountant & Notary Guide for Melina S. Arias, Wesley Stel & Jason Vergara">▶ Accountant video</button> <button type="button" class="btn" data-open-tutorial title="Watch the CAD & 3D Takeoff walkthrough">▶ Takeoff video</button> ${can.edit() ? `<a class="btn" href="#/takeoff/local">CAD / Drawing Takeoff</a> <a class="btn primary" href="#/jobs/new">New job</a> <a class="btn" href="#/estimates/new">New estimate</a>` : ''}`)}
+    ${header(`${esc(state.company?.name || 'Stellar Glass')}`, `<a class="btn" href="#/accounting">⚖️ Accounting &amp; Notary Hub</a> <button type="button" class="btn" data-open-tutorial title="Watch the CAD & 3D Takeoff walkthrough">▶ Takeoff video</button> ${can.edit() ? `<a class="btn" href="#/takeoff/local">CAD / Drawing Takeoff</a> <a class="btn primary" href="#/jobs/new">New job</a> <a class="btn" href="#/estimates/new">New estimate</a>` : ''}`)}
     <div class="tiles">
       <a class="tile" href="#/requests">${tileIcon('i-green', 'requests')}<span class="t-label">New requests</span><span class="t-value">${newRequests.length}</span><span class="t-sub">from the website quote page</span></a>
       <a class="tile" href="#/schedule">${tileIcon('i-teal', 'schedule')}<span class="t-label">On today</span><span class="t-value">${sched.today}</span><span class="t-sub ${sched.overdue ? 'warn' : ''}">${sched.overdue ? `${sched.overdue} overdue task${sched.overdue === 1 ? '' : 's'}` : 'on the schedule'}</span></a>
@@ -122,9 +121,6 @@ export function dashboard() {
     mount(root) {
       root.querySelector('[data-open-tutorial]')?.addEventListener('click', () => {
         openTutorialModal(root, { showOpenTakeoff: true });
-      });
-      root.querySelector('[data-open-acct-tutorial]')?.addEventListener('click', () => {
-        openAccountantTutorialModal(root);
       });
     },
   };
@@ -407,7 +403,7 @@ export function estimateEdit(id, params) {
         number: nextNumber('estimates'), jobId: job?.id || '', date: today(), validUntil: addDays(today(), 30), status: 'draft', template,
         markupPct: 0, minCharge: 250, taxPct: 7, lines: [], ...PROPOSAL_DEFAULTS, scope: '', attn: '', projectTitle: job?.name || '',
         options: [{ fromLines: true, name: '', specs: OPTION_SPECS[template] }], acceptedOption: 0, showLines: false,
-        preparedName: prep.name, preparedTitle: prep.title || 'President',
+        preparedName: prep.name, preparedTitle: prep.title || 'Estimator',
         preparedPhone: prep.phone, preparedEmail: prep.email,
         ...(params.get('from') === 'takeoff' ? fromTakeoff(template, job?.id) : {}),
       };
