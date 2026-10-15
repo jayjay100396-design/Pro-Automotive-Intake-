@@ -6,13 +6,22 @@ rules_version = '2';
 //   companies/{companyId}                      company profile (ownerUid, name)
 //   companies/{companyId}/members/{uid}        who can use this company's data, and their role
 //   companies/{companyId}/{collection}/{docId} customers, jobs, estimates, contracts,
-//                                              changeOrders, payApps, invoices
+//                                              changeOrders, payApps, invoices, files
+//   companies/{companyId}/requests/{requestId} quote requests sent from the public page (quote.html)
+//   companies/{companyId}/suppliers/{id}       who the business buys from (Suppliers)
+//   companies/{companyId}/partsRequests/{id}   quote requests and orders to suppliers, and where they stand
+//   companies/{companyId}/events/{eventId}     the schedule: appointments, installs, tasks, time off
+//   companies/{companyId}/calendarLinks/{id}   Google Calendar connections (only the server writes them)
+//   companies/{companyId}/calendarTokens/{id}  their Google access (server only, nobody else reads it)
+//   sites/{siteId}                             which business the public page sends requests to
+//   sites/{siteId}/photos/{photoId}            photos the business put on the public page
 //   users/{uid}                                a signed-in user's own profile
 //
 // Roles: owner > admin > staff, plus accountant.
 // The accountant reads everything and creates/edits billing records (invoices, pay apps
 // with their G702/G703 lines, billing, documents and forms), but deletes nothing and
 // can't manage members.
+// The public (no sign-in) can only read sites/{siteId} and its photos, and send a quote request.
 // Anything not matched below is denied.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -51,6 +60,23 @@ service cloud.firestore {
         || (isBillingCollection(collection) && hasRole(companyId, ['accountant']));
     }
 
+    // Business records: explicit allowlist so any future server-only collection is denied by default.
+    // members, invites, requests, files, suppliers, partsRequests, events, calendarLinks and calendarTokens have their own rules below.
+    function isRecord(collection) {
+      return collection in ['customers', 'jobs', 'estimates', 'contracts', 'changeOrders', 'payApps', 'invoices', 'billing', 'documents', 'forms'];
+    }
+
+    function parentInvoiceLocked(companyId, collection, docId) {
+      let invPath = /databases/$(database)/documents/companies/$(companyId)/invoices/$(docId);
+      return collection == 'invoices' && exists(invPath)
+        && get(invPath).data.get('stripe', {}).get('livemode', false) == true
+        && get(invPath).data.get('stripe', {}).get('status', '') in ['paid', 'open', 'uncollectible'];
+    }
+
+    function invitePath(companyId, inviteId) {
+      return /databases/$(database)/documents/companies/$(companyId)/invites/$(inviteId);
+    }
+
     function canManage(companyId) {
       return hasRole(companyId, ['owner', 'admin']);
     }
@@ -59,9 +85,335 @@ service cloud.firestore {
       return request.resource.data[field] == resource.data[field];
     }
 
+    // Stripe state on invoices and Stripe customer ids on customers. Only the Cloud Functions
+    // (functions/stripe-invoices.js) write these, so the app can't fake a payment.
+    function keepsServerFields() {
+      return (resource == null && !request.resource.data.keys().hasAny(['stripe', 'stripeCustomerIds']))
+        || (resource != null && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['stripe', 'stripeCustomerIds']));
+    }
+
+    // An invoice paid through Stripe for real (live mode) stays as it was paid (only the app's
+    // updatedAt stamp changes) and isn't deleted: it's the record of money that came in, like the
+    // Stripe receipt, and refunds are credit notes in Stripe. Test-mode payments aren't real.
+    function paidThroughStripe(collection) {
+      return collection == 'invoices' && resource != null
+        && resource.data.get('stripe', {}).get('status', '') == 'paid'
+        && resource.data.get('stripe', {}).get('livemode', false) == true;
+    }
+
+    // While its live Stripe invoice can still be paid (open, or marked uncollectible, which Stripe
+    // still takes payment on), an invoice stays as it is (only updatedAt changes) and isn't deleted:
+    // the customer is paying the Stripe invoice made from it, so a payment mustn't mark a different bill
+    // paid. To change it, the app has the Cloud Function void the Stripe invoice first; this stops a
+    // stale or offline tab. One with a payment on it can't be voided, so it stays: it's the record of
+    // that payment.
+    function payableThroughStripe(collection) {
+      return collection == 'invoices' && resource != null
+        && resource.data.get('stripe', {}).get('status', '') in ['open', 'uncollectible']
+        && resource.data.get('stripe', {}).get('livemode', false) == true;
+    }
+
+    // A contract notes that its pay apps have started (payAppsStarted, saved with each new pay app by
+    // public/js/views.js), so a deposit invoice from its proposal stays refused (public/js/billing.js) even if
+    // its first pay app is deleted later. The accountant, who makes pay apps, can note that and change nothing
+    // else on a contract. Once noted, it stays.
+    function notesPayAppsStarted(companyId, collection) {
+      return collection == 'contracts' && resource != null && hasRole(companyId, ['accountant'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['payAppsStarted', 'updatedAt'])
+        && request.resource.data.payAppsStarted == true;
+    }
+
+    function keepsPayAppsStarted(collection) {
+      return collection != 'contracts' || resource == null
+        || resource.data.get('payAppsStarted', false) != true
+        || request.resource.data.get('payAppsStarted', false) == true;
+    }
+
+    // Payments recorded on an invoice (cash, check or other) are the record of money that came in. The
+    // owner and admins can remove one (say it was entered by mistake); others can only add them.
+    function keepsPayments(companyId, collection) {
+      let before = resource == null ? [] : resource.data.get('payments', []);
+      let after = request.resource.data.get('payments', []);
+      return collection != 'invoices' || canManage(companyId)
+        || (after is list && (before.size() == 0 || (after.size() >= before.size() && after[0:before.size()] == before)));
+    }
+
+    // ---------- Job files ----------
+    //
+    // companies/{companyId}/files/{fileId}: one job file's record. The file itself is in Cloud Storage.
+    //   jobId, customerId, category (photos|plans|documents|forms|other), name, contentType, size, note,
+    //   path and thumbPath (where the file and its small preview are stored, in this company's folder),
+    //   url and thumbUrl (their Cloud Storage download links), createdBy, createdByName, createdAt,
+    //   drive.{uid} (that person's copy in their own Google Drive), updatedAt.
+    // Where a file is stored, its links and who added it are set once and never change, so a record
+    // can't be pointed at anything but the file that was uploaded.
+
+    function isFileCategory(c) {
+      return c in ['photos', 'plans', 'documents', 'forms', 'other'];
+    }
+
+    // A download link for a file in this company's folder of the app's own Cloud Storage bucket
+    // (stellar-glass-jobs), or of the Storage emulator's demo bucket in local testing.
+    function isStorageUrl(companyId, v) {
+      return v is string && v.size() <= 2000
+        && (v.matches('https://firebasestorage[.]googleapis[.]com/v0/b/stellar-glass-jobs[.](firebasestorage[.]app|appspot[.]com)/o/companies%2F' + companyId + '%2F.+')
+          || v.matches('http://(127[.]0[.]0[.]1|localhost):9199/v0/b/demo-stellar-glass[.]appspot[.]com/o/companies%2F' + companyId + '%2F.+'));
+    }
+
+    function isStoragePath(companyId, v) {
+      return v is string && v.size() <= 1024 && v.matches('companies/' + companyId + '/.+');
+    }
+
+    function isValidFileText(d) {
+      return isText(d.get('name', ''), 1, 260)
+        && isText(d.get('note', ''), 0, 2000);
+    }
+
+    // A new record has no Drive copies yet; each person adds their own afterwards.
+    function isValidNewFile(companyId, d) {
+      return d.createdBy == request.auth.uid
+        && isFileCategory(d.category)
+        && isValidFileText(d)
+        && isStoragePath(companyId, d.path)
+        && isStorageUrl(companyId, d.url)
+        && (d.get('thumbPath', '') == '' || isStoragePath(companyId, d.thumbPath))
+        && (d.get('thumbUrl', '') == '' || isStorageUrl(companyId, d.thumbUrl))
+        && !('drive' in d);
+    }
+
+    function keepsFileOrigin() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['path', 'url', 'thumbPath', 'thumbUrl', 'createdBy', 'createdAt', 'drive']);
+    }
+
+    // ---------- Schedule ----------
+    //
+    // companies/{companyId}/events/{eventId}: one site measure, install, meeting, delivery, task, time off or other
+    // event (public/js/schedule.js; dates, repeats and reminders in public/js/when.js).
+    //   type, title (1-200), allDay, start and end ('YYYY-MM-DD' all day, the end being the last day; otherwise
+    //   'YYYY-MM-DDTHH:MM' in the business's time zone, tz), repeat (''|weekly|monthly|yearly), repeatUntil,
+    //   jobId, customerId, location, assignees (up to 20 member uids), reminders (up to 5, minutes before),
+    //   notes, done, doneAt, lastDone, canceled, ref ({ path: an app link like '#/parts/x', label }),
+    //   createdBy, createdByName, createdAt, updatedBy, updatedAt.
+    // The calendarSync Cloud Function copies events to Google Calendar (functions-calendar/), with its own access.
+    // Owners, admins and staff schedule anything. The accountant adds tasks and meetings of their own, and ticks off
+    // tasks they're on. Owners and admins delete any event, staff the ones they added, and the accountant none.
+
+    function isDay(v) {
+      return v is string && v.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}');
+    }
+
+    function isDayTime(v) {
+      return v is string && v.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}');
+    }
+
+    // Up to 5 reminders, each a whole number of minutes before the start, up to four weeks.
+    function isReminders(r) {
+      return r is list && r.size() <= 5
+        && (r.size() < 1 || isReminder(r[0])) && (r.size() < 2 || isReminder(r[1]))
+        && (r.size() < 3 || isReminder(r[2])) && (r.size() < 4 || isReminder(r[3]))
+        && (r.size() < 5 || isReminder(r[4]));
+    }
+
+    function isReminder(m) {
+      return m is int && m >= 0 && m <= 40320;
+    }
+
+    // Shown as a link in the app, so only a link to one of the app's own pages.
+    function isEventRef(r) {
+      return r is map && r.keys().hasOnly(['path', 'label'])
+        && r.path is string && r.path.matches('#/[A-Za-z0-9/_?=&.-]{1,198}')
+        && isText(r.get('label', ''), 0, 120);
+    }
+
+    function isValidEvent(d) {
+      return d.keys().hasOnly(['type', 'title', 'allDay', 'start', 'end', 'tz', 'repeat', 'repeatUntil', 'jobId',
+          'customerId', 'location', 'assignees', 'reminders', 'notes', 'done', 'doneAt', 'lastDone', 'canceled', 'ref',
+          'createdBy', 'createdByName', 'createdAt', 'updatedBy', 'updatedAt'])
+        && d.keys().hasAll(['type', 'title', 'allDay', 'start', 'end', 'tz', 'createdBy', 'createdAt'])
+        && d.type in ['measure', 'install', 'meeting', 'delivery', 'task', 'timeoff', 'other']
+        && isText(d.title, 1, 200)
+        && d.allDay is bool
+        && ((d.allDay && isDay(d.start) && isDay(d.end) && d.end >= d.start)
+          || (!d.allDay && isDayTime(d.start) && isDayTime(d.end) && d.end > d.start))
+        && isText(d.tz, 1, 64)
+        && d.get('repeat', '') in ['', 'weekly', 'monthly', 'yearly']
+        && (d.get('repeatUntil', '') == '' || isDay(d.repeatUntil))
+        && isText(d.get('jobId', ''), 0, 64)
+        && isText(d.get('customerId', ''), 0, 64)
+        && isText(d.get('location', ''), 0, 300)
+        && d.get('assignees', []) is list && d.get('assignees', []).size() <= 20
+        && isReminders(d.get('reminders', []))
+        && isText(d.get('notes', ''), 0, 4000)
+        && d.get('done', false) is bool
+        && (d.get('doneAt', null) == null || d.doneAt is timestamp)
+        && (d.get('lastDone', '') == '' || isDay(d.lastDone))
+        && d.get('canceled', false) is bool
+        && (!('ref' in d) || isEventRef(d.ref))
+        && isText(d.get('createdByName', ''), 0, 100)
+        && isText(d.get('updatedBy', ''), 0, 128);
+    }
+
+    // What the accountant may change on a task they're on but didn't add: ticking it off, which moves a repeating
+    // task on to a later date. The dates of a task that doesn't repeat stay as they are.
+    function isTickOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['done', 'doneAt', 'lastDone', 'start', 'end', 'updatedBy', 'updatedAt'])
+        && ((request.resource.data.start == resource.data.start && request.resource.data.end == resource.data.end)
+          || (resource.data.get('repeat', '') != '' && request.resource.data.start > resource.data.start));
+    }
+
     // A user's own profile. Nobody else can read or write it.
     match /users/{uid} {
-      allow read, write: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.size() <= 50;
+      allow delete: if false;
+    }
+
+    // ---------- Quote requests from the public website ----------
+    //
+    // sites/{siteId}: { companyId: string, open: bool, updatedAt: timestamp }
+    //   Which business the public quote page sends requests to, and whether it's taking them.
+    //   Anyone can read it (the page needs it before anyone signs in); it holds nothing private.
+    //   Only that business's owner can create, change or remove it, and it can't be moved to
+    //   another business by anyone else once it exists.
+    //
+    // companies/{companyId}/requests/{requestId}: what the customer sent
+    //   name (1-100), company (0-100), phone (0-30), email (0-120, valid if given; phone or email
+    //   required), contactBy (phone|text|email), service (storefront|interior|shower|railing|other),
+    //   timeline (''|asap|soon|later|pricing), siteAddress (0-200), details (1-4000),
+    //   files (int 0-8, how many photos/plans follow in Cloud Storage), site, source 'website',
+    //   status 'new', createdAt (server time)
+    //   plus what the team adds later: status, notes (0-4000), customerId, jobId, updatedAt.
+
+    function sitePath(siteId) {
+      return /databases/$(database)/documents/sites/$(siteId);
+    }
+
+    function isValidSite(d) {
+      return d.keys().hasOnly(['companyId', 'open', 'updatedAt'])
+        && d.keys().hasAll(['companyId', 'open', 'updatedAt'])
+        && d.companyId is string && d.companyId.size() > 0 && d.companyId.size() <= 64
+        && d.open is bool
+        && d.updatedAt == request.time;
+    }
+
+    match /sites/{siteId} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn()
+        && isValidSite(request.resource.data)
+        && hasRole(request.resource.data.companyId, ['owner']);
+      allow update: if isValidSite(request.resource.data)
+        && request.resource.data.companyId == resource.data.companyId
+        && hasRole(resource.data.companyId, ['owner']);
+      allow delete: if hasRole(resource.data.companyId, ['owner']);
+    }
+
+    function isText(v, min, max) {
+      return v is string && v.size() >= min && v.size() <= max;
+    }
+
+    function isValidEmail(v) {
+      return v.matches('^[^@\\s]+@[^@\\s]+[.][A-Za-z]{2,}$');
+    }
+
+    // ---------- Suppliers and parts orders ----------
+    //
+    // companies/{companyId}/suppliers/{supplierId}: who the business buys from (public/js/suppliers.js)
+    //   name (1-120), plugin, branch, branchAddress, branchPhone, contactName, emails and cc (up to 5 addresses
+    //   each), phone, account (0-40), website, kind, listType, delivery, notes (0-1000), createdAt, createdBy, updatedAt.
+    //   The app emails parts requests to these addresses and nobody else, so only owners and admins change them.
+    //
+    // companies/{companyId}/partsRequests/{requestId}: a quote request or order to a supplier and where it stands
+    //   (public/js/parts.js lists the fields). Owners, admins and staff write them, the accountant reads them, and
+    //   owners and admins delete them. appEmail (how the app's email went) is written only by the server that
+    //   sends it (functions-alerts/parts-request.js), which also keeps each business's daily count in
+    //   emailUsage/{companyId}, a collection no one else can reach.
+
+    function isValidSupplier(d) {
+      return d.keys().hasOnly(['name', 'plugin', 'branch', 'branchAddress', 'branchPhone', 'contactName', 'emails', 'cc',
+          'phone', 'account', 'website', 'kind', 'listType', 'delivery', 'notes', 'createdAt', 'createdBy', 'updatedAt'])
+        && isText(d.name, 1, 120)
+        && d.get('emails', []) is list && d.get('emails', []).size() <= 5
+        && d.get('cc', []) is list && d.get('cc', []).size() <= 5
+        && isText(d.get('account', ''), 0, 40)
+        && isText(d.get('notes', ''), 0, 1000);
+    }
+
+    function isValidPartsRequest(d) {
+      return d.status in ['draft', 'sent', 'quoted', 'ordered', 'confirmed', 'shipped', 'partial', 'received', 'cancelled']
+        && d.get('kind', 'quote') in ['quote', 'order']
+        && d.get('listType', 'parts') in ['parts', 'glass', 'general']
+        && d.get('items', []) is list && d.get('items', []).size() <= 200
+        && d.get('attachments', []) is list && d.get('attachments', []).size() <= 10
+        && d.get('events', []) is list && d.get('events', []).size() <= 500
+        && isText(d.get('jobId', ''), 0, 64)
+        && isText(d.get('supplierId', ''), 0, 64);
+    }
+
+    // Photos on the public page: the top photo, one per service, and the gallery.
+    // Anyone can see them; the owner or an admin of the business the site belongs to changes them.
+    // The picture itself is in Cloud Storage at companies/{companyId}/website/{file}.
+    function canEditSite(siteId) {
+      return signedIn() && exists(sitePath(siteId))
+        && hasRole(get(sitePath(siteId)).data.companyId, ['owner', 'admin']);
+    }
+
+    function isValidSitePhoto(siteId, photoId, d) {
+      let companyId = get(sitePath(siteId)).data.companyId;
+      return d.keys().hasOnly(['place', 'caption', 'url', 'path', 'order', 'updatedAt'])
+        && d.keys().hasAll(['place', 'caption', 'url', 'path', 'order', 'updatedAt'])
+        && d.place in ['hero', 'storefront', 'interior', 'shower', 'railing', 'gallery']
+        && (d.place == 'gallery' || photoId == d.place)
+        && isText(d.caption, 0, 80)
+        && isText(d.url, 1, 2000) && d.url.matches('^https?://.+')
+        && d.path is string
+        && d.path.matches('^companies/' + companyId + '/website/[A-Za-z0-9_-]{1,64}[.](jpg|png|webp)$')
+        && d.order is int && d.order >= 0 && d.order <= 9999
+        && d.updatedAt == request.time;
+    }
+
+    match /sites/{siteId}/photos/{photoId} {
+      allow read: if true;
+      allow create, update: if canEditSite(siteId) && isValidSitePhoto(siteId, photoId, request.resource.data);
+      allow delete: if canEditSite(siteId);
+    }
+
+    // Everything the customer fills in on the form, checked on create (and kept as sent afterwards).
+    function isValidRequestForm(d) {
+      return d.keys().hasOnly(['name', 'company', 'phone', 'email', 'contactBy', 'service', 'timeline',
+          'siteAddress', 'details', 'files', 'site', 'source', 'status', 'createdAt'])
+        && d.keys().hasAll(['name', 'company', 'phone', 'email', 'contactBy', 'service', 'timeline',
+          'siteAddress', 'details', 'files', 'site', 'source', 'status', 'createdAt'])
+        && isText(d.name, 1, 100)
+        && isText(d.company, 0, 100)
+        && isText(d.phone, 0, 30)
+        && isText(d.email, 0, 120)
+        && (d.email == '' || isValidEmail(d.email))
+        && (d.phone.size() >= 7 || d.email != '')
+        && d.contactBy in ['phone', 'text', 'email']
+        && d['service'] in ['storefront', 'interior', 'shower', 'railing', 'other']
+        && d.timeline in ['', 'asap', 'soon', 'later', 'pricing']
+        && isText(d.siteAddress, 0, 200)
+        && isText(d.details, 1, 4000)
+        && d.files is int && d.files >= 0 && d.files <= 8
+        && isText(d.site, 1, 40)
+        && d.source == 'website'
+        && d.status == 'new'
+        && d.createdAt == request.time;
+    }
+
+    // The team's follow-up: only these fields change, and the customer's own words stay as sent.
+    function isValidRequestUpdate() {
+      let d = request.resource.data;
+      return d.diff(resource.data).affectedKeys().hasOnly(['status', 'notes', 'customerId', 'jobId', 'updatedAt'])
+        && d.status in ['new', 'contacted', 'converted', 'closed']
+        && isText(d.get('notes', ''), 0, 4000)
+        && isText(d.get('customerId', ''), 0, 64)
+        && isText(d.get('jobId', ''), 0, 64)
+        && d.updatedAt == request.time;
     }
 
     match /companies/{companyId} {
@@ -71,11 +423,21 @@ service cloud.firestore {
       // The owner's member doc must be written in the same batch (see members below).
       allow create: if signedIn()
         && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
+        && isText(request.resource.data.name, 1, 200)
         && existsAfter(memberPath(companyId));
 
-      allow update: if hasRole(companyId, ['owner']) && unchanged('ownerUid');
+      allow update: if hasRole(companyId, ['owner'])
+        && unchanged('ownerUid')
+        && (!('name' in request.resource.data) || isText(request.resource.data.name, 1, 200));
+
+      // Transferring ownership: the owner hands the company to an existing member, in one batch
+      // that also makes that member 'owner' and the old owner 'admin' (see members below).
+      allow update: if hasRole(companyId, ['owner'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerUid'])
+        && request.resource.data.ownerUid != request.auth.uid
+        && exists(/databases/$(database)/documents/companies/$(companyId)/members/$(request.resource.data.ownerUid))
+        && getAfter(/databases/$(database)/documents/companies/$(companyId)/members/$(request.resource.data.ownerUid)).data.role == 'owner'
+        && getAfter(memberPath(companyId)).data.role == 'admin';
       allow delete: if false;
 
       match /members/{uid} {
@@ -93,7 +455,8 @@ service cloud.firestore {
           && request.resource.data.role in ['admin', 'staff', 'accountant']
           && (request.resource.data.role != 'admin' || role(companyId) == 'owner');
 
-        // Changing someone's role: never your own, never the owner's, and never to owner.
+        // Changing someone's role: never your own, never the owner's, and never to owner
+        // (except in an ownership transfer, below).
         allow update: if canManage(companyId)
           && uid != request.auth.uid
           && resource.data.role != 'owner'
@@ -101,24 +464,176 @@ service cloud.firestore {
           && ((resource.data.role != 'admin' && request.resource.data.role != 'admin')
               || role(companyId) == 'owner');
 
+        // Joining by invite link: a signed-in user adds themselves with the invite's role,
+        // in the same batch that deletes the invite, so each link works once.
+        allow create: if signedIn()
+          && uid == request.auth.uid
+          && request.resource.data.inviteId is string
+          && exists(invitePath(companyId, request.resource.data.inviteId))
+          && !existsAfter(invitePath(companyId, request.resource.data.inviteId))
+          && request.time < get(invitePath(companyId, request.resource.data.inviteId)).data.expiresAt
+          && request.resource.data.role == get(invitePath(companyId, request.resource.data.inviteId)).data.role;
+
+        // Ownership transfer, part of the owner's batch above: the new owner's role becomes 'owner'
+        // and the old owner's becomes 'admin'. Only the role field changes.
+        allow update: if hasRole(companyId, ['owner'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+          && (
+            (uid != request.auth.uid
+              && request.resource.data.role == 'owner'
+              && getAfter(/databases/$(database)/documents/companies/$(companyId)).data.ownerUid == uid)
+            || (uid == request.auth.uid
+              && request.resource.data.role == 'admin'
+              && getAfter(/databases/$(database)/documents/companies/$(companyId)).data.ownerUid != uid
+              && getAfter(/databases/$(database)/documents/companies/$(companyId)/members/$(getAfter(/databases/$(database)/documents/companies/$(companyId)).data.ownerUid)).data.role == 'owner')
+          );
+
         // Removing someone: the owner can't be removed. Anyone except the owner can leave.
         allow delete: if resource.data.role != 'owner'
           && (uid == request.auth.uid
               || (canManage(companyId) && (resource.data.role != 'admin' || role(companyId) == 'owner')));
       }
 
+      // Invite links. The invite id is the secret in the link: anyone signed in who has it can
+      // read that one invite, but nobody except owners and admins can list them.
+      match /invites/{inviteId} {
+        allow get: if signedIn();
+        allow list: if canManage(companyId);
+        allow create: if canManage(companyId)
+          && request.resource.data.role in ['admin', 'staff', 'accountant']
+          && (request.resource.data.role != 'admin' || role(companyId) == 'owner')
+          && request.resource.data.expiresAt is timestamp
+          && request.resource.data.expiresAt < request.time + duration.value(30, 'd');
+        allow update: if false;
+        // Revoked by an owner/admin, or used up by the person joining with it.
+        allow delete: if canManage(companyId)
+          || (signedIn() && getAfter(memberPath(companyId)).data.inviteId == inviteId);
+      }
+
+      // Quote requests. Anyone, signed in or not, can send one to the business the public page is
+      // connected to while it's taking requests, as a brand-new request with only the form's fields.
+      // Nobody outside the team can read them, list them or change them afterwards.
+      match /requests/{requestId} {
+        allow read: if isMember(companyId);
+        allow create: if isValidRequestForm(request.resource.data)
+          && exists(sitePath(request.resource.data.site))
+          && get(sitePath(request.resource.data.site)).data.companyId == companyId
+          && get(sitePath(request.resource.data.site)).data.open == true;
+        allow update: if canEdit(companyId) && isValidRequestUpdate();
+        allow delete: if canManage(companyId);
+      }
+
+      // Job files (see the note with the job file checks above).
+      match /files/{fileId} {
+        allow read: if isMember(companyId);
+        // Owners, admins and staff add any kind of file; the accountant adds contracts and documents,
+        // and permits and forms.
+        allow create: if isValidNewFile(companyId, request.resource.data)
+          && (canEdit(companyId)
+            || (hasRole(companyId, ['accountant']) && request.resource.data.category in ['documents', 'forms']));
+        // Owners, admins and staff rename any file, move it to another category and add notes.
+        allow update: if canEdit(companyId)
+          && keepsFileOrigin()
+          && isFileCategory(request.resource.data.category)
+          && isValidFileText(request.resource.data);
+        // The accountant does the same for the contracts, documents, permits and forms they added.
+        allow update: if hasRole(companyId, ['accountant'])
+          && resource.data.createdBy == request.auth.uid
+          && request.resource.data.category in ['documents', 'forms']
+          && isValidFileText(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'category', 'note', 'updatedAt']);
+        // Anyone on the team notes that they copied a file to their own Google Drive, and only that.
+        allow update: if isMember(companyId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['drive', 'updatedAt'])
+          && request.resource.data.drive.diff(resource.data.get('drive', {})).affectedKeys().hasOnly([request.auth.uid]);
+        // Owners and admins delete any file. Staff delete the ones they added, except photos a customer
+        // sent with a quote request: the website stored those, so only owners and admins can remove them.
+        allow delete: if canManage(companyId)
+          || (canEdit(companyId)
+            && resource.data.createdBy == request.auth.uid
+            && !resource.data.path.matches('companies/[^/]+/requests/.+'));
+      }
+
+      // Suppliers and parts orders (see the note with their checks above).
+      match /suppliers/{supplierId} {
+        allow read: if isMember(companyId);
+        allow create, update: if canManage(companyId) && isValidSupplier(request.resource.data);
+        allow delete: if canManage(companyId);
+      }
+
+      match /partsRequests/{requestId} {
+        allow read: if isMember(companyId);
+        allow create: if canEdit(companyId)
+          && isValidPartsRequest(request.resource.data)
+          && request.resource.data.createdBy == request.auth.uid
+          && !('appEmail' in request.resource.data);
+        allow update: if canEdit(companyId)
+          && isValidPartsRequest(request.resource.data)
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['appEmail', 'createdBy', 'createdAt']);
+        allow delete: if canManage(companyId);
+      }
+
+      // The schedule (see the note with the schedule checks above).
+      match /events/{eventId} {
+        allow read: if isMember(companyId);
+        allow create: if isValidEvent(request.resource.data)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && (canEdit(companyId)
+            || (hasRole(companyId, ['accountant']) && request.resource.data.type in ['task', 'meeting']));
+        allow update: if isValidEvent(request.resource.data)
+          && unchanged('createdBy') && unchanged('createdAt')
+          && request.resource.data.get('updatedAt', null) == request.time
+          && (canEdit(companyId)
+            || (hasRole(companyId, ['accountant'])
+              && resource.data.createdBy == request.auth.uid
+              && resource.data.type in ['task', 'meeting']
+              && request.resource.data.type in ['task', 'meeting'])
+            || (hasRole(companyId, ['accountant'])
+              && resource.data.type == 'task'
+              && request.auth.uid in resource.data.get('assignees', [])
+              && isTickOnly()));
+        allow delete: if canManage(companyId)
+          || (canEdit(companyId) && resource.data.createdBy == request.auth.uid);
+      }
+
+      // Google Calendar connections: each one's state, for the app to show. Only the Cloud Function writes them.
+      match /calendarLinks/{linkId} {
+        allow read: if isMember(companyId);
+        allow write: if false;
+      }
+
+      // Their Google access. Only the Cloud Function, with its own access, ever reads or writes these.
+      match /calendarTokens/{linkId} {
+        allow read, write: if false;
+      }
+
       match /{collection}/{docId} {
-        allow read: if collection != 'members' && isMember(companyId);
-        allow create, update: if collection != 'members' && canEditCollection(companyId, collection);
-        allow delete: if collection != 'members' && canManage(companyId);
+        allow read: if isRecord(collection) && isMember(companyId);
+        allow create, update: if isRecord(collection)
+          && (canEditCollection(companyId, collection) || notesPayAppsStarted(companyId, collection))
+          && keepsServerFields()
+          && keepsPayments(companyId, collection)
+          && keepsPayAppsStarted(collection)
+          && (!paidThroughStripe(collection) || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']))
+          && (!payableThroughStripe(collection) || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']));
+        allow delete: if isRecord(collection) && canManage(companyId) && !paidThroughStripe(collection) && !payableThroughStripe(collection);
       }
 
       // Line items (e.g. G703 continuation lines), attachment metadata and other nested records.
       match /{collection}/{docId}/{subcollection}/{rest=**} {
-        allow read: if collection != 'members' && isMember(companyId);
-        allow create, update: if collection != 'members' && canEditCollection(companyId, collection);
-        allow delete: if collection != 'members' && canEdit(companyId);
+        allow read: if isRecord(collection) && isMember(companyId);
+        allow create, update: if isRecord(collection)
+          && canEditCollection(companyId, collection)
+          && !parentInvoiceLocked(companyId, collection, docId);
+        allow delete: if isRecord(collection)
+          && canEdit(companyId)
+          && !parentInvoiceLocked(companyId, collection, docId);
       }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

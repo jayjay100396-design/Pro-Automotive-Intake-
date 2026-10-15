@@ -1,0 +1,557 @@
+// Money math for estimates, pay apps and invoices. Pure functions, no Firebase,
+// so they can be unit tested in Node (test/calc.test.mjs).
+
+export const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const num = (n) => Number(n) || 0;
+
+// Square feet of one glass lite from inches, before quantity.
+export function sqft(widthIn, heightIn) {
+  return (num(widthIn) * num(heightIn)) / 144;
+}
+
+// Billable quantity of an estimate line.
+// sqft lines: qty x (W x H / 144), with each lite billed at no less than minSqft.
+export function lineQty(line) {
+  if (line.unit === 'sqft') {
+    const each = Math.max(sqft(line.widthIn, line.heightIn), num(line.minSqft));
+    return num(line.qty) * each;
+  }
+  return num(line.qty);
+}
+
+export function lineTotal(line) {
+  return round2(lineQty(line) * num(line.price));
+}
+
+// Estimate totals: subtotal, markup, minimum charge, tax.
+export function estimateTotals(est) {
+  const lines = est.lines || [];
+  const subtotal = round2(lines.reduce((s, l) => s + lineTotal(l), 0));
+  const markup = round2(subtotal * num(est.markupPct) / 100);
+  let beforeTax = round2(subtotal + markup);
+  const minApplied = beforeTax < num(est.minCharge);
+  if (minApplied) beforeTax = round2(num(est.minCharge));
+  const taxable = round2(lines.filter((l) => l.taxable !== false).reduce((s, l) => s + lineTotal(l), 0));
+  // Tax applies to the taxable share of the price after markup / minimum.
+  const share = subtotal > 0 ? taxable / subtotal : 1;
+  const tax = round2(beforeTax * share * num(est.taxPct) / 100);
+  return { subtotal, markup, minApplied, beforeTax, tax, total: round2(beforeTax + tax) };
+}
+
+// Priced options on a proposal ("Price 1", "Price 2"...). An option marked fromLines takes
+// the line-item total; others carry their own lump-sum price. Estimates saved before options
+// existed get one option priced from their lines.
+export function proposalOptions(est) {
+  const total = estimateTotals(est).total;
+  const opts = est.options?.length ? est.options : [{ fromLines: true }];
+  return opts.map((o, i) => ({ ...o, number: i + 1, price: o.fromLines ? total : round2(o.price) }));
+}
+
+// The amount an estimate is worth: its accepted option, or option 1.
+export function estimateAmount(est) {
+  const opts = proposalOptions(est);
+  const i = Number(est.acceptedOption) || 0;
+  return (opts[i] || opts[0]).price;
+}
+
+// Lines marked taxable: false (labor, deposits, credits) are left out of the sales tax.
+// functions/lines.js does the same math for the Stripe invoice.
+export function invoiceTotals(inv) {
+  const lines = inv.lines || [];
+  const amount = (l) => round2(num(l.qty) * num(l.price));
+  const subtotal = round2(lines.reduce((s, l) => s + amount(l), 0));
+  const taxable = round2(lines.filter((l) => l.taxable !== false).reduce((s, l) => s + amount(l), 0));
+  const tax = round2(taxable * num(inv.taxPct) / 100);
+  return { subtotal, tax, total: round2(subtotal + tax) };
+}
+
+// Contract sum after approved change orders.
+export function contractSum(contract, changeOrders = []) {
+  const original = round2(contract.amount);
+  const approved = changeOrders.filter((c) => c.status === 'approved');
+  const additions = round2(approved.filter((c) => num(c.amount) > 0).reduce((s, c) => s + num(c.amount), 0));
+  const deductions = round2(approved.filter((c) => num(c.amount) < 0).reduce((s, c) => s - num(c.amount), 0));
+  const netChange = round2(additions - deductions);
+  return { original, additions, deductions, netChange, toDate: round2(original + netChange) };
+}
+
+// One G703 continuation sheet row.
+//   C value, D from previous applications, E this period, F materials presently stored.
+export function g703Row(line, retainagePct, storedRetainagePct = retainagePct) {
+  const value = num(line.value);
+  const prevWork = num(line.prevWork);
+  const thisWork = num(line.thisWork);
+  const stored = num(line.stored);
+  const completed = round2(prevWork + thisWork + stored); // G
+  const pct = value ? completed / value : 0;
+  const balance = round2(value - completed); // H
+  const retainage = round2((prevWork + thisWork) * num(retainagePct) / 100 + stored * num(storedRetainagePct) / 100); // I
+  return { value: round2(value), prevWork: round2(prevWork), thisWork: round2(thisWork), stored: round2(stored), completed, pct, balance, retainage };
+}
+
+// G702 application summary from the G703 rows.
+//   previousCertificates: total earned less retainage on the prior application (its line 6).
+//   deposit: what invoices made from the contract's proposal billed (its deposit). It comes off the
+//   current payment due as work is earned, until it's used up (depositApplied, line 7a), so the pay apps
+//   and the deposit together never bill more than the work.
+//   depositBefore: what the earlier applications took off (their line 7a), as they were billed. If the
+//   deposit has shrunk since (refunded or credited), this application adds back what they took beyond
+//   it (a negative 7a). Left out, they're taken as covered by the deposit as it is now.
+//   depositFixed: this application's own 7a once it was billed, kept as it was.
+export function g702(payApp, contract, changeOrders = [], previousCertificates = 0, deposit = 0, depositBefore = null, depositFixed = null) {
+  const pct = num(payApp.retainagePct);
+  const storedPct = payApp.storedRetainagePct == null || payApp.storedRetainagePct === '' ? pct : num(payApp.storedRetainagePct);
+  const rows = (payApp.lines || []).map((l) => g703Row(l, pct, storedPct));
+  const sum = (k) => round2(rows.reduce((s, r) => s + r[k], 0));
+  const cs = contractSum(contract, changeOrders);
+  const totalCompleted = sum('completed'); // line 4
+  const workRetainage = round2((sum('prevWork') + sum('thisWork')) * pct / 100); // 5a
+  const storedRetainage = round2(sum('stored') * storedPct / 100); // 5b
+  const totalRetainage = round2(workRetainage + storedRetainage); // 5
+  const earnedLessRetainage = round2(totalCompleted - totalRetainage); // 6
+  const prev = round2(previousCertificates); // 7
+  // The deposit covers the first earnings: what it covers to date, less what earlier apps took off.
+  const dep = Math.max(0, round2(deposit));
+  const covered = (earned) => Math.min(dep, Math.max(0, earned));
+  const before = depositBefore == null ? covered(prev) : round2(depositBefore);
+  const depositApplied = depositFixed == null ? round2(covered(earnedLessRetainage) - before) : round2(depositFixed); // 7a
+  const currentDue = round2(earnedLessRetainage - prev - depositApplied); // 8
+  const balanceToFinish = round2(cs.toDate - earnedLessRetainage); // 9
+  return {
+    rows,
+    totals: {
+      value: sum('value'), prevWork: sum('prevWork'), thisWork: sum('thisWork'), stored: sum('stored'),
+      completed: totalCompleted, balance: sum('balance'), retainage: sum('retainage'),
+      pct: sum('value') ? totalCompleted / sum('value') : 0,
+    },
+    originalSum: cs.original, netChange: cs.netChange, additions: cs.additions, deductions: cs.deductions,
+    contractSumToDate: cs.toDate, totalCompleted, workRetainage, storedRetainage, totalRetainage,
+    earnedLessRetainage, previousCertificates: prev, deposit: dep, depositBefore: before, depositApplied, currentDue, balanceToFinish,
+  };
+}
+
+// Lines for the next pay app: previous column D = prior D + E; stored carries over until billed as work.
+export function nextPayAppLines(sov, prior) {
+  const priorByItem = new Map((prior?.lines || []).map((l) => [String(l.item), l]));
+  return sov.map((s) => {
+    const p = priorByItem.get(String(s.item));
+    return {
+      item: s.item, desc: s.desc, value: round2(s.value),
+      prevWork: p ? round2(num(p.prevWork) + num(p.thisWork)) : 0,
+      thisWork: 0,
+      stored: p ? round2(p.stored) : 0,
+    };
+  });
+}
+
+export const money = (n) => (num(n) < 0 ? '-$' : '$') + Math.abs(num(n)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const pctFmt = (f) => (num(f) * 100).toFixed(1) + '%';
+
+// ---------- Billing a proposal ----------
+const UNIT_WORDS = { lf: ['lin ft', 'lin ft'], hour: ['hour', 'hours'] };
+const qtyText = (q) => String(Math.round(num(q) * 10000) / 10000);
+const isWholeCents = (n) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
+
+// Rounds amounts to cents so they add up to exactly `target`; the rounding goes on the largest one.
+function spread(raws, target) {
+  const out = raws.map(round2);
+  const diff = round2(target - out.reduce((s, a) => s + a, 0));
+  if (diff && out.length) {
+    let k = 0;
+    out.forEach((a, i) => { if (Math.abs(a) > Math.abs(out[k])) k = i; });
+    out[k] = round2(out[k] + diff);
+  }
+  return out;
+}
+
+// An invoice line for a proposal line billed at `amount`: quantity x unit price when that comes
+// out to whole cents, otherwise one amount with the quantity written into the description.
+function billLine(l, amount) {
+  const qty = num(l.qty);
+  const taxable = l.taxable !== false;
+  const desc = String(l.desc || '').trim();
+  if (l.unit === 'sqft') {
+    const size = `${qtyText(l.widthIn)}" × ${qtyText(l.heightIn)}"`;
+    const each = Math.max(sqft(l.widthIn, l.heightIn), num(l.minSqft));
+    const per = qty > 0 ? round2(amount / qty) : 0;
+    if (Number.isInteger(qty) && qty > 0 && round2(per * qty) === amount) {
+      return { desc: `${desc}, ${size} (${qtyText(round2(each))} sq ft each)`, qty, price: per, taxable };
+    }
+    return { desc: `${desc}, ${qtyText(qty)} × ${size} (${qtyText(round2(lineQty(l)))} sq ft)`, qty: 1, price: amount, taxable };
+  }
+  const [one, many] = UNIT_WORDS[l.unit] || [];
+  const unitPrice = qty > 0 ? amount / qty : 0;
+  if (qty > 0 && qty !== 1 && isWholeCents(unitPrice) && round2(round2(unitPrice) * qty) === amount) {
+    return { desc: one ? `${desc} (per ${one})` : desc, qty, price: round2(unitPrice), taxable };
+  }
+  const detail = qty && qty !== 1 ? ` (${qtyText(qty)}${one ? ` ${many}` : ''})` : '';
+  return { desc: desc + detail, qty: 1, price: amount, taxable };
+}
+
+const acceptedOption = (est) => {
+  const opts = proposalOptions(est);
+  return { opts, opt: opts[Number(est.acceptedOption) || 0] || opts[0] };
+};
+const optionLabel = (o) => `Price ${o.number}${o.name ? ` (${o.name})` : ''}`;
+
+// What to invoice for a proposal's accepted price. A price that comes from the line items is billed
+// line by line, priced the way the printed proposal shows them (markup and any minimum charge spread
+// across the lines), with labor and other non-taxable lines left out of the tax, so the invoice comes
+// to the proposal's price and tax to the cent. A lump-sum price is billed as one line with its specs.
+export function proposalBill(est) {
+  const { opts, opt } = acceptedOption(est);
+  const src = (est.lines || []).filter((l) => String(l.desc || '').trim() || lineTotal(l));
+  if (!opt.fromLines || !src.length) {
+    const specs = String(opt.specs || '').split('\n').map((x) => x.trim()).filter(Boolean).join('; ');
+    const desc = `Supply and install per proposal ${est.number}${opts.length > 1 ? `, ${optionLabel(opt)}` : ''}${specs ? `: ${specs}` : ''}`;
+    return { option: opt, taxPct: 0, lines: [{ desc, qty: 1, price: opt.price, taxable: false }] };
+  }
+  const t = estimateTotals(est);
+  const taxPct = num(est.taxPct);
+  if (t.subtotal <= 0) {
+    return { option: opt, taxPct, lines: [{ desc: `Supply and install per proposal ${est.number}`, qty: 1, price: t.beforeTax, taxable: true }] };
+  }
+  const factor = t.beforeTax / t.subtotal;
+  const isTaxed = (l) => l.taxable !== false;
+  const taxedRaw = src.filter(isTaxed).map((l) => lineTotal(l) * factor);
+  const untaxedRaw = src.filter((l) => !isTaxed(l)).map((l) => lineTotal(l) * factor);
+  // Split the price between taxed and untaxed lines, a cent either way if needed so the
+  // invoice's tax equals the proposal's.
+  let taxed = t.beforeTax;
+  if (!taxedRaw.length) taxed = 0;
+  else if (untaxedRaw.length) {
+    const raw = round2(taxedRaw.reduce((s, a) => s + a, 0));
+    taxed = [0, -0.01, 0.01, -0.02, 0.02].map((d) => round2(raw + d)).find((c) => round2(c * taxPct / 100) === t.tax) ?? raw;
+  }
+  const taxedAmts = spread(taxedRaw, taxed);
+  const untaxedAmts = spread(untaxedRaw, round2(t.beforeTax - taxed));
+  let ti = 0;
+  let ui = 0;
+  const lines = src.map((l) => billLine(l, isTaxed(l) ? taxedAmts[ti++] : untaxedAmts[ui++]));
+  return { option: opt, taxPct, lines };
+}
+
+// ---------- Deposit and payment status ----------
+// A deposit sentence typed into the payment terms before the deposit field existed: one that starts
+// with the percent and names no other, like "A 50% deposit is required before materials can be
+// ordered." or "30% deposit due at signing." Group 2 is the percent. The deposit field takes it over,
+// so the editor takes the sentence out of the terms (termsWithoutDeposit).
+const TYPED_DEPOSIT = /(^|[.;!?]\s+|\n)\s*(?:an?\s+)?(\d{1,3}(?:\.\d+)?)\s*%\s*deposit[^.;!?\n%]*(?:[.;!?]|(?=\n)|$)\s*/i;
+
+// The deposit a proposal asks for: a percent of the accepted price (50% to start) or a dollar
+// amount, never more than the price. Proposals saved before the deposit field existed take the
+// percent from their typed deposit sentence, or none if they don't have one.
+export function proposalDeposit(est, option) {
+  const opt = option || acceptedOption(est).opt;
+  const legacy = est.depositType == null;
+  const type = est.depositType === 'amount' ? 'amount' : 'percent';
+  const typed = TYPED_DEPOSIT.exec(est.terms || '')?.[2];
+  const typedValue = Math.max(0, legacy ? num(typed ?? 0) : num(est.depositValue));
+  const value = type === 'percent' ? Math.min(typedValue, 100) : typedValue;
+  const amount = type === 'amount' ? Math.min(round2(value), opt.price) : round2(opt.price * value / 100);
+  return { type, value, amount: Math.max(0, amount) };
+}
+
+// The deposit sentence printed on the proposal ('' for no deposit). A dollar deposit prints as the
+// deposit invoice will bill it: never more than the price.
+export function depositSentence(est) {
+  const d = proposalDeposit(est);
+  if (!d.value) return '';
+  const end = 'is required before materials can be ordered';
+  const opts = proposalOptions(est);
+  const each = opts.map((o) => proposalDeposit(est, o).amount);
+  const list = opts.map((o, i) => `${optionLabel(o)}: ${money(each[i])}`).join('; ');
+  if (d.type === 'amount') return each.every((a) => a === each[0]) ? `A ${money(each[0])} deposit ${end}.` : `A deposit ${end} (${list}).`;
+  if (opts.length === 1) return `A ${qtyText(d.value)}% deposit (${money(d.amount)}) ${end}.`;
+  return `A ${qtyText(d.value)}% deposit ${end} (${list}).`;
+}
+
+// The terms without the old typed deposit sentence, which the deposit field now prints.
+export const termsWithoutDeposit = (terms) => String(terms || '').replace(TYPED_DEPOSIT, '$1').trim();
+
+// Payment terms as printed: the deposit sentence, then the other terms. Proposals saved before the
+// deposit field existed print their terms as typed.
+export function proposalTerms(est) {
+  if (est.depositType == null) return String(est.terms || '').trim();
+  return [depositSentence(est), String(est.terms || '').trim()].filter(Boolean).join('\n');
+}
+
+// The deposit invoice line: the proposal's deposit, as one line that isn't taxed again. on: once the
+// proposal is a contract, the deposit is figured on the contract sum instead ({ price, label }).
+export function depositLine(est, on = null) {
+  const { opts, opt } = acceptedOption(est);
+  const d = proposalDeposit(est, on ? { ...opt, price: on.price } : opt);
+  const pct = d.type === 'percent' ? ` (${qtyText(d.value)}%)` : '';
+  const of = on ? on.label : `proposal ${est.number}${opts.length > 1 ? `, ${optionLabel(opt)}` : ''}`;
+  return { desc: `Deposit${pct} on ${of}`, qty: 1, price: d.amount, taxable: false };
+}
+
+// What another deposit invoice from a proposal bills: its deposit, but never more than the proposal's
+// invoices haven't billed yet (billed: what they bill now), so deposits can't bill past the price. Once the
+// proposal is a contract (contract: { sum, label }), it's on the contract sum, since editing the proposal
+// afterwards doesn't change the contract. full: the deposit before that limit.
+export function nextDeposit(est, billed, contract = null) {
+  const sum = contract ? round2(contract.sum) : estimateAmount(est);
+  const line = depositLine(est, contract && { price: sum, label: contract.label });
+  const left = Math.max(0, round2(sum - billed));
+  return { line: { ...line, price: Math.min(line.price, left) }, full: line.price, left, sum };
+}
+
+// Payments recorded on a bill by hand: cash, check or other, each with its amount and date.
+export const recordedPaid = (inv) => round2((inv.payments || []).reduce((s, p) => s + num(p.amount), 0));
+
+// What's been paid on a bill: the payments recorded on it plus what Stripe collected online. Both are
+// amounts kept when they came in, so editing the bill afterwards doesn't change them. A bill marked
+// paid before payments were recorded counts its total. What Stripe collected counts credit on the
+// customer's Stripe account that it used on the invoice. Same as paidOn in functions/lines.js.
+export function paidOn(inv) {
+  const st = inv.stripe || {};
+  if (inv.payments?.length || (st.status === 'paid' && st.amountPaid != null)) return round2(recordedPaid(inv) + num(st.amountPaid));
+  return inv.status === 'paid' ? invoiceTotals(inv).total : num(st.amountPaid);
+}
+
+// What credit notes took off the bill's Stripe invoice before it was paid (Stripe then asks for that
+// much less). Only while that Stripe invoice can be paid or is paid; a void one takes nothing off.
+export const creditedOn = (inv) => (['open', 'uncollectible', 'paid'].includes(inv.stripe?.status) ? num(inv.stripe.preCredited) : 0);
+
+// What a bill counts for against the price it was billed from: what was paid on it once it's paid,
+// else what it asks for (its total, less credit notes on its Stripe invoice).
+export const billedOn = (inv) => (inv.status === 'paid' ? paidOn(inv) : round2(invoiceTotals(inv).total - creditedOn(inv)));
+
+// What's still owed on an unpaid bill: what it asks for, less what's been paid on it.
+export const dueOn = (inv) => (inv.status === 'unpaid' ? Math.max(0, round2(billedOn(inv) - paidOn(inv))) : 0);
+
+// How much of a proposal's accepted price has been paid, from the invoices made from it (void ones
+// don't count). status: 'not billed', 'unpaid', 'partly paid' or 'paid'.
+export function proposalPayment(est, invoices) {
+  const price = estimateAmount(est);
+  const live = (invoices || []).filter((i) => i.status !== 'void');
+  const paid = round2(live.reduce((s, i) => s + paidOn(i), 0));
+  const status = !live.length ? 'not billed' : paid <= 0 ? 'unpaid' : paid >= price ? 'paid' : 'partly paid';
+  return { price, paid, balance: round2(Math.max(0, price - paid)), status };
+}
+
+// ---------- Commercial storefront, curtain wall & glass cut-size math ----------
+const round16 = (n) => Math.round(num(n) * 16) / 16;
+
+// Standard commercial framing systems with rough-opening-to-frame clearance, member sightlines,
+// and glazing pocket bite (Glass Cut Size = DLO + 2 * glassBiteIn).
+export const COMMERCIAL_SYSTEMS = {
+  sf175: {
+    id: 'sf175',
+    name: '1-3/4" × 4-1/2" Center-Set Storefront (CG451 / 451T)',
+    short: '1-3/4" × 4-1/2" Storefront',
+    partSeries: 'CG451',
+    roClearanceW: 0.5,    // 1/4" caulk/shim joint each jamb
+    roClearanceH: 0.5,    // 1/4" head + 1/4" sill shim/flashing
+    jambProfileIn: 1.75,
+    headProfileIn: 1.75,
+    sillProfileIn: 1.75,
+    mullionProfileIn: 1.75,
+    transomProfileIn: 1.75,
+    depthIn: 4.5,
+    glassBiteIn: 0.375,   // 3/8" bite each edge -> DLO + 3/4"
+    defaultGlass: '1/4" clear tempered',
+  },
+  sf200: {
+    id: 'sf200',
+    name: '2" × 4-1/2" Storefront (Trifab 451 / YES 45)',
+    short: '2" × 4-1/2" Storefront',
+    partSeries: 'TF451',
+    roClearanceW: 0.5,
+    roClearanceH: 0.5,
+    jambProfileIn: 2.0,
+    headProfileIn: 2.0,
+    sillProfileIn: 2.0,
+    mullionProfileIn: 2.0,
+    transomProfileIn: 2.0,
+    depthIn: 4.5,
+    glassBiteIn: 0.375,   // 3/8" bite each edge -> DLO + 3/4"
+    defaultGlass: '1" clear low-E insulated, tempered',
+  },
+  cw250: {
+    id: 'cw250',
+    name: '2-1/2" × 7-1/2" Curtain Wall (1600 / CW250)',
+    short: '2-1/2" × 7-1/2" Curtain Wall',
+    partSeries: 'CW250',
+    roClearanceW: 0.75,   // 3/8" perimeter joint each side
+    roClearanceH: 0.75,
+    jambProfileIn: 2.5,
+    headProfileIn: 2.5,
+    sillProfileIn: 2.5,
+    mullionProfileIn: 2.5,
+    transomProfileIn: 2.5,
+    depthIn: 7.5,
+    glassBiteIn: 0.5,     // 1/2" pocket bite each edge -> DLO + 1"
+    defaultGlass: '1" clear low-E insulated, tempered',
+  },
+  herculite: {
+    id: 'herculite',
+    name: '3/8"–1/2" Frameless Glass / U-Channel Partition',
+    short: 'Frameless / U-Channel',
+    partSeries: 'UCHAN',
+    roClearanceW: 0.25,   // 1/8" side clearance each jamb
+    roClearanceH: 0.375,  // 3/8" head/sill clearance
+    jambProfileIn: 0,
+    headProfileIn: 1.5,
+    sillProfileIn: 1.5,
+    mullionProfileIn: 0.125, // 1/8" butt-glazed silicone joint
+    transomProfileIn: 0,
+    depthIn: 1.75,
+    glassBiteIn: 0.375,
+    defaultGlass: '1/2" clear tempered, polished edges',
+  },
+};
+
+// Computes Frame Outer Size, Daylight Opening (DLO), and exact Glass Cut Size from a Rough Opening
+// (or Frame Size when basis === 'frame'), plus bay splits and optional horizontal transom.
+export function commercialGlassSize(widthIn, heightIn, opts = {}) {
+  const w = num(widthIn);
+  const h = num(heightIn);
+  const sys = COMMERCIAL_SYSTEMS[opts.system] || COMMERCIAL_SYSTEMS.sf175;
+  if (!(w > 0 && h > 0)) return null;
+
+  const basis = opts.basis === 'frame' ? 'frame' : 'ro';
+  const roWidthIn = basis === 'ro' ? w : round16(w + sys.roClearanceW);
+  const roHeightIn = basis === 'ro' ? h : round16(h + sys.roClearanceH);
+  const frameWidthIn = basis === 'frame' ? w : Math.max(4, round16(w - sys.roClearanceW));
+  const frameHeightIn = basis === 'frame' ? h : Math.max(4, round16(h - sys.roClearanceH));
+
+  // Equal horizontal bays (default: 1 bay if <= 60" wide, or auto-suggested / user-specified)
+  const bays = Math.max(1, Math.min(24, Math.round(num(opts.bays) || 1)));
+  const totalMullionsW = 2 * sys.jambProfileIn + (bays - 1) * sys.mullionProfileIn;
+  const bayDloWidthIn = Math.max(1, round16((frameWidthIn - totalMullionsW) / bays));
+  const glassCutWidthIn = round16(bayDloWidthIn + 2 * sys.glassBiteIn);
+
+  // Optional horizontal transom bar at `transomHeightIn` above the bottom of the frame (e.g. 84" door head)
+  const rawTransom = num(opts.transomHeightIn);
+  const hasTransom = rawTransom > sys.sillProfileIn + 6 && rawTransom < frameHeightIn - sys.headProfileIn - 6;
+
+  let mainDloHeightIn;
+  let mainGlassCutHeightIn;
+  let transomDloHeightIn = 0;
+  let transomGlassCutHeightIn = 0;
+
+  if (hasTransom) {
+    mainDloHeightIn = Math.max(1, round16(rawTransom - sys.sillProfileIn - sys.transomProfileIn / 2));
+    mainGlassCutHeightIn = round16(mainDloHeightIn + 2 * sys.glassBiteIn);
+    transomDloHeightIn = Math.max(1, round16((frameHeightIn - rawTransom) - sys.headProfileIn - sys.transomProfileIn / 2));
+    transomGlassCutHeightIn = round16(transomDloHeightIn + 2 * sys.glassBiteIn);
+  } else {
+    mainDloHeightIn = Math.max(1, round16(frameHeightIn - sys.headProfileIn - sys.sillProfileIn));
+    mainGlassCutHeightIn = round16(mainDloHeightIn + 2 * sys.glassBiteIn);
+  }
+
+  // Outside perimeter of the frame and total aluminum extrusion linear footage (head + sill + 2 jambs + intermediates + transom)
+  const perimeterLf = round2((2 * (frameWidthIn + frameHeightIn)) / 12);
+  const verticalsIn = (2 + (bays - 1)) * frameHeightIn;
+  const horizontalsIn = (2 + (hasTransom ? 1 : 0)) * frameWidthIn;
+  const framingLf = round2((verticalsIn + horizontalsIn) / 12);
+  const sealantLf = round2(perimeterLf * 2); // interior + exterior perimeter beads
+
+  return {
+    system: sys.id,
+    systemName: sys.short,
+    partSeries: sys.partSeries,
+    basis,
+    roWidthIn,
+    roHeightIn,
+    frameWidthIn,
+    frameHeightIn,
+    bays,
+    hasTransom,
+    transomHeightIn: hasTransom ? rawTransom : 0,
+    bayDloWidthIn,
+    mainDloHeightIn,
+    glassCutWidthIn,
+    glassCutHeightIn: mainGlassCutHeightIn,
+    transomDloHeightIn,
+    transomGlassCutHeightIn,
+    litesPerOpening: bays * (hasTransom ? 2 : 1),
+    perimeterLf,
+    framingLf,
+    sealantLf,
+  };
+}
+
+// Summarizes an entire takeoff opening row (with quantity `qty`) into glass cut lites and framing stock.
+export function storefrontBayBreakdown(opening, opts = {}) {
+  const qty = Math.max(0, Math.round(num(opening?.qty ?? 1)));
+  const spec = commercialGlassSize(opening?.widthIn, opening?.heightIn, {
+    system: opening?.system || opts.system || 'sf175',
+    bays: opening?.bays || opts.bays || 1,
+    transomHeightIn: opening?.transomHeightIn ?? opts.transomHeightIn ?? 0,
+    basis: opening?.basis || opts.basis || 'ro',
+  });
+  if (!spec || qty <= 0) return null;
+
+  const sys = COMMERCIAL_SYSTEMS[spec.system] || COMMERCIAL_SYSTEMS.sf175;
+  const glassDesc = opening?.glassDesc || opts.glassDesc || sys.defaultGlass;
+  const mark = String(opening?.label || '').trim();
+  const lites = [
+    {
+      qty: qty * spec.bays,
+      width: spec.glassCutWidthIn,
+      height: spec.glassCutHeightIn,
+      dloWidth: spec.bayDloWidthIn,
+      dloHeight: spec.mainDloHeightIn,
+      desc: glassDesc,
+      mark: spec.hasTransom && mark ? `${mark}-L` : mark,
+      role: 'main',
+    },
+  ];
+  if (spec.hasTransom) {
+    lites.push({
+      qty: qty * spec.bays,
+      width: spec.glassCutWidthIn,
+      height: spec.transomGlassCutHeightIn,
+      dloWidth: spec.bayDloWidthIn,
+      dloHeight: spec.transomDloHeightIn,
+      desc: glassDesc,
+      mark: mark ? `${mark}-T` : 'TRANSOM',
+      role: 'transom',
+    });
+  }
+
+  return {
+    ...spec,
+    qty,
+    mark,
+    glassDesc,
+    lites,
+    totalLites: qty * spec.litesPerOpening,
+    totalPerimeterLf: round2(spec.perimeterLf * qty),
+    totalFramingLf: round2(spec.framingLf * qty),
+    totalSealantLf: round2(spec.sealantLf * qty),
+  };
+}
+
+// Totals perimeter, framing stock lengths (24 ft S/L), and sealant tubes across all takeoff rows.
+export function openingLinearFeet(rows, defaultOpts = {}) {
+  let perimeterLf = 0;
+  let framingLf = 0;
+  let sealantLf = 0;
+  let totalLites = 0;
+  let totalSqft = 0;
+  for (const r of rows || []) {
+    const bd = storefrontBayBreakdown(r, defaultOpts);
+    if (!bd) continue;
+    perimeterLf += bd.totalPerimeterLf;
+    framingLf += bd.totalFramingLf;
+    sealantLf += bd.totalSealantLf;
+    totalLites += bd.totalLites;
+    for (const l of bd.lites) {
+      totalSqft += sqft(l.width, l.height) * l.qty;
+    }
+  }
+  return {
+    perimeterLf: round2(perimeterLf),
+    framingLf: round2(framingLf),
+    stockLengths24Ft: framingLf > 0 ? Math.ceil((framingLf * 1.08) / 24) : 0, // +8% cutting waste in 24' stock lengths
+    sealantLf: round2(sealantLf),
+    sealantTubes: sealantLf > 0 ? Math.ceil(sealantLf / 25) : 0, // ~25 LF per sausage/tube at 1/4"x1/4"
+    totalLites,
+    totalSqft: round2(totalSqft),
+  };
+}
+
