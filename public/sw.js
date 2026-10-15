@@ -2,13 +2,15 @@
 // Network-first with offline app-shell fallback so updates deploy immediately
 // while satisfying desktop PWA installability requirements in Chrome, Edge, and Safari.
 
-const CACHE_NAME = 'stellar-glass-shell-v2';
+const CACHE_NAME = 'stellar-glass-shell-v3';
+// Clean URLs: firebase.json has "cleanUrls", so /index.html and /quote.html redirect to / and /quote,
+// and a redirected response can't answer a page load. Cache the addresses pages are really served at.
 const PRECACHE_URLS = [
   '/',
-  '/index.html',
-  '/quote.html',
+  '/quote',
   '/manifest.webmanifest',
   '/css/app.css',
+  '/css/site.css',
   '/img/favicon.png',
   '/img/icon.png',
   '/img/icon-192.png',
@@ -48,6 +50,9 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   // Only handle same-origin requests; never intercept Firebase/Google APIs
   if (url.origin !== self.location.origin) return;
+  // Firebase Hosting's reserved /__/ addresses (the app's config, the sign-in helper pages) must reach
+  // Firebase untouched: no caching and no offline fallback (Firebase's reserved-URL docs).
+  if (url.pathname.startsWith('/__/')) return;
   // Never intercept range requests or large MP4 video streams
   if (request.headers.has('range') || url.pathname.endsWith('.mp4')) return;
 
@@ -55,7 +60,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request, revalidate ? { cache: 'no-cache' } : undefined)
       .then((networkResp) => {
-        if (networkResp && networkResp.status === 200 && networkResp.type === 'basic') {
+        if (networkResp && networkResp.status === 200 && networkResp.type === 'basic' && !networkResp.redirected) {
           const copy = networkResp.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).catch(() => {});
         }
@@ -63,9 +68,10 @@ self.addEventListener('fetch', (event) => {
       })
       .catch(() =>
         caches.match(request).then((cached) => {
-          if (cached) return cached;
+          if (cached && !cached.redirected) return cached;
           if (request.mode === 'navigate') {
-            return caches.match('/index.html');
+            return caches.match(url.pathname.startsWith('/quote') ? '/quote' : '/')
+              .then((page) => page || Response.error());
           }
           return Response.error();
         }),
