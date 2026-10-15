@@ -1,23 +1,16 @@
-// Pure accounting, notary, Florida Statutory Lien Waiver (§ 713.20), and ledger export calculations
-// for Melina S. Arias (Accountant & Notary Public) and admins Wesley Stel & Jason Vergara.
+// Pure accounting, Florida statutory lien waiver (§ 713.20) and ledger export calculations.
 import { invoiceTotals, contractSum, g702, money, round2, paidOn, dueOn, creditedOn } from './calc.js';
 
+// The notary's commissioned name, commission number and expiry, typed in on the Accounting page and saved
+// with the business (members only), never in this code: the repository and the site's code are public.
+// Everything else on a notary certificate (the date, the county, how the signer appeared, the ID they showed,
+// the seal and signature) is left blank for the notary to complete at the signing.
 export const DEFAULT_NOTARY = {
-  name: 'Melina S. Arias',
-  email: 'melinasarias@gmail.com',
+  name: '',
   state: 'Florida',
-  county: 'Hillsborough',
-  commissionNumber: 'HH 427582',
-  commissionExpires: '2027-10-21',
-  commissionExpiresText: 'October 21, 2027',
-  sealName: 'MELINA ARIAS',
-  presence: 'physical', // 'physical' | 'online'
+  commissionNumber: '',
+  commissionExpiresText: '',
 };
-
-export const ADMIN_SIGNERS = [
-  { name: 'Wesley Stel', title: 'President', email: 'wes@stellarglassllc.com' },
-  { name: 'Jason Vergara', title: 'Owner', email: 'jayjay100396@gmail.com' },
-];
 
 export const DEFAULT_ACCOUNTS = {
   arAccount: '1100 · Accounts Receivable',
@@ -109,8 +102,9 @@ export function buildLienWaiverData({
     defaultThroughDate = payApp.periodTo || payApp.date || '';
     if (!defaultSignedDate) defaultSignedDate = payApp.date || payApp.periodTo || '';
   } else if (invoice) {
-    const t = invoiceTotals(invoice);
-    defaultAmount = t.total;
+    // The payment the waiver is given for: what was received on a paid bill, else what is still owed on it.
+    // A Florida waiver takes effect when it's signed and handed over, whether or not the money arrives.
+    defaultAmount = invoice.status === 'paid' ? paidOn(invoice) : dueOn(invoice);
     defaultThroughDate = invoice.date || '';
     if (!defaultSignedDate) defaultSignedDate = invoice.paidDate || invoice.date || '';
   } else if (contract) {
@@ -131,8 +125,8 @@ export function buildLienWaiverData({
     ? overrides.customerName
     : (cu.company || cu.name || '');
 
-  // On commercial jobs (like 3955 Anchuca Shell), the Customer is the GC (e.g. Marcobay Construction, Inc.)
-  // and the Owner of Property is the developer/owner (e.g. Ruthven Green LLC).
+  // On commercial jobs the customer is usually the general contractor, and the owner of the property is the
+  // developer or building owner.
   const ownerDisplay = overrides.ownerName !== undefined && overrides.ownerName !== ''
     ? overrides.ownerName
     : (j.ownerName || (cu.company && cu.name && cu.company !== cu.name ? cu.name : '') || j.name || customerDisplay || '');
@@ -145,14 +139,16 @@ export function buildLienWaiverData({
     ? overrides.propertyDesc
     : (propParts.join(' · ') || j.name || '');
 
-  const signerName = overrides.signerName || co.contactName || ADMIN_SIGNERS[0].name;
-  const matchedAdmin = ADMIN_SIGNERS.find((a) => a.name.toLowerCase() === String(signerName).toLowerCase());
-  const signerTitle = overrides.signerTitle || matchedAdmin?.title || co.contactTitle || 'President';
+  // Who signs for the business: the contact in Settings, unless someone else is typed in.
+  const signerName = overrides.signerName || co.contactName || '';
+  const signerTitle = overrides.signerTitle !== undefined && overrides.signerTitle !== ''
+    ? overrides.signerTitle
+    : (signerName && signerName === co.contactName ? (co.contactTitle || '') : '');
 
-  const lienorName = overrides.lienorName || co.name || 'Stellar Glass, LLC';
-  const lienorAddress = overrides.lienorAddress || co.address || '2850 Mine and Mill Road Bays 3 & 4, Lakeland, FL 33801';
+  const lienorName = overrides.lienorName || co.name || 'Stellar Glass LLC';
+  const lienorAddress = overrides.lienorAddress || co.address || '';
 
-  const vendorName = overrides.vendorName || 'Trulite Glass and Aluminum';
+  const vendorName = overrides.vendorName || '';
   const vendorBalanceThru = overrides.vendorBalanceThru !== undefined && overrides.vendorBalanceThru !== ''
     ? round2(Number(overrides.vendorBalanceThru) || 0)
     : 0;
@@ -188,8 +184,14 @@ export function buildLienWaiverData({
   };
 }
 
+// Text starting with = + - or @ opens as a formula in Excel or Google Sheets, and customer and job names can
+// come straight from the public quote page, so such text gets a leading apostrophe. Plain numbers stay numbers.
+function noFormula(s) {
+  return /^[=+\-@]/.test(s) && !/^[-+]?\d+(\.\d+)?$/.test(s) ? `'${s}` : s;
+}
+
 function csvCell(val) {
-  const s = String(val ?? '').replace(/\r?\n/g, ' ').trim();
+  const s = noFormula(String(val ?? '').replace(/[\r\n\t]+/g, ' ').trim());
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
@@ -199,7 +201,7 @@ function csvRow(cells) {
 }
 
 function iifClean(val) {
-  return String(val ?? '').replace(/[\t\r\n]+/g, ' ').trim();
+  return noFormula(String(val ?? '').replace(/[\t\r\n]+/g, ' ').trim());
 }
 
 function usDate(iso = '') {
@@ -245,7 +247,8 @@ export function buildAccountingLedger({
   for (const inv of invoices) {
     if (inv.status === 'void') continue;
     if (inv.payAppId) invoicedPayAppIds.add(inv.payAppId);
-    if (!inDateRange(inv.date)) continue;
+    // A bill dated outside the dates picked is left out, but payments received on it within them still count.
+    const billedInRange = inDateRange(inv.date);
 
     const job = jobById.get(inv.jobId) || {};
     const cust = custById.get(inv.customerId || job.customerId) || {};
@@ -307,26 +310,28 @@ export function buildAccountingLedger({
       notarized: Boolean(syncInfo.notarized || (linkedPayApp && syncStatus[`pa:${linkedPayApp.id}`]?.notarized)),
       waiverSigned: Boolean(syncInfo.waiverSigned || (linkedPayApp && syncStatus[`pa:${linkedPayApp.id}`]?.waiverSigned)),
     };
-    receivables.push(rec);
+    if (billedInRange) {
+      receivables.push(rec);
 
-    // Double-entry Journal Entry for the Invoice
-    const splits = [
-      { account: incomeAcct, amount: -round2(t.subtotal), memo: `${jobLabel} - Inv #${inv.number}` },
-    ];
-    if (t.tax > 0) {
-      splits.push({ account: acct.salesTaxAccount, amount: -round2(t.tax), memo: `FL Sales Tax (${inv.taxPct || 0}%)` });
+      // Double-entry Journal Entry for the Invoice
+      const splits = [
+        { account: incomeAcct, amount: -round2(t.subtotal), memo: `${jobLabel} - Inv #${inv.number}` },
+      ];
+      if (t.tax > 0) {
+        splits.push({ account: acct.salesTaxAccount, amount: -round2(t.tax), memo: `FL Sales Tax (${inv.taxPct || 0}%)` });
+      }
+      journalEntries.push({
+        trnsType: 'INVOICE',
+        docNum: String(inv.number || ''),
+        date: inv.date || '',
+        dueDate: inv.dueDate || inv.date || '',
+        name: customerLabel,
+        account: acct.arAccount,
+        amount: round2(t.total),
+        memo: `${rec.recordType} #${inv.number}${jobLabel ? ' · ' + jobLabel : ''}`,
+        splits,
+      });
     }
-    journalEntries.push({
-      trnsType: 'INVOICE',
-      docNum: String(inv.number || ''),
-      date: inv.date || '',
-      dueDate: inv.dueDate || inv.date || '',
-      name: customerLabel,
-      account: acct.arAccount,
-      amount: round2(t.total),
-      memo: `${rec.recordType} #${inv.number}${jobLabel ? ' · ' + jobLabel : ''}`,
-      splits,
-    });
 
     // Payments recorded on this invoice
     for (const p of (inv.payments || [])) {
@@ -363,9 +368,11 @@ export function buildAccountingLedger({
       });
     }
 
-    // Online payments via Stripe not duplicated in manual payments
+    // What was paid beyond the payments recorded here: paid online through Stripe, or a bill marked paid
+    // without recording how.
     const manualSum = round2((inv.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0));
     const onlinePaid = round2(paid - manualSum);
+    const viaStripe = Number(inv.stripe?.amountPaid) > 0;
     if (onlinePaid > 0 && inDateRange(inv.paidDate || inv.date)) {
       payments.push({
         invoiceId: inv.id,
@@ -375,22 +382,22 @@ export function buildAccountingLedger({
         customerName: customerLabel,
         date: inv.paidDate || inv.date || '',
         amount: onlinePaid,
-        method: 'Stripe Online',
-        reference: inv.stripe?.invoiceNumber || inv.stripe?.id || 'Stripe',
-        note: 'Online payment via Stripe',
+        method: viaStripe ? 'Stripe Online' : 'Marked paid',
+        reference: viaStripe ? (inv.stripe?.invoiceNumber || inv.stripe?.id || 'Stripe') : '',
+        note: viaStripe ? 'Online payment via Stripe' : 'Marked paid without a recorded payment',
         depositAccount: acct.undepositedAccount,
         arAccount: acct.arAccount,
       });
       journalEntries.push({
         trnsType: 'PAYMENT',
-        docNum: inv.stripe?.invoiceNumber || `STRIPE-${inv.number}`,
+        docNum: viaStripe ? (inv.stripe?.invoiceNumber || `STRIPE-${inv.number}`) : `PMT-${inv.number}`,
         date: inv.paidDate || inv.date || '',
         name: customerLabel,
         account: acct.undepositedAccount,
         amount: onlinePaid,
-        memo: `Stripe online payment for Invoice #${inv.number}`,
+        memo: viaStripe ? `Stripe online payment for Invoice #${inv.number}` : `Payment for Invoice #${inv.number}`,
         splits: [
-          { account: acct.arAccount, amount: -onlinePaid, memo: `Stripe payment applied to Invoice #${inv.number}` },
+          { account: acct.arAccount, amount: -onlinePaid, memo: `${viaStripe ? 'Stripe payment' : 'Payment'} applied to Invoice #${inv.number}` },
         ],
       });
     }
@@ -495,7 +502,7 @@ export function buildAccountingLedger({
           reference: refNum,
           checkRef: refNum,
           note: `AIA G702 Pay App #${pa.number} payment`,
-          depositAccount: acct.checkingAccount,
+          depositAccount: acct.undepositedAccount,
           arAccount: acct.arAccount,
         });
         journalEntries.push({
@@ -504,7 +511,7 @@ export function buildAccountingLedger({
           date: payDate,
           dueDate: payDate,
           name: customerLabel,
-          account: acct.checkingAccount,
+          account: acct.undepositedAccount,
           amount: currentDue,
           memo: `check payment on Pay App #${pa.number} (${refNum})`,
           splits: [
@@ -553,7 +560,8 @@ export function buildAccountingLedger({
   }
 
   const totalBilled = round2(receivables.reduce((s, r) => s + r.total, 0));
-  const totalCollected = round2(receivables.reduce((s, r) => s + r.paid, 0));
+  // Money received within the dates picked, so it matches the payments listed.
+  const totalCollected = round2(payments.reduce((s, p) => s + p.amount, 0));
   const totalOpenAR = round2(receivables.reduce((s, r) => s + r.balanceDue, 0));
   const totalSalesTax = round2(receivables.reduce((s, r) => s + r.tax, 0));
   const totalVendorCommitments = round2(vendorCommitments.reduce((s, v) => s + v.amount, 0));
@@ -609,7 +617,8 @@ export function exportQuickBooksOnlineCsv(ledger) {
       ? r.lines
       : [{ desc: `${r.recordType} #${r.number}`, qty: 1, price: r.subtotal }];
     lines.forEach((l, idx) => {
-      const qty = Number(l.qty) || 1;
+      // The quantity the bill itself counts (invoiceTotals): a blank or 0 quantity is 0.
+      const qty = Number(l.qty) || 0;
       const rate = round2(Number(l.price) || 0);
       const amt = round2(qty * rate);
       rows.push(csvRow([
@@ -626,7 +635,7 @@ export function exportQuickBooksOnlineCsv(ledger) {
         qty,
         rate.toFixed(2),
         amt.toFixed(2),
-        l.taxable === false ? 'N' : 'Y',
+        r.tax > 0 && l.taxable !== false ? 'Y' : 'N',
         idx === 0 ? r.tax.toFixed(2) : '0.00',
         idx === 0 ? r.retainageHeld.toFixed(2) : '0.00',
         idx === 0 ? r.paid.toFixed(2) : '0.00',
@@ -736,13 +745,17 @@ export function exportAccountingPackageJson(ledger, { company = {}, notary = DEF
     schema: 'stellar-glass-accounting-sync-v1',
     exportedAt: new Date().toISOString(),
     company: {
-      name: company.name || 'Stellar Glass, LLC',
-      address: company.address || '2850 Mine and Mill Road Bays 3 & 4, Lakeland, FL 33801',
+      name: company.name || 'Stellar Glass LLC',
+      address: company.address || '',
       phone: company.phone || '',
       email: company.email || '',
     },
-    accountantAndNotary: notary,
-    admins: ADMIN_SIGNERS,
+    notary: {
+      name: notary.name || '',
+      state: notary.state || '',
+      commissionNumber: notary.commissionNumber || '',
+      commissionExpiresText: notary.commissionExpiresText || '',
+    },
     chartOfAccounts: ledger.accounts,
     summary: ledger.totals,
     receivables: ledger.receivables,

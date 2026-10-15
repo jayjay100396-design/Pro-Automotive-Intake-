@@ -12,7 +12,7 @@ import * as S from './schedule.js';
 import { websitePage } from './website.js';
 import { takeoffPage } from './takeoff/page.js';
 import { openTutorialModal } from './takeoff/tutorial.js';
-import { accountingPage, openAccountantTutorialModal } from './accounting.js';
+import { accountingPage } from './accounting.js';
 import { initPwaInstall, triggerInstallOrModal } from './pwa.js';
 import { esc, toast } from './ui.js';
 import { BRAND, logoHtml } from './brand.js';
@@ -150,7 +150,7 @@ function openQuickJumpModal() {
     ['#/contracts', '✍️ Contracts & Change Orders', 'Signed contracts, SOV & change orders'],
     ['#/payapps', '🏗️ AIA G702 / G703 Pay Apps', 'Commercial progress billing & retainage'],
     ['#/invoices', '💵 Invoices & Online Payments', 'Customer invoices & Stripe online payments'],
-    ['#/accounting', '⚖️ Accounting & Notary Hub', 'Melina S. Arias Notary Queue, Florida § 713.20 Lien Waivers & QuickBooks/Xero Sync'],
+    ['#/accounting', '⚖️ Accounting & Notary Hub', 'Notary queue, Florida § 713.20 lien waivers & QuickBooks/Xero exports'],
     ['#/accounting/waiver/print?kind=progress', '📜 Print Florida Lien Waiver (§ 713.20)', 'Partial or Final Waiver & Release of Lien Upon Payment'],
     ['#/website', '🌐 Website Photos & Quote Page', 'Manage high-res photos on your public quote page'],
     ['#/settings', '⚙️ Settings & Team Members', 'Company profile, team invites & Google Calendar'],
@@ -246,8 +246,7 @@ function shell() {
         <a class="q-pill" href="#/files" title="Job plans, CAD files & photos">📁 Files</a>
         <a class="q-pill" href="#/payapps" title="AIA G702/G703 Pay Applications">🏗️ Pay Apps</a>
         <a class="q-pill" href="#/invoices" title="Customer invoices & Stripe payments">💵 Invoices</a>
-        <a class="q-pill" href="#/accounting" title="Notary Queue (Melina S. Arias), Florida § 713.20 Lien Waivers & QuickBooks/Xero Sync">⚖️ Accounting &amp; Notary</a>
-        <button type="button" class="q-pill video" data-acct-tutorial title="Watch the Accountant & Notary Guide for Melina S. Arias, Wesley Stel & Jason Vergara">▶ Accountant Video</button>
+        <a class="q-pill" href="#/accounting" title="Notary queue, Florida § 713.20 lien waivers & QuickBooks/Xero exports">⚖️ Accounting &amp; Notary</a>
         <button type="button" class="q-pill video" data-global-tutorial title="Watch the full Start-to-Finish Stellar Glass walkthrough video">▶ Takeoff Video</button>
         <button type="button" class="q-pill install" data-install-app title="Download and install Stellar Glass as a desktop app on Windows or Mac">⬇ Install App</button>
         <button type="button" class="q-pill search" data-quick-jump title="Search jobs, proposals, customers or shortcuts (⌘K)">⚡ Quick Jump</button>
@@ -261,7 +260,6 @@ function shell() {
   root.querySelectorAll('[data-theme-toggle]').forEach((b) => b.addEventListener('click', toggleTheme));
   root.querySelectorAll('[data-install-app]').forEach((b) => b.addEventListener('click', () => triggerInstallOrModal(root)));
   root.querySelector('[data-global-tutorial]')?.addEventListener('click', () => openTutorialModal(root, { showOpenTakeoff: true }));
-  root.querySelector('[data-acct-tutorial]')?.addEventListener('click', () => openAccountantTutorialModal(root));
   root.querySelector('[data-quick-jump]')?.addEventListener('click', () => openQuickJumpModal());
 }
 
@@ -320,6 +318,16 @@ document.addEventListener('click', (e) => {
 });
 
 window.addEventListener('hashchange', route);
+
+// Skip links move keyboard focus without touching the address bar, whose #/... part is the page the app shows.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a.skip-link');
+  const target = a && document.getElementById(a.getAttribute('href').slice(1));
+  if (!target) return;
+  e.preventDefault();
+  if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+  target.focus();
+});
 
 let pending = null;
 onChange(() => {

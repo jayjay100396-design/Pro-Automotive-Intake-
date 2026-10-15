@@ -6,24 +6,32 @@ import { howPaid, frozen } from './billing.js';
 import { esc, fmtDate } from './ui.js';
 import { websiteUrl } from './brand.js';
 import { proposalContent } from './proposal-doc.js';
-import { DEFAULT_NOTARY, ADMIN_SIGNERS, WAIVER_TYPES, formatOrdinalDate, buildLienWaiverData } from './accounting-calc.js';
+import { DEFAULT_NOTARY, WAIVER_TYPES, buildLienWaiverData } from './accounting-calc.js';
 
 const nl = (s) => esc(s).replace(/\n/g, '<br>');
 
+// The notary profile saved on the Accounting page (this device keeps a copy of the business's).
 function readStoredNotary() {
   try {
-    const raw = localStorage.getItem('stellar-notary-profile');
+    const raw = localStorage.getItem(`stellar-notary-profile:${state.companyId || ''}`);
     if (raw) return { ...DEFAULT_NOTARY, ...JSON.parse(raw) };
   } catch { /* ignore */ }
   return { ...DEFAULT_NOTARY };
 }
 
-function notarySealHtml(nt = DEFAULT_NOTARY) {
-  return `<div class="notary-seal-box" aria-label="Florida Notary Public Seal">
-    <div class="notary-seal-name">${esc(nt.sealName || nt.name || 'MELINA ARIAS')}</div>
-    <div>Notary Public - State of ${esc(nt.state || 'Florida')}</div>
-    <div>Commission # ${esc(nt.commissionNumber || 'HH 427582')}</div>
-    <div>My Comm. Expires ${esc(nt.commissionExpiresText || 'Oct 21, 2027')}</div>
+// A Florida jurat (s. 117.05(13), F.S.) for the notary to complete at the signing: the county, the date, how the
+// signer appeared, the ID they showed, the signature and the seal stay blank. Only the notary's commissioned name,
+// commission number and expiry come pre-typed, and only when they've been saved on the Accounting page.
+function notaryJurat(nt = DEFAULT_NOTARY, by = '') {
+  const st = nt.state || 'Florida';
+  const typed = (v, blank) => (v ? `<b>${esc(v)}</b>` : blank);
+  const commission = [nt.commissionNumber && `Commission # ${esc(nt.commissionNumber)}`, nt.commissionExpiresText && `My commission expires ${esc(nt.commissionExpiresText)}`].filter(Boolean).join(' · ');
+  return `<div class="notary-cert-block" data-notary-block>
+    <p class="small">STATE OF ${esc(st.toUpperCase())}, COUNTY OF ____________________<br>
+    Sworn to (or affirmed) and subscribed before me by means of &#9744; physical presence or &#9744; online notarization, this ____ day of ____________________, 20____, by ${typed(by, '______________________________')}.</p>
+    <p class="small">______________________________________<br>Signature of Notary Public, State of ${esc(st)}<br>
+    ${typed(nt.name, '______________________________________')}<br>Print, type or stamp commissioned name of notary public${commission ? `<br>${commission}` : ''}</p>
+    <p class="small">Personally known ______ OR Produced identification ______<br>Type of identification produced ______________________________</p>
   </div>`;
 }
 
@@ -177,32 +185,17 @@ export function payAppDoc(id, params = new URLSearchParams()) {
   const t = s.totals;
   const cos = where('changeOrders', 'contractId', p.contractId).filter((x) => x.status === 'approved');
   const nt = readStoredNotary();
-  const useNotary = params?.get?.('notary') !== 'blank';
-  const signerParam = params?.get?.('signer') || state.company?.contactName || ADMIN_SIGNERS[0].name;
-  const matchedAdmin = ADMIN_SIGNERS.find((a) => a.name.toLowerCase() === String(signerParam).toLowerCase());
-  const signerTitle = matchedAdmin?.title || state.company?.contactTitle || 'President';
-  const ord = formatOrdinalDate(p.date || p.periodTo);
+  // Who signs for the business: the contact in Settings, unless another name is typed in the bar above the page.
+  const co = state.company || {};
+  const signerName = params?.get?.('signer') ?? (co.contactName || '');
+  const signerTitle = params?.get?.('title') ?? (signerName && signerName === co.contactName ? co.contactTitle || '' : '');
 
   const extraBar = `
     <a class="btn" href="#/accounting/waiver/print?payApp=${esc(id)}&amp;kind=progress">⚖️ Partial Lien Waiver (§ 713.20)</a>
     <a class="btn" href="#/accounting/waiver/print?payApp=${esc(id)}&amp;kind=final">⚖️ Final Lien Waiver</a>
-    <button type="button" class="btn" data-toggle-notary aria-pressed="${useNotary ? 'true' : 'false'}">${useNotary ? `✓ Notary: ${esc(nt.name)} (#${esc(nt.commissionNumber)})` : 'Blank Notary Block'}</button>
-    <select class="print-select" data-signer-pick aria-label="Contractor Signer">
-      ${ADMIN_SIGNERS.map((a) => `<option value="${esc(a.name)}" ${a.name === signerParam ? 'selected' : ''}>Signer: ${esc(a.name)} (${esc(a.title)})</option>`).join('')}
-    </select>
+    <input class="print-select" data-signer-name value="${esc(signerName)}" placeholder="Who signs for the business" aria-label="Who signs for the business">
+    <input class="print-select" data-signer-title value="${esc(signerTitle)}" placeholder="Their title" aria-label="Signer's title">
   `;
-
-  const notaryHtml = useNotary
-    ? `<div class="notary-cert-block" data-notary-block>
-        <p class="small">State of: <b>${esc(nt.state)}</b> &nbsp;&nbsp; County of: <b>${esc(nt.county)}</b><br>
-        Subscribed and sworn to before me this <b>${esc(ord.dayOrdinal)}</b> day of <b>${esc(ord.monthName)} ${esc(ord.year)}</b><br>
-        Notary Public: <b>${esc(nt.name)}</b> <span class="muted">(${esc(nt.email)})</span><br>
-        My Commission expires: <b>${esc(nt.commissionExpiresText)}</b></p>
-        ${notarySealHtml(nt)}
-      </div>`
-    : `<div class="notary-cert-block" data-notary-block>
-        <p class="small">State of ____________ County of ____________<br>Subscribed and sworn before me this ____ day of ____________, 20__<br>Notary public ____________________________ My commission expires __________</p>
-      </div>`;
 
   return page(
     `Pay app ${p.number}`,
@@ -222,12 +215,12 @@ export function payAppDoc(id, params = new URLSearchParams()) {
           <tr><td><b>Net change</b></td><td class="num" colspan="2">${money(s.netChange)}</td></tr>
         </tbody></table>
         <p class="small">The undersigned contractor certifies that, to the best of the contractor's knowledge, information and belief the work covered by this application for payment has been completed in accordance with the contract documents, that all amounts have been paid by the contractor for work for which previous certificates for payment were issued and payments received from the owner, and that current payment shown herein is now due.</p>
-        <p class="small" data-contractor-sig>Contractor: <b>${esc(state.company?.name || 'Stellar Glass, LLC')}</b><br><br>By ____________________________ Date <u>&nbsp;${esc(ord.usDate || fmtDate(p.date))}&nbsp;</u><br><b>${esc(signerParam)}</b>, ${esc(signerTitle)}</p>
-        ${notaryHtml}
+        <p class="small" data-contractor-sig>Contractor: <b>${esc(co.name || 'Stellar Glass LLC')}</b><br><br>By ____________________________ Date __________${signerName ? `<br><b>${esc(signerName)}</b>${signerTitle ? `, ${esc(signerTitle)}` : ''}` : ''}</p>
+        ${notaryJurat(nt, signerName)}
         <div class="arch-cert-block small">
           <div class="label">Architect's Certificate for Payment</div>
           <p class="small">In accordance with the Contract Documents, based on on-site observations and the data comprising this application, the Architect certifies to the Owner that to the best of their knowledge, information and belief the Work has progressed as indicated, and the Contractor is entitled to payment of the AMOUNT CERTIFIED.</p>
-          <p class="small"><b>AMOUNT CERTIFIED:</b> <u>&nbsp;${money(s.currentDue)}&nbsp;</u> &nbsp;&nbsp; By ______________________ Date ________</p>
+          <p class="small"><b>AMOUNT CERTIFIED:</b> $____________________ &nbsp;&nbsp; By ______________________ Date ________</p>
         </div>
       </div>
     </div>
@@ -239,18 +232,14 @@ export function payAppDoc(id, params = new URLSearchParams()) {
     'wide',
     extraBar,
     (root) => {
-      const updateQuery = (nextNotary, nextSigner) => {
+      const redo = () => {
         const q = new URLSearchParams(location.hash.split('?')[1] || '');
-        if (nextNotary !== undefined) q.set('notary', nextNotary ? 'melina' : 'blank');
-        if (nextSigner !== undefined) q.set('signer', nextSigner);
+        q.set('signer', root.querySelector('[data-signer-name]')?.value.trim() || '');
+        q.set('title', root.querySelector('[data-signer-title]')?.value.trim() || '');
         location.hash = `#/payapps/${id}/print?${q.toString()}`;
       };
-      root.querySelector('[data-toggle-notary]')?.addEventListener('click', () => {
-        updateQuery(!useNotary, undefined);
-      });
-      root.querySelector('[data-signer-pick]')?.addEventListener('change', (ev) => {
-        updateQuery(undefined, ev.target.value);
-      });
+      root.querySelector('[data-signer-name]')?.addEventListener('change', redo);
+      root.querySelector('[data-signer-title]')?.addEventListener('change', redo);
     },
   );
 }
@@ -330,6 +319,7 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
       ownerName: params.get('owner') ?? undefined,
       propertyDesc: params.get('property') ?? undefined,
       signerName: params.get('signer') ?? undefined,
+      signerTitle: params.get('title') ?? undefined,
       vendorName: params.get('vendor') ?? undefined,
       vendorBalanceThru: params.get('vendorBalanceThru') ?? undefined,
       vendorBalanceCurrent: params.get('vendorBalanceCurrent') ?? undefined,
@@ -338,20 +328,9 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
   });
 
   const renderWaiverArticle = (w) => {
-    const notaryCert = w.includeNotary ? `
-      <div class="waiver-notary-box">
-        <div class="label">State of ${esc(w.notary.state)} · County of ${esc(w.notary.county)}</div>
-        <p class="small">Sworn to (or affirmed) and subscribed before me by means of ☑ physical presence or ☐ online notarization, this <b>${esc(w.signedOrd.dayOrdinal)}</b> day of <b>${esc(w.signedOrd.monthName)}</b>, <b>${esc(w.signedOrd.year)}</b>, by <b>${esc(w.signerName)}</b>, ${esc(w.signerTitle)} of <b>${esc(w.lienorName)}</b>, who is personally known to me or has produced identification.</p>
-        <div class="waiver-notary-row">
-          <div>
-            <div>Notary Public Signature: ____________________________</div>
-            <div>Printed Name: <b>${esc(w.notary.name)}</b> (${esc(w.notary.email)})</div>
-            <div>Commission # <b>${esc(w.notary.commissionNumber)}</b> · My Commission Expires: <b>${esc(w.notary.commissionExpiresText)}</b></div>
-          </div>
-          ${notarySealHtml(w.notary)}
-        </div>
-      </div>
-    ` : '';
+    const notaryCert = w.includeNotary
+      ? notaryJurat(w.notary, w.signerName ? `${w.signerName}${w.signerTitle ? `, ${w.signerTitle}` : ''} of ${w.lienorName}` : '')
+      : '';
 
     if (w.kind === 'sworn') {
       return `
@@ -389,6 +368,7 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
           </div>
           <p>do hereby release and discharge any claim, lien, or otherwise, which we might have against the above described property, we having been paid in full (Final Payment: <b>${w.amountFormatted}</b>) and all parties performing labor, furnishing materials or services on the site of improvement through us (including any Notice to Owner filers) have been <b>PAID IN FULL</b>.</p>
           <p>We do hereby release, discharge, and waive any claim, lien, or otherwise.</p>
+          <p>Except the following lienors, who have not been paid in full, and the amount due each (write "None" if every one has been paid): ______________________________________________</p>
           <div class="waiver-sign-block">
             <div class="waiver-sig-line"><span>Signature:</span> <span class="blank"></span></div>
             <div><span class="label">Printed Name:</span> <b>${esc(w.signerName)}</b> &nbsp;·&nbsp; <span class="label">Title:</span> <b>${esc(w.signerTitle)}</b></div>
@@ -402,8 +382,8 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
 
     const isFinal = w.kind === 'final';
     const heading = isFinal
-      ? 'FINAL WAIVER AND RELEASE OF LIEN UPON FINAL PAYMENT'
-      : 'PARTIAL WAIVER AND RELEASE OF LIEN UPON PROGRESS PAYMENT';
+      ? 'WAIVER AND RELEASE OF LIEN UPON FINAL PAYMENT'
+      : 'WAIVER AND RELEASE OF LIEN UPON PROGRESS PAYMENT';
     const subheading = isFinal
       ? '(SECTION 713.20(5), FLORIDA STATUTES)'
       : '(SECTION 713.20(4), FLORIDA STATUTES)';
@@ -412,11 +392,11 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
       ${letterhead(heading, `<div class="small">${subheading}</div><div>${esc(w.docRef)}</div>`)}
       <div class="waiver-body">
         <p class="waiver-lead">
-          The undersigned lienor, in consideration of the ${isFinal ? 'Final Payment' : 'Progress Payment'} in the amount of
+          The undersigned lienor, in consideration of ${isFinal ? 'the final payment in the amount of' : 'the sum of'}
           <b><u>&nbsp;${w.amountFormatted}&nbsp;</u></b>, hereby waives and releases its lien and right to claim a lien
-          for labor, services, or materials furnished ${isFinal ? '' : `through (date) <b><u>&nbsp;${esc(w.throughUsDate)}&nbsp;</u></b> `}to
-          (customer) <b><u>&nbsp;${esc(w.customerName)}&nbsp;</u></b> on the job of (Owner of property)
-          <b><u>&nbsp;${esc(w.ownerName)}&nbsp;</u></b> to the following described property:
+          for labor, services, or materials furnished ${isFinal ? '' : `through <b><u>&nbsp;${esc(w.throughUsDate)}&nbsp;</u></b> `}to
+          <b><u>&nbsp;${esc(w.customerName)}&nbsp;</u></b> on the job of
+          <b><u>&nbsp;${esc(w.ownerName)}&nbsp;</u></b> to the following ${isFinal ? 'described ' : ''}property:
         </p>
         <div class="waiver-prop-box">
           <b>${nl(w.propertyDesc)}</b>
@@ -449,9 +429,10 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
       </div>
       <section class="card no-print waiver-controls" aria-label="Customize Lien Waiver & Notary Certificate before printing">
         <div class="row between">
-          <strong>⚖️ Customize Florida Lien Waiver &amp; Notary Certificate (Melina S. Arias · #${esc(nt.commissionNumber)})</strong>
+          <strong>⚖️ Fill in the lien waiver</strong>
           <span class="small muted">Changes update the printable sheet below immediately</span>
         </div>
+        <p class="small muted">A Florida lien waiver takes effect when it's signed and handed over, whether or not the payment arrives. Put in the amount actually being paid, and if it's paid by check you can write on the waiver that it depends on the check clearing (s. 713.20(7), F.S.).</p>
         <div class="grid4 top-gap" id="waiverForm">
           <label class="span2">Form Type
             <select name="kind">${WAIVER_TYPES.map(([k, lbl]) => `<option value="${esc(k)}" ${k === initial.kind ? 'selected' : ''}>${esc(lbl)}</option>`).join('')}</select>
@@ -462,19 +443,20 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
           <label>Through Date
             <input type="date" name="throughDate" value="${esc(initial.throughDate)}">
           </label>
-          <label>Customer / GC (e.g. Marcobay Construction)
+          <label>Customer (usually the general contractor)
             <input name="customerName" value="${esc(initial.customerName)}">
           </label>
-          <label>Owner of Property (e.g. Ruthven Green LLC)
+          <label>Owner of the property
             <input name="ownerName" value="${esc(initial.ownerName)}">
           </label>
           <label class="span2">Property Description / Job Address &amp; #
             <input name="propertyDesc" value="${esc(initial.propertyDesc)}">
           </label>
-          <label>Contractor Signer
-            <select name="signerName">
-              ${ADMIN_SIGNERS.map((a) => `<option value="${esc(a.name)}" ${a.name === initial.signerName ? 'selected' : ''}>${esc(a.name)} (${esc(a.title)})</option>`).join('')}
-            </select>
+          <label>Signs for the business
+            <input name="signerName" value="${esc(initial.signerName)}">
+          </label>
+          <label>Their title
+            <input name="signerTitle" value="${esc(initial.signerTitle)}">
           </label>
           <label>Signed / Notarized Date
             <input type="date" name="signedDate" value="${esc(initial.signedDate)}">
@@ -488,7 +470,7 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
           <label>Vendor Total Unpaid ($)
             <input type="number" step="0.01" name="vendorBalanceCurrent" value="${esc(initial.vendorBalanceCurrent ?? 0)}">
           </label>
-          <label class="span2"><input type="checkbox" name="includeNotary" ${initial.includeNotary ? 'checked' : ''}> Include Florida Notary Acknowledgment &amp; Seal (${esc(nt.name)} · #${esc(nt.commissionNumber)})</label>
+          <label class="span2"><input type="checkbox" name="includeNotary" ${initial.includeNotary ? 'checked' : ''}> Include a notary block (left blank for the notary to fill in and stamp)</label>
         </div>
       </section>
       <article class="doc" id="waiverDocArticle">${renderWaiverArticle(initial)}</article>
@@ -518,6 +500,7 @@ export function lienWaiverDoc(params = new URLSearchParams()) {
             ownerName: getVal('ownerName'),
             propertyDesc: getVal('propertyDesc'),
             signerName: getVal('signerName'),
+            signerTitle: getVal('signerTitle'),
             vendorName: getVal('vendorName'),
             vendorBalanceThru: getVal('vendorBalanceThru'),
             vendorBalanceCurrent: getVal('vendorBalanceCurrent'),
